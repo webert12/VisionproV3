@@ -18,12 +18,12 @@ from supabase import create_client, Client
 # ================= CONFIGURAÇÕES DE AMBIENTE =================
 TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "")
 CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 
-# Conexão Lazy (só conecta quando o app está rodando)
+# Conexão Robusta com Supabase
 _supabase_client = None
 
 def get_supabase() -> Client:
@@ -222,6 +222,7 @@ HTML_REGISTER = """
 <body>
     <div class="login-card">
         <h2>CRIAR CONTA</h2>
+        {% if erro %}<div style="color:#ff5252; margin-bottom:10px;">{{erro}}</div>{% endif %}
         <form method="POST" action="/register">
             <input type="email" name="email" placeholder="Novo E-mail" required>
             <input type="password" name="password" placeholder="Nova Senha" required>
@@ -240,7 +241,6 @@ HTML_INDEX = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VISION PRO V3 - HIGH FREQUENCY ANALYTICS</title>
-    <!-- Fonte Moderna Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <style>
@@ -257,14 +257,12 @@ HTML_INDEX = """
             box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
         }
 
-        /* HEADER */
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
         .brand { font-size: 16px; font-weight: 800; letter-spacing: 1px; color: #2f81f7; display: flex; align-items: center; gap: 8px; }
         .brand span { background: rgba(47, 129, 247, 0.15); color: #58a6ff; font-size: 10px; padding: 3px 8px; border-radius: 12px; border: 1px solid rgba(56, 139, 253, 0.4); }
         .btn-logout { font-size: 12px; color: #f85149; text-decoration: none; font-weight: 600; padding: 6px 12px; border-radius: 8px; background: rgba(248, 81, 73, 0.1); border: 1px solid rgba(248, 81, 73, 0.2); transition: 0.2s; }
         .btn-logout:hover { background: rgba(248, 81, 73, 0.2); }
 
-        /* DASHBOARD PLACAR */
         .placar-card { background: #0d1117; border: 1px solid #30363d; border-radius: 14px; padding: 16px; margin-bottom: 16px; }
         .placar-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; text-align: center; }
         .placar-item .title { font-size: 11px; text-transform: uppercase; color: #8b949e; font-weight: 600; margin-bottom: 4px; }
@@ -275,17 +273,14 @@ HTML_INDEX = """
         .winrate-bar { height: 6px; background: #21262d; border-radius: 10px; overflow: hidden; margin-top: 12px; }
         .winrate-fill { height: 100%; background: linear-gradient(90deg, #238636, #3fb950); width: 0%; transition: width 0.5s ease-in-out; }
 
-        /* GRÁFICO */
         #chart-wrapper { background: #0d1117; border-radius: 14px; border: 1px solid #30363d; padding: 12px; margin-bottom: 16px; }
         #chart-header { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 10px; }
         #chart-symbol { color: #c9d1d9; }
         #chart-price { color: #39d353; font-family: monospace; font-size: 14px; }
         #chart-container { width: 100%; height: 210px; border-radius: 8px; overflow: hidden; }
 
-        /* PAINEL DE SINAL */
         .status-box { background: linear-gradient(145deg, #161b22, #0d1117); border: 1px solid #30363d; padding: 18px; border-radius: 14px; margin-bottom: 16px; min-height: 85px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.4); }
         
-        /* BOTÕES DE RESULTADO */
         .result-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
         .btn-res { border: none; padding: 10px; border-radius: 8px; font-weight: 700; font-size: 12px; cursor: pointer; color: white; transition: transform 0.1s; }
         .btn-res:active { transform: scale(0.95); }
@@ -294,7 +289,6 @@ HTML_INDEX = """
         .btn-res-red { background: #da3633; }
         .btn-res-skip { background: #30363d; }
 
-        /* CONTROLES E MENUS */
         .section-label { font-size: 11px; font-weight: 700; color: #8b949e; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.5px; }
         .menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
         .sub-menu { display: none; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 12px; margin-bottom: 16px; }
@@ -306,26 +300,22 @@ HTML_INDEX = """
         .btn-opt:hover { color: #fff; }
         .btn-active { background: #1f6feb !important; color: #ffffff !important; border-color: #58a6ff !important; box-shadow: 0 0 10px rgba(31, 111, 235, 0.4); }
 
-        /* HISTÓRICO */
         .historico-box { display: none; background: #0d1117; border: 1px solid #30363d; border-radius: 12px; padding: 12px; margin-bottom: 16px; }
         .historico-scroll { max-height: 160px; overflow-y: auto; }
         .historico-item { font-size: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; }
         .historico-item:last-child { border-bottom: none; }
 
-        /* ANIMAÇÃO DE SPINNER */
         .tech-scanner { width: 26px; height: 26px; margin: 8px auto 0; border: 3px solid rgba(88, 166, 255, 0.2); border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.8s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- HEADER -->
         <div class="header">
             <div class="brand">VISION PRO <span>V3 ULTRA</span></div>
             <a href="/logout" class="btn-logout">SAIR</a>
         </div>
 
-        <!-- PLACAR DE ASSERTIVIDADE -->
         <div class="placar-card">
             <div class="placar-grid">
                 <div class="placar-item">
@@ -344,7 +334,6 @@ HTML_INDEX = """
             <div class="winrate-bar"><div id="wr-fill" class="winrate-fill"></div></div>
         </div>
 
-        <!-- CHART CONTAINER -->
         <div id="chart-wrapper">
             <div id="chart-header">
                 <span id="chart-symbol">EURUSD</span>
@@ -353,10 +342,8 @@ HTML_INDEX = """
             <div id="chart-container"></div>
         </div>
 
-        <!-- BOARD DE SINAIS -->
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
 
-        <!-- BOTÕES DE CONFIRMAÇÃO DE RESULTADO -->
         <div id="result-area" class="result-grid" style="display:none;">
             <button class="btn-res btn-res-win" onclick="fetch('/resultado/win')">WIN</button>
             <button class="btn-res btn-res-g1" onclick="fetch('/resultado/g1')">G1</button>
@@ -364,7 +351,6 @@ HTML_INDEX = """
             <button class="btn-res btn-res-skip" onclick="fetch('/resultado/pular')">PULAR</button>
         </div>
 
-        <!-- NAVEGAÇÃO / MENUS -->
         <div class="section-label">PAINEL DE CONTROLE</div>
         <div class="menu-grid">
             <button class="btn-menu" onclick="toggleSub('menu-inicio')">⚡ SISTEMA</button>
@@ -377,7 +363,6 @@ HTML_INDEX = """
             {% endif %}
         </div>
 
-        <!-- SUBMENUS EXPANDÍVEIS -->
         <div id="menu-historico" class="historico-box">
             <div class="historico-scroll" id="lista-sinais"></div>
         </div>
@@ -473,37 +458,53 @@ HTML_INDEX = """
 </html>
 """
 
-# ================= FUNÇÕES DE BANCO (SUPABASE) =================
+# ================= FUNÇÕES DE BANCO DE DADOS CORRIGIDAS =================
 def carregar_usuarios():
+    """Lê com segurança os dados do Supabase ignorando estruturas incorretas."""
     try:
         res = get_supabase().table("usuarios").select("*").execute()
-        return {u["email"]: u for u in res.data}
+        raw_data = res.data if hasattr(res, 'data') else []
+        dict_usuarios = {}
+        for u in raw_data:
+            email = u.get("email", "").strip().lower()
+            if email:
+                dict_usuarios[email] = u
+        return dict_usuarios
     except Exception as e:
         print(f"Erro Supabase (carregar_usuarios): {e}")
         return {}
 
 def salvar_usuario(email, senha, data=None):
+    """Grava ou atualiza um usuário aplicando hash seguro de senha."""
     try:
+        email_clean = email.strip().lower()
         data_criacao = data if data else datetime.now().strftime("%Y-%m-%d")
+        
+        # Só gera o hash se a senha não estiver no formato gerado pelo Werkzeug
+        senha_hash = senha if senha.startswith("scrypt:") or senha.startswith("pbkdf2:") else generate_password_hash(senha)
+
         dados = {
-            "email": email,
-            "senha": generate_password_hash(senha),
+            "email": email_clean,
+            "senha": senha_hash,
             "criado_em": data_criacao,
             "wins": 0,
             "reds": 0,
             "winrate": 0.0
         }
-        get_supabase().table("usuarios").upsert(dados).execute()
+        res = get_supabase().table("usuarios").upsert(dados).execute()
+        return res
     except Exception as e:
         print(f"Erro Supabase (salvar_usuario): {e}")
+        raise e
 
 def atualizar_estatisticas_usuario(email, is_win):
     try:
-        res = get_supabase().table("usuarios").select("wins", "reds").eq("email", email).execute()
+        email_clean = email.strip().lower()
+        res = get_supabase().table("usuarios").select("wins", "reds").eq("email", email_clean).execute()
         if res.data:
             u = res.data[0]
-            wins = u["wins"] + (1 if is_win else 0)
-            reds = u["reds"] + (0 if is_win else 1)
+            wins = u.get("wins", 0) + (1 if is_win else 0)
+            reds = u.get("reds", 0) + (0 if is_win else 1)
             total = wins + reds
             winrate = round((wins / total) * 100, 1) if total > 0 else 0.0
 
@@ -511,33 +512,39 @@ def atualizar_estatisticas_usuario(email, is_win):
                 "wins": wins,
                 "reds": reds,
                 "winrate": winrate
-            }).eq("email", email).execute()
+            }).eq("email", email_clean).execute()
     except Exception as e:
         print(f"Erro Supabase (atualizar_estatisticas): {e}")
 
 def renovar_usuario_db(email):
     try:
         hoje = datetime.now().strftime("%Y-%m-%d")
-        get_supabase().table("usuarios").update({"criado_em": hoje}).eq("email", email).execute()
+        get_supabase().table("usuarios").update({"criado_em": hoje}).eq("email", email.strip().lower()).execute()
     except Exception as e:
         print(f"Erro Supabase (renovar_usuario): {e}")
 
 def excluir_usuario_db(email):
     try:
-        if email != ADMIN_EMAIL:
-            get_supabase().table("usuarios").delete().eq("email", email).execute()
+        email_clean = email.strip().lower()
+        if email_clean != ADMIN_EMAIL:
+            get_supabase().table("usuarios").delete().eq("email", email_clean).execute()
     except Exception as e:
         print(f"Erro Supabase (excluir_usuario): {e}")
 
 def verificar_assinatura(email):
-    if email == ADMIN_EMAIL: return True, 999
+    email_clean = email.strip().lower()
+    if email_clean == ADMIN_EMAIL: return True, 999
     try:
-        res = get_supabase().table("usuarios").select("criado_em").eq("email", email).execute()
+        res = get_supabase().table("usuarios").select("criado_em").eq("email", email_clean).execute()
         if not res.data: return False, 0
-        data_criacao = datetime.strptime(res.data[0]["criado_em"], "%Y-%m-%d")
+        
+        criado_str = str(res.data[0]["criado_em"]).split("T")[0]
+        data_criacao = datetime.strptime(criado_str, "%Y-%m-%d")
         dias_restantes = 30 - (datetime.now() - data_criacao).days
         return (True, dias_restantes) if dias_restantes > 0 else (False, 0)
-    except: return False, 0
+    except Exception as e:
+        print(f"Erro Assinatura: {e}")
+        return True, 30
 
 def init_user_session(email):
     if email not in DADOS_USUARIOS:
@@ -547,22 +554,23 @@ def init_user_session(email):
 
 def registrar_sinal_bd(email, sinal_str):
     try:
-        dados = {"user_email": email, "sinal": sinal_str, "resultado": "Analisando..."}
+        dados = {"user_email": email.strip().lower(), "sinal": sinal_str, "resultado": "Analisando..."}
         get_supabase().table("historico_sinais").insert(dados).execute()
     except Exception as e:
         print(f"Erro Supabase (registrar_sinal): {e}")
 
 def buscar_historico_bd(email):
     try:
-        res = get_supabase().table("historico_sinais").select("id, sinal, resultado").eq("user_email", email).order("id", desc=True).limit(10).execute()
-        return [{"id": r["id"], "sinal": r["sinal"], "res": r["resultado"]} for r in res.data]
+        res = get_supabase().table("historico_sinais").select("id, sinal, resultado").eq("user_email", email.strip().lower()).order("id", desc=True).limit(10).execute()
+        return [{"id": r["id"], "sinal": r["sinal"], "res": r["resultado"]} for r in (res.data or [])]
     except Exception as e:
         print(f"Erro Supabase (buscar_historico): {e}")
         return []
 
 def atualizar_ultimo_sinal_bd(email, resultado):
     try:
-        res = get_supabase().table("historico_sinais").select("id").eq("user_email", email).order("id", desc=True).limit(1).execute()
+        email_clean = email.strip().lower()
+        res = get_supabase().table("historico_sinais").select("id").eq("user_email", email_clean).order("id", desc=True).limit(1).execute()
         if res.data:
             ultimo_id = res.data[0]["id"]
             get_supabase().table("historico_sinais").update({"resultado": resultado}).eq("id", ultimo_id).execute()
@@ -665,41 +673,57 @@ def login():
         if not e or not s:
             return render_template_string(HTML_LOGIN, erro="Preencha todos os campos.")
 
-        try:
-            usuarios = carregar_usuarios()
-        except Exception as err:
-            return render_template_string(HTML_LOGIN, erro=f"Erro de Conexão DB: {err}")
-
-        # Se for o Admin e não existir, cria. Se já existir, atualiza a senha para a que digitou agora!
-        if e == ADMIN_EMAIL.lower():
+        # Se for o e-mail Admin configurado no Render, força o cadastro/atualização imediata
+        if e == ADMIN_EMAIL:
             try:
                 salvar_usuario(e, s, datetime.now().strftime("%Y-%m-%d"))
-                usuarios = carregar_usuarios() # Recarrega
             except Exception as err:
-                return render_template_string(HTML_LOGIN, erro=f"Erro ao salvar Admin: {err}")
+                return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM no Supabase: {err}")
 
-        # Valida existência
+        # Busca do banco
+        usuarios = carregar_usuarios()
+
         if e not in usuarios:
-            return render_template_string(HTML_LOGIN, erro="Usuário não encontrado.")
+            return render_template_string(HTML_LOGIN, erro=f"Usuário não cadastrado ({e}). Faça o cadastro primeiro.")
 
         user_db = usuarios[e]
 
-        # Valida Senha
+        # Checagem de Senha
         if not check_password_hash(user_db['senha'], s):
             return render_template_string(HTML_LOGIN, erro="Senha Incorreta.")
 
-        # Valida Assinatura
+        # Checagem de Assinatura
         ativo, dias = verificar_assinatura(e)
         if not ativo:
-            return render_template_string(HTML_LOGIN, erro=f"Assinatura expirada (Dias: {dias}). Contate o suporte.")
+            return render_template_string(HTML_LOGIN, erro=f"Assinatura expirada (Dias restantes: {dias}). Contate o suporte.")
 
-        # Sucesso!
+        # Login Autenticado
         session['user'] = e
         USUARIOS_ONLINE[e] = time.time()
         init_user_session(e)
         return redirect('/')
 
     return render_template_string(HTML_LOGIN)
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        e = request.form.get('email', '').strip().lower()
+        s = request.form.get('password', '').strip()
+        
+        if not e or not s:
+            return render_template_string(HTML_REGISTER, erro="Preencha todos os campos.")
+            
+        try:
+            salvar_usuario(e, s)
+            session['user'] = e
+            USUARIOS_ONLINE[e] = time.time()
+            init_user_session(e)
+            return redirect('/')
+        except Exception as err:
+            return render_template_string(HTML_REGISTER, erro=f"Erro ao salvar no Banco: {err}")
+
+    return render_template_string(HTML_REGISTER)
 
 @app.route('/logout')
 def logout():
@@ -731,16 +755,16 @@ def adm_renovar(email):
 @app.route('/adm/editar', methods=['POST'])
 def adm_editar():
     if session.get('user') != ADMIN_EMAIL: return abort(403)
-    original, novo_email, nova_senha = request.form['email_original'], request.form['novo_email'], request.form['nova_senha']
+    original = request.form.get('email_original', '').strip().lower()
+    novo_email = request.form.get('novo_email', '').strip().lower()
+    nova_senha = request.form.get('nova_senha', '').strip()
     
     try:
-        if nova_senha.strip():
-            get_supabase().table("usuarios").update({
-                "email": novo_email,
-                "senha": generate_password_hash(nova_senha)
-            }).eq("email", original).execute()
-        else:
-            get_supabase().table("usuarios").update({"email": novo_email}).eq("email", original).execute()
+        dados_upd = {"email": novo_email}
+        if nova_senha:
+            dados_upd["senha"] = generate_password_hash(nova_senha)
+            
+        get_supabase().table("usuarios").update(dados_upd).eq("email", original).execute()
     except Exception as e:
         print(f"Erro Editar Admin: {e}")
         
@@ -751,13 +775,6 @@ def adm_excluir(email):
     if session.get('user') != ADMIN_EMAIL: return abort(403)
     excluir_usuario_db(email)
     return redirect('/admin_panel')
-
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    if request.method == 'POST':
-        e, s = request.form['email'], request.form['password']
-        if e and s: salvar_usuario(e, s); return redirect('/login')
-    return render_template_string(HTML_REGISTER)
 
 @app.route('/')
 def index():
