@@ -10,30 +10,40 @@ import os
 import logging
 import numpy as np
 import re
-import signal
-from datetime import datetime, timedelta
-from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for, abort
+from datetime import datetime
+from flask import Flask, render_template_string, request, jsonify, session, redirect, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 from supabase import create_client, Client
 
-# ================= CONFIGURAÇÕES TELEGRAM & AMBIENTE =================
-TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU")
-CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1003474284931")
+# ================= CONFIGURAÇÕES DE AMBIENTE =================
+TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "")
+CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com")
 
-# ================= CONFIGURAÇÕES SUPABASE =================
-SUPABASE_URL = os.getenv("SUPABASE_URL", "SUA_URL_DO_SUPABASE")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "SUA_CHAVE_ANON_OU_SERVICE_ROLE_SUPABASE")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+
+# Conexão Lazy (só conecta quando o app está rodando)
+_supabase_client = None
+
+def get_supabase() -> Client:
+    global _supabase_client
+    if _supabase_client is None:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise ValueError("As variáveis SUPABASE_URL e SUPABASE_KEY precisam ser configuradas no Render.")
+        _supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _supabase_client
 
 USUARIOS_ONLINE = {}
-DADOS_USUARIOS = {} 
+DADOS_USUARIOS = {}
 
 ULTIMO_MSG_ID_TELEGRAM = None
 QUEM_INICIOU_O_BOT = None
 
 def enviar_telegram(mensagem, auto_delete=None):
     global ULTIMO_MSG_ID_TELEGRAM
+    if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
+        return None
     try:
         url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
         payload = {"chat_id": CHAT_ID_TELEGRAM, "text": mensagem, "parse_mode": "HTML"}
@@ -396,31 +406,30 @@ HTML_INDEX = """
 # ================= FUNÇÕES DE BANCO (SUPABASE) =================
 def carregar_usuarios():
     try:
-        res = supabase.table("usuarios").select("*").execute()
+        res = get_supabase().table("usuarios").select("*").execute()
         return {u["email"]: u for u in res.data}
     except Exception as e:
-        print(f"Erro ao carregar usuários no Supabase: {e}")
+        print(f"Erro Supabase (carregar_usuarios): {e}")
         return {}
 
-def salvar_usuario(email, senha, ip, data=None):
+def salvar_usuario(email, senha, data=None):
     try:
         data_criacao = data if data else datetime.now().strftime("%Y-%m-%d")
         dados = {
             "email": email,
             "senha": generate_password_hash(senha),
             "criado_em": data_criacao,
-            "ip": ip,
             "wins": 0,
             "reds": 0,
             "winrate": 0.0
         }
-        supabase.table("usuarios").upsert(dados).execute()
+        get_supabase().table("usuarios").upsert(dados).execute()
     except Exception as e:
-        print(f"Erro ao salvar usuário no Supabase: {e}")
+        print(f"Erro Supabase (salvar_usuario): {e}")
 
 def atualizar_estatisticas_usuario(email, is_win):
     try:
-        res = supabase.table("usuarios").select("wins", "reds").eq("email", email).execute()
+        res = get_supabase().table("usuarios").select("wins", "reds").eq("email", email).execute()
         if res.data:
             u = res.data[0]
             wins = u["wins"] + (1 if is_win else 0)
@@ -428,32 +437,32 @@ def atualizar_estatisticas_usuario(email, is_win):
             total = wins + reds
             winrate = round((wins / total) * 100, 1) if total > 0 else 0.0
 
-            supabase.table("usuarios").update({
+            get_supabase().table("usuarios").update({
                 "wins": wins,
                 "reds": reds,
                 "winrate": winrate
             }).eq("email", email).execute()
     except Exception as e:
-        print(f"Erro ao atualizar estatísticas no Supabase: {e}")
+        print(f"Erro Supabase (atualizar_estatisticas): {e}")
 
 def renovar_usuario_db(email):
     try:
         hoje = datetime.now().strftime("%Y-%m-%d")
-        supabase.table("usuarios").update({"criado_em": hoje}).eq("email", email).execute()
+        get_supabase().table("usuarios").update({"criado_em": hoje}).eq("email", email).execute()
     except Exception as e:
-        print(f"Erro ao renovar usuário no Supabase: {e}")
+        print(f"Erro Supabase (renovar_usuario): {e}")
 
 def excluir_usuario_db(email):
     try:
         if email != ADMIN_EMAIL:
-            supabase.table("usuarios").delete().eq("email", email).execute()
+            get_supabase().table("usuarios").delete().eq("email", email).execute()
     except Exception as e:
-        print(f"Erro ao excluir usuário no Supabase: {e}")
+        print(f"Erro Supabase (excluir_usuario): {e}")
 
 def verificar_assinatura(email):
     if email == ADMIN_EMAIL: return True, 999
     try:
-        res = supabase.table("usuarios").select("criado_em").eq("email", email).execute()
+        res = get_supabase().table("usuarios").select("criado_em").eq("email", email).execute()
         if not res.data: return False, 0
         data_criacao = datetime.strptime(res.data[0]["criado_em"], "%Y-%m-%d")
         dias_restantes = 30 - (datetime.now() - data_criacao).days
@@ -469,42 +478,37 @@ def init_user_session(email):
 def registrar_sinal_bd(email, sinal_str):
     try:
         dados = {"user_email": email, "sinal": sinal_str, "resultado": "Analisando..."}
-        supabase.table("historico_sinais").insert(dados).execute()
+        get_supabase().table("historico_sinais").insert(dados).execute()
     except Exception as e:
-        print(f"Erro ao registrar sinal no Supabase: {e}")
+        print(f"Erro Supabase (registrar_sinal): {e}")
 
 def buscar_historico_bd(email):
     try:
-        res = supabase.table("historico_sinais").select("id, sinal, resultado").eq("user_email", email).order("id", desc=True).limit(10).execute()
+        res = get_supabase().table("historico_sinais").select("id, sinal, resultado").eq("user_email", email).order("id", desc=True).limit(10).execute()
         return [{"id": r["id"], "sinal": r["sinal"], "res": r["resultado"]} for r in res.data]
     except Exception as e:
-        print(f"Erro ao buscar histórico no Supabase: {e}")
+        print(f"Erro Supabase (buscar_historico): {e}")
         return []
 
 def atualizar_ultimo_sinal_bd(email, resultado):
     try:
-        res = supabase.table("historico_sinais").select("id").eq("user_email", email).order("id", desc=True).limit(1).execute()
+        res = get_supabase().table("historico_sinais").select("id").eq("user_email", email).order("id", desc=True).limit(1).execute()
         if res.data:
             ultimo_id = res.data[0]["id"]
-            supabase.table("historico_sinais").update({"resultado": resultado}).eq("id", ultimo_id).execute()
+            get_supabase().table("historico_sinais").update({"resultado": resultado}).eq("id", ultimo_id).execute()
     except Exception as e:
-        print(f"Erro ao atualizar resultado do sinal no Supabase: {e}")
+        print(f"Erro Supabase (atualizar_ultimo_sinal): {e}")
 
-# ================= CONFIGURAÇÕES DO BOT PRO E ESTRATÉGIAS =================
+# ================= BOT CONFIGS =================
 TIMEFRAME_OPERACAO = 5
 TIPO_MERCADO = "TODOS"
 ESTRATEGIA_ESCOLHIDA = "TODAS"
-BACKTEST_AUTO = True
-RESULTADOS_BACKTEST = {}
-
 LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
 
 BOT_RODANDO = True
 BOT_PAUSADO = True
 BOT_INICIADO = False
 AG_RESULTADO = False
-FUSO = pytz.timezone("America/Sao_Paulo")
-IS_ALERT_MODE = False
 ULTIMO_SINAL_GLOBAL = "Aguardando Início..."
 ATIVO_ATUAL_GLOBAL = "EURUSD=X"
 
@@ -577,7 +581,11 @@ def analisar_estrategia(data, estrategia, i=-1):
 
     return None
 
-# ================= ROTAS E API =================
+# ================= ROTAS =================
+@app.route('/health')
+def health():
+    return jsonify({"status": "ok"}), 200
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -627,14 +635,14 @@ def adm_editar():
     
     try:
         if nova_senha.strip():
-            supabase.table("usuarios").update({
+            get_supabase().table("usuarios").update({
                 "email": novo_email,
                 "senha": generate_password_hash(nova_senha)
             }).eq("email", original).execute()
         else:
-            supabase.table("usuarios").update({"email": novo_email}).eq("email", original).execute()
+            get_supabase().table("usuarios").update({"email": novo_email}).eq("email", original).execute()
     except Exception as e:
-        print(f"Erro ao editar no Supabase: {e}")
+        print(f"Erro Editar Admin: {e}")
         
     return redirect('/admin_panel')
 
@@ -648,7 +656,7 @@ def adm_excluir(email):
 def register():
     if request.method == 'POST':
         e, s = request.form['email'], request.form['password']
-        if e and s: salvar_usuario(e, s, request.remote_addr); return redirect('/login')
+        if e and s: salvar_usuario(e, s); return redirect('/login')
     return render_template_string(HTML_REGISTER)
 
 @app.route('/')
@@ -768,18 +776,15 @@ def bot_loop():
                     dir_txt = "COMPRA" if sinal == "CALL" else "VENDA"
                     ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>🎯 <b>SINAL CONFIRMADO: {ativo}</b><br>Entrada: {dir_txt}</div>"
                     
-                    # Salva o sinal gerado para os usuários no banco
                     for u in USUARIOS_ONLINE.keys():
                         registrar_sinal_bd(u, f"{ativo} (M{TIMEFRAME_OPERACAO})")
                         
                     enviar_telegram(f"🎯 <b>SINAL CONFIRMADO</b>\n\n📈 Ativo: {ativo}\n🕒 Timeframe: M{TIMEFRAME_OPERACAO}\n↕️ Direção: {dir_txt}")
                     AG_RESULTADO = True; break
             time.sleep(2)
-        except Exception as e: time.sleep(5)
+        except Exception as e: 
+            print(f"Erro Loop Bot: {e}")
+            time.sleep(5)
 
-# Thread daemon rodando em segundo plano
+# Thread em background
 threading.Thread(target=bot_loop, daemon=True).start()
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5001))
-    app.run(host='0.0.0.0', port=port)
