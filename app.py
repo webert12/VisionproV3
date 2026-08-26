@@ -12,24 +12,28 @@ import numpy as np
 import re
 import signal
 from datetime import datetime, timedelta
-from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for, abort, send_from_directory
+from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for, abort
 from werkzeug.security import generate_password_hash, check_password_hash
+from supabase import create_client, Client
 
 # ================= CONFIGURAÇÕES TELEGRAM & AMBIENTE =================
 TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU")
 CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1003474284931")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com")
 
+# ================= CONFIGURAÇÕES SUPABASE =================
+SUPABASE_URL = os.getenv("SUPABASE_URL", "SUA_URL_DO_SUPABASE")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "SUA_CHAVE_ANON_OU_SERVICE_ROLE_SUPABASE")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 USUARIOS_ONLINE = {}
-DADOS_USUARIOS = {} # {email: {"stats": {...}, "historico": [], "sinal_atual": ""}}
+DADOS_USUARIOS = {} 
 
 ULTIMO_MSG_ID_TELEGRAM = None
 QUEM_INICIOU_O_BOT = None
 
 def enviar_telegram(mensagem, auto_delete=None):
     global ULTIMO_MSG_ID_TELEGRAM
-    if QUEM_INICIOU_O_BOT != ADMIN_EMAIL:
-        return None
     try:
         url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
         payload = {"chat_id": CHAT_ID_TELEGRAM, "text": mensagem, "parse_mode": "HTML"}
@@ -60,8 +64,6 @@ app = Flask(__name__)
 app.secret_key = APP_SECRET
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
-
-USER_FILE = "usuarios.json"
 
 # ================= TEMPLATES HTML =================
 HTML_ADM = """
@@ -361,7 +363,6 @@ HTML_INDEX = """
         function sendCommand(cmd) {
             fetch('/command/' + cmd).then(r => r.json()).then(data => {
                 if(data.redirect) window.location.href = data.redirect;
-                else location.reload();
             });
         }
 
@@ -392,54 +393,69 @@ HTML_INDEX = """
 </html>
 """
 
-# ================= FUNÇÕES DE APOIO =================
+# ================= FUNÇÕES DE BANCO (SUPABASE) =================
 def carregar_usuarios():
-    if not os.path.exists(USER_FILE):
-        senha_hash = generate_password_hash("admin123")
-        dados = {ADMIN_EMAIL: {"senha": senha_hash, "criado_em": "2024-01-01", "ip": "127.0.0.1", "wins": 0, "reds": 0, "winrate": 0}}
-        with open(USER_FILE, "w") as f: json.dump(dados, f, indent=4)
-        return dados
     try:
-        with open(USER_FILE, "r") as f:
-            users = json.load(f)
-            if ADMIN_EMAIL not in users:
-                users[ADMIN_EMAIL] = {"senha": generate_password_hash("admin123"), "criado_em": "2024-01-01", "ip": "127.0.0.1", "wins": 0, "reds": 0, "winrate": 0}
-            return users
-    except: return {ADMIN_EMAIL: {"senha": generate_password_hash("admin123"), "criado_em": "2024-01-01", "ip": "127.0.0.1", "wins": 0, "reds": 0, "winrate": 0}}
+        res = supabase.table("usuarios").select("*").execute()
+        return {u["email"]: u for u in res.data}
+    except Exception as e:
+        print(f"Erro ao carregar usuários no Supabase: {e}")
+        return {}
 
 def salvar_usuario(email, senha, ip, data=None):
-    usuarios = carregar_usuarios()
-    data_criacao = data if data else datetime.now().strftime("%Y-%m-%d")
-    usuarios[email] = {"senha": generate_password_hash(senha), "criado_em": data_criacao, "ip": ip, "wins": 0, "reds": 0, "winrate": 0}
-    with open(USER_FILE, "w") as f: json.dump(usuarios, f, indent=4)
+    try:
+        data_criacao = data if data else datetime.now().strftime("%Y-%m-%d")
+        dados = {
+            "email": email,
+            "senha": generate_password_hash(senha),
+            "criado_em": data_criacao,
+            "ip": ip,
+            "wins": 0,
+            "reds": 0,
+            "winrate": 0.0
+        }
+        supabase.table("usuarios").upsert(dados).execute()
+    except Exception as e:
+        print(f"Erro ao salvar usuário no Supabase: {e}")
 
 def atualizar_estatisticas_usuario(email, is_win):
-    usuarios = carregar_usuarios()
-    if email in usuarios:
-        if is_win: usuarios[email]["wins"] += 1
-        else: usuarios[email]["reds"] += 1
-        total = usuarios[email]["wins"] + usuarios[email]["reds"]
-        if total > 0: usuarios[email]["winrate"] = round((usuarios[email]["wins"] / total) * 100, 1)
-        with open(USER_FILE, "w") as f: json.dump(usuarios, f, indent=4)
+    try:
+        res = supabase.table("usuarios").select("wins", "reds").eq("email", email).execute()
+        if res.data:
+            u = res.data[0]
+            wins = u["wins"] + (1 if is_win else 0)
+            reds = u["reds"] + (0 if is_win else 1)
+            total = wins + reds
+            winrate = round((wins / total) * 100, 1) if total > 0 else 0.0
+
+            supabase.table("usuarios").update({
+                "wins": wins,
+                "reds": reds,
+                "winrate": winrate
+            }).eq("email", email).execute()
+    except Exception as e:
+        print(f"Erro ao atualizar estatísticas no Supabase: {e}")
 
 def renovar_usuario_db(email):
-    usuarios = carregar_usuarios()
-    if email in usuarios:
-        usuarios[email]["criado_em"] = datetime.now().strftime("%Y-%m-%d")
-        with open(USER_FILE, "w") as f: json.dump(usuarios, f, indent=4)
+    try:
+        hoje = datetime.now().strftime("%Y-%m-%d")
+        supabase.table("usuarios").update({"criado_em": hoje}).eq("email", email).execute()
+    except Exception as e:
+        print(f"Erro ao renovar usuário no Supabase: {e}")
 
 def excluir_usuario_db(email):
-    usuarios = carregar_usuarios()
-    if email in usuarios and email != ADMIN_EMAIL:
-        del usuarios[email]
-        with open(USER_FILE, "w") as f: json.dump(usuarios, f, indent=4)
+    try:
+        if email != ADMIN_EMAIL:
+            supabase.table("usuarios").delete().eq("email", email).execute()
+    except Exception as e:
+        print(f"Erro ao excluir usuário no Supabase: {e}")
 
 def verificar_assinatura(email):
     if email == ADMIN_EMAIL: return True, 999
-    usuarios = carregar_usuarios()
-    if email not in usuarios: return False, 0
     try:
-        data_criacao = datetime.strptime(usuarios[email]["criado_em"], "%Y-%m-%d")
+        res = supabase.table("usuarios").select("criado_em").eq("email", email).execute()
+        if not res.data: return False, 0
+        data_criacao = datetime.strptime(res.data[0]["criado_em"], "%Y-%m-%d")
         dias_restantes = 30 - (datetime.now() - data_criacao).days
         return (True, dias_restantes) if dias_restantes > 0 else (False, 0)
     except: return False, 0
@@ -447,10 +463,32 @@ def verificar_assinatura(email):
 def init_user_session(email):
     if email not in DADOS_USUARIOS:
         DADOS_USUARIOS[email] = {
-            "stats": {"wins": 0, "wins_g1": 0, "reds": 0},
-            "historico": [],
             "sinal_atual": "Aguardando Início..."
         }
+
+def registrar_sinal_bd(email, sinal_str):
+    try:
+        dados = {"user_email": email, "sinal": sinal_str, "resultado": "Analisando..."}
+        supabase.table("historico_sinais").insert(dados).execute()
+    except Exception as e:
+        print(f"Erro ao registrar sinal no Supabase: {e}")
+
+def buscar_historico_bd(email):
+    try:
+        res = supabase.table("historico_sinais").select("id, sinal, resultado").eq("user_email", email).order("id", desc=True).limit(10).execute()
+        return [{"id": r["id"], "sinal": r["sinal"], "res": r["resultado"]} for r in res.data]
+    except Exception as e:
+        print(f"Erro ao buscar histórico no Supabase: {e}")
+        return []
+
+def atualizar_ultimo_sinal_bd(email, resultado):
+    try:
+        res = supabase.table("historico_sinais").select("id").eq("user_email", email).order("id", desc=True).limit(1).execute()
+        if res.data:
+            ultimo_id = res.data[0]["id"]
+            supabase.table("historico_sinais").update({"resultado": resultado}).eq("id", ultimo_id).execute()
+    except Exception as e:
+        print(f"Erro ao atualizar resultado do sinal no Supabase: {e}")
 
 # ================= CONFIGURAÇÕES DO BOT PRO E ESTRATÉGIAS =================
 TIMEFRAME_OPERACAO = 5
@@ -539,22 +577,6 @@ def analisar_estrategia(data, estrategia, i=-1):
 
     return None
 
-def realizar_backtest(ticker, tf, estrategia_ativa):
-    data = get_data_v2(ticker, tf, '5d')
-    if not data or len(data["close"]) < 65: return 0
-    estrategias_para_testar = [estrategia_ativa] if estrategia_ativa != "TODAS" else LISTA_ESTRATEGIAS
-    wins, total = 0, 0
-    for i in range(-60, 0):
-        sinal_encontrado = None
-        for est in estrategias_para_testar:
-            sinal_encontrado = analisar_estrategia(data, est, i-1)
-            if sinal_encontrado: break
-        if sinal_encontrado:
-            total += 1
-            resultado = "CALL" if data["close"][i] > data["open"][i] else "PUT"
-            if sinal_encontrado == resultado: wins += 1
-    return round((wins/total)*100, 1) if total > 0 else 0
-
 # ================= ROTAS E API =================
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -568,7 +590,7 @@ def login():
                 USUARIOS_ONLINE[e] = time.time()
                 init_user_session(e)
                 return redirect('/')
-        return render_template_string(HTML_LOGIN, erro="Acesso Negado")
+        return render_template_string(HTML_LOGIN, erro="Acesso Negado ou Conta Inexistente")
     return render_template_string(HTML_LOGIN)
 
 @app.route('/logout')
@@ -602,12 +624,18 @@ def adm_renovar(email):
 def adm_editar():
     if session.get('user') != ADMIN_EMAIL: return abort(403)
     original, novo_email, nova_senha = request.form['email_original'], request.form['novo_email'], request.form['nova_senha']
-    usuarios = carregar_usuarios()
-    if original in usuarios:
-        dados = usuarios.pop(original)
-        if nova_senha.strip(): dados['senha'] = generate_password_hash(nova_senha)
-        usuarios[novo_email] = dados
-        with open(USER_FILE, "w") as f: json.dump(usuarios, f, indent=4)
+    
+    try:
+        if nova_senha.strip():
+            supabase.table("usuarios").update({
+                "email": novo_email,
+                "senha": generate_password_hash(nova_senha)
+            }).eq("email", original).execute()
+        else:
+            supabase.table("usuarios").update({"email": novo_email}).eq("email", original).execute()
+    except Exception as e:
+        print(f"Erro ao editar no Supabase: {e}")
+        
     return redirect('/admin_panel')
 
 @app.route('/adm/excluir/<email>')
@@ -651,13 +679,18 @@ def status():
     user = session.get('user')
     if not user: return jsonify({})
     USUARIOS_ONLINE[user] = time.time()
-    u_data = DADOS_USUARIOS.get(user, {"stats": {"wins": 0, "wins_g1": 0, "reds": 0}, "historico": [], "sinal_atual": "Iniciando..."})
-    s = u_data['stats']
-    total = s['wins'] + s['wins_g1'] + s['reds']
-    wr = round(((s['wins'] + s['wins_g1']) / total) * 100, 1) if total > 0 else 0
+    
+    usuarios = carregar_usuarios()
+    u_info = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
+    historico = buscar_historico_bd(user)
+    
     return jsonify({
-        "html": ULTIMO_SINAL_GLOBAL, "aguardando": AG_RESULTADO, "wins": s['wins'] + s['wins_g1'],
-        "reds": s['reds'], "winrate": wr, "historico": u_data['historico']
+        "html": ULTIMO_SINAL_GLOBAL, 
+        "aguardando": AG_RESULTADO, 
+        "wins": u_info.get("wins", 0),
+        "reds": u_info.get("reds", 0), 
+        "winrate": u_info.get("winrate", 0.0), 
+        "historico": historico
     })
 
 @app.route('/command/<cmd>')
@@ -672,7 +705,7 @@ def command(cmd):
         enviar_telegram(f"🚀 <b>SISTEMA VISION PRO V3 CONECTADO</b>\nSessão iniciada por {user}")
     elif cmd == "pause_bot":
         BOT_PAUSADO = not BOT_PAUSADO
-        ULTIMO_SINAL_GLOBAL = "PAUSADO" if BOT_PAUSADO else "RECONECTANDO..."
+        ULTIMO_SINAL_GLOBAL = "PAUSADO" if BOT_PAUSADO else "📡 Scanner Ativo...<div class='tech-scanner'></div>"
     elif cmd == "stop_bot":
         BOT_INICIADO, BOT_PAUSADO = False, True
         ULTIMO_SINAL_GLOBAL = "Aguardando Início..."
@@ -686,26 +719,21 @@ def command(cmd):
 def resultado(res):
     global AG_RESULTADO, ULTIMO_SINAL_GLOBAL
     user = session.get('user')
-    if user and user in DADOS_USUARIOS:
-        u_data = DADOS_USUARIOS[user]
-        if u_data['historico']:
-            if res == 'win':
-                u_data['stats']['wins'] += 1
-                u_data['historico'][0]['res'] = "Win"
-                atualizar_estatisticas_usuario(user, True)
-                enviar_telegram("💎 <b>WIN DIRETO!</b>")
-            elif res == 'g1':
-                u_data['stats']['wins_g1'] += 1
-                u_data['historico'][0]['res'] = "WinG1"
-                atualizar_estatisticas_usuario(user, True)
-                enviar_telegram("🔄 <b>WIN NO GALE 1!</b>")
-            elif res == 'red':
-                u_data['stats']['reds'] += 1
-                u_data['historico'][0]['res'] = "Red"
-                atualizar_estatisticas_usuario(user, False)
-                enviar_telegram("📉 <b>STOP LOSS / RED</b>")
-            elif res == 'pular':
-                u_data['historico'].pop(0)
+    if user:
+        if res == 'win':
+            atualizar_estatisticas_usuario(user, True)
+            atualizar_ultimo_sinal_bd(user, "Win")
+            enviar_telegram("💎 <b>WIN DIRETO!</b>")
+        elif res == 'g1':
+            atualizar_estatisticas_usuario(user, True)
+            atualizar_ultimo_sinal_bd(user, "WinG1")
+            enviar_telegram("🔄 <b>WIN NO GALE 1!</b>")
+        elif res == 'red':
+            atualizar_estatisticas_usuario(user, False)
+            atualizar_ultimo_sinal_bd(user, "Red")
+            enviar_telegram("📉 <b>STOP LOSS / RED</b>")
+        elif res == 'pular':
+            atualizar_ultimo_sinal_bd(user, "Ignorado")
 
         ULTIMO_SINAL_GLOBAL = "📡 Scanner Ativo...<div class='tech-scanner'></div>"
     AG_RESULTADO = False
@@ -739,8 +767,11 @@ def bot_loop():
                 if sinal:
                     dir_txt = "COMPRA" if sinal == "CALL" else "VENDA"
                     ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>🎯 <b>SINAL CONFIRMADO: {ativo}</b><br>Entrada: {dir_txt}</div>"
-                    for u in DADOS_USUARIOS:
-                        DADOS_USUARIOS[u]['historico'].insert(0, {"sinal": f"{ativo} (M{TIMEFRAME_OPERACAO})", "res": "Analisando..."})
+                    
+                    # Salva o sinal gerado para os usuários no banco
+                    for u in USUARIOS_ONLINE.keys():
+                        registrar_sinal_bd(u, f"{ativo} (M{TIMEFRAME_OPERACAO})")
+                        
                     enviar_telegram(f"🎯 <b>SINAL CONFIRMADO</b>\n\n📈 Ativo: {ativo}\n🕒 Timeframe: M{TIMEFRAME_OPERACAO}\n↕️ Direção: {dir_txt}")
                     AG_RESULTADO = True; break
             time.sleep(2)
