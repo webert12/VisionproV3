@@ -239,102 +239,172 @@ HTML_INDEX = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VISION PRO V3</title>
+    <title>VISION PRO V3 - HIGH FREQUENCY ANALYTICS</title>
+    <!-- Fonte Moderna Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #0b0e14; color: #e1e1e1; margin: 0; padding: 15px; display: flex; justify-content: center; min-height: 100vh; }
-        .container { width: 100%; max-width: 480px; background: rgba(23, 33, 43, 0.85); backdrop-filter: blur(15px); padding: 20px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.08); }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-        .status-box { background: rgba(36, 47, 61, 0.6); padding: 15px; border-radius: 15px; margin-bottom: 15px; min-height: 80px; border: 1px solid rgba(36, 129, 204, 0.3); text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+        body { background-color: #090c10; color: #f0f6fc; display: flex; justify-content: center; min-height: 100vh; padding: 20px 10px; }
         
-        #chart-wrapper { background: #131722; border-radius: 12px; padding: 10px; border: 1px solid #242f3d; margin-bottom: 15px; }
-        #chart-header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 8px; color: #2481cc; font-weight: bold; }
-        #chart-container { width: 100%; height: 230px; position: relative; }
+        .container {
+            width: 100%;
+            max-width: 500px;
+            background: #161b22;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+        }
 
-        .menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
-        .sub-menu { display: none; grid-template-columns: 1fr 1fr 1fr; gap: 8px; padding: 12px; background: rgba(28, 41, 56, 0.5); border-radius: 12px; margin-bottom: 12px; }
-        button { border: none; border-radius: 10px; cursor: pointer; font-weight: 600; color: white; transition: 0.2s; }
-        .btn-menu { padding: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); font-size: 12px; }
-        .btn-opt { padding: 8px; font-size: 11px; background: #2b5278; }
-        .btn-active { background: #2481cc !important; }
-        .placar-mini { display: flex; flex-direction: column; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 12px; margin-bottom: 15px; font-size: 12px; }
-        .placar-row { display: flex; justify-content: space-around; width: 100%; }
-        .winrate-bar { height: 5px; background: #333; border-radius: 10px; overflow: hidden; margin-top: 5px; }
-        .winrate-fill { height: 100%; background: #4caf50; width: 0%; transition: 0.5s; }
-        .historico-box { display: none; background: #1c2938; border-radius: 12px; padding: 12px; margin-top: 12px; }
-        .historico-scroll { max-height: 150px; overflow-y: auto; }
-        .historico-item { font-size: 11px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; }
-        .tech-scanner { width: 30px; height: 30px; margin: 5px auto; border: 3px solid rgba(0, 255, 204, 0.1); border-top-color: #00ffcc; border-radius: 50%; animation: spin 1s linear infinite; }
+        /* HEADER */
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+        .brand { font-size: 16px; font-weight: 800; letter-spacing: 1px; color: #2f81f7; display: flex; align-items: center; gap: 8px; }
+        .brand span { background: rgba(47, 129, 247, 0.15); color: #58a6ff; font-size: 10px; padding: 3px 8px; border-radius: 12px; border: 1px solid rgba(56, 139, 253, 0.4); }
+        .btn-logout { font-size: 12px; color: #f85149; text-decoration: none; font-weight: 600; padding: 6px 12px; border-radius: 8px; background: rgba(248, 81, 73, 0.1); border: 1px solid rgba(248, 81, 73, 0.2); transition: 0.2s; }
+        .btn-logout:hover { background: rgba(248, 81, 73, 0.2); }
+
+        /* DASHBOARD PLACAR */
+        .placar-card { background: #0d1117; border: 1px solid #30363d; border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+        .placar-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; text-align: center; }
+        .placar-item .title { font-size: 11px; text-transform: uppercase; color: #8b949e; font-weight: 600; margin-bottom: 4px; }
+        .placar-item .val { font-size: 18px; font-weight: 700; }
+        .win-color { color: #3fb950; }
+        .loss-color { color: #f85149; }
+        .wr-color { color: #58a6ff; }
+        .winrate-bar { height: 6px; background: #21262d; border-radius: 10px; overflow: hidden; margin-top: 12px; }
+        .winrate-fill { height: 100%; background: linear-gradient(90deg, #238636, #3fb950); width: 0%; transition: width 0.5s ease-in-out; }
+
+        /* GRÁFICO */
+        #chart-wrapper { background: #0d1117; border-radius: 14px; border: 1px solid #30363d; padding: 12px; margin-bottom: 16px; }
+        #chart-header { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 10px; }
+        #chart-symbol { color: #c9d1d9; }
+        #chart-price { color: #39d353; font-family: monospace; font-size: 14px; }
+        #chart-container { width: 100%; height: 210px; border-radius: 8px; overflow: hidden; }
+
+        /* PAINEL DE SINAL */
+        .status-box { background: linear-gradient(145deg, #161b22, #0d1117); border: 1px solid #30363d; padding: 18px; border-radius: 14px; margin-bottom: 16px; min-height: 85px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.4); }
+        
+        /* BOTÕES DE RESULTADO */
+        .result-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
+        .btn-res { border: none; padding: 10px; border-radius: 8px; font-weight: 700; font-size: 12px; cursor: pointer; color: white; transition: transform 0.1s; }
+        .btn-res:active { transform: scale(0.95); }
+        .btn-res-win { background: #238636; }
+        .btn-res-g1 { background: #d29922; color: #0d1117; }
+        .btn-res-red { background: #da3633; }
+        .btn-res-skip { background: #30363d; }
+
+        /* CONTROLES E MENUS */
+        .section-label { font-size: 11px; font-weight: 700; color: #8b949e; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.5px; }
+        .menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+        .sub-menu { display: none; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 12px; margin-bottom: 16px; }
+        
+        button.btn-menu { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 12px; border-radius: 10px; font-weight: 600; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; transition: 0.2s; }
+        button.btn-menu:hover { background: #30363d; border-color: #8b949e; }
+        
+        .btn-opt { padding: 9px; font-size: 11px; background: #21262d; border: 1px solid #30363d; color: #8b949e; border-radius: 8px; font-weight: 600; cursor: pointer; }
+        .btn-opt:hover { color: #fff; }
+        .btn-active { background: #1f6feb !important; color: #ffffff !important; border-color: #58a6ff !important; box-shadow: 0 0 10px rgba(31, 111, 235, 0.4); }
+
+        /* HISTÓRICO */
+        .historico-box { display: none; background: #0d1117; border: 1px solid #30363d; border-radius: 12px; padding: 12px; margin-bottom: 16px; }
+        .historico-scroll { max-height: 160px; overflow-y: auto; }
+        .historico-item { font-size: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; }
+        .historico-item:last-child { border-bottom: none; }
+
+        /* ANIMAÇÃO DE SPINNER */
+        .tech-scanner { width: 26px; height: 26px; margin: 8px auto 0; border: 3px solid rgba(88, 166, 255, 0.2); border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.8s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <div class="container">
+        <!-- HEADER -->
         <div class="header">
-            <div style="color:#2481cc; font-weight:bold;">VISION PRO V3</div>
-            <a href="/logout" style="color:#ff5252; text-decoration:none; font-size:12px;">SAIR</a>
+            <div class="brand">VISION PRO <span>V3 ULTRA</span></div>
+            <a href="/logout" class="btn-logout">SAIR</a>
         </div>
 
-        <div class="placar-mini">
-            <div class="placar-row">
-                <span>WINS: <b id="win-count" style="color:#4caf50">0</b></span>
-                <span>ASSERT.: <b id="wr-text" style="color:#2481cc">0%</b></span>
-                <span>LOSS: <b id="loss-count" style="color:#ff5252">0</b></span>
+        <!-- PLACAR DE ASSERTIVIDADE -->
+        <div class="placar-card">
+            <div class="placar-grid">
+                <div class="placar-item">
+                    <div class="title">WINS</div>
+                    <div class="val win-color" id="win-count">0</div>
+                </div>
+                <div class="placar-item">
+                    <div class="title">ASSERTIVIDADE</div>
+                    <div class="val wr-color" id="wr-text">0%</div>
+                </div>
+                <div class="placar-item">
+                    <div class="title">LOSS</div>
+                    <div class="val loss-color" id="loss-count">0</div>
+                </div>
             </div>
             <div class="winrate-bar"><div id="wr-fill" class="winrate-fill"></div></div>
         </div>
 
+        <!-- CHART CONTAINER -->
         <div id="chart-wrapper">
             <div id="chart-header">
                 <span id="chart-symbol">EURUSD</span>
-                <span id="chart-price" style="color:#00ffcc;">--.--</span>
+                <span id="chart-price">--.--</span>
             </div>
             <div id="chart-container"></div>
         </div>
 
+        <!-- BOARD DE SINAIS -->
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
 
-        <div id="result-area" style="display:none; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 15px;">
-            <button style="background:#2e7d32; padding:10px;" onclick="fetch('/resultado/win')">WIN</button>
-            <button style="background:#f9a825; padding:10px;" onclick="fetch('/resultado/g1')">G1</button>
-            <button style="background:#c62828; padding:10px;" onclick="fetch('/resultado/red')">RED</button>
-            <button style="background:#546e7a; padding:10px;" onclick="fetch('/resultado/pular')">PULAR</button>
+        <!-- BOTÕES DE CONFIRMAÇÃO DE RESULTADO -->
+        <div id="result-area" class="result-grid" style="display:none;">
+            <button class="btn-res btn-res-win" onclick="fetch('/resultado/win')">WIN</button>
+            <button class="btn-res btn-res-g1" onclick="fetch('/resultado/g1')">G1</button>
+            <button class="btn-res btn-res-red" onclick="fetch('/resultado/red')">RED</button>
+            <button class="btn-res btn-res-skip" onclick="fetch('/resultado/pular')">PULAR</button>
         </div>
 
+        <!-- NAVEGAÇÃO / MENUS -->
+        <div class="section-label">PAINEL DE CONTROLE</div>
         <div class="menu-grid">
-            <button class="btn-menu" onclick="toggleSub('menu-inicio')">🏠 INÍCIO</button>
-            <button class="btn-menu" onclick="toggleSub('menu-historico')">📋 SINAIS</button>
-            <button class="btn-menu" onclick="toggleSub('menu-mercado')">💹 MERCADO</button>
-            <button class="btn-menu" onclick="toggleSub('menu-times')">🕒 TIMES</button>
-            <button class="btn-menu" onclick="toggleSub('menu-estrategias')" style="grid-column: span 2;">⚙️ ESTRATÉGIAS</button>
+            <button class="btn-menu" onclick="toggleSub('menu-inicio')">⚡ SISTEMA</button>
+            <button class="btn-menu" onclick="toggleSub('menu-historico')">📊 HISTÓRICO</button>
+            <button class="btn-menu" onclick="toggleSub('menu-mercado')">🌐 MERCADO</button>
+            <button class="btn-menu" onclick="toggleSub('menu-times')">⏱️ TIMEFRAME</button>
+            <button class="btn-menu" onclick="toggleSub('menu-estrategias')" style="grid-column: span 2;">⚙️ ESTRATÉGIAS OPERACIONAIS</button>
             {% if user == admin %}
-            <button class="btn-menu" onclick="location.href='/admin_panel'" style="grid-column: span 2; background: rgba(36, 129, 204, 0.2);">⚙️ PAINEL ADM</button>
+            <button class="btn-menu" onclick="location.href='/admin_panel'" style="grid-column: span 2; background: rgba(31, 111, 235, 0.15); border-color: #1f6feb; color: #58a6ff;">🛡️ PAINEL ADMINISTRATIVO</button>
             {% endif %}
         </div>
 
+        <!-- SUBMENUS EXPANDÍVEIS -->
         <div id="menu-historico" class="historico-box">
             <div class="historico-scroll" id="lista-sinais"></div>
         </div>
+        
         <div id="menu-inicio" class="sub-menu">
-            <button class="btn-opt" style="background:#2e7d32" onclick="sendCommand('start_bot')">START</button>
-            <button class="btn-opt" style="background:#f57c00" onclick="sendCommand('pause_bot')">PAUSE</button>
-            <button class="btn-opt" style="background:#c62828" onclick="sendCommand('stop_bot')">ENCERRAR</button>
+            <button class="btn-opt" style="background:#238636; color:white;" onclick="sendCommand('start_bot')">START</button>
+            <button class="btn-opt" style="background:#d29922; color:#0d1117;" onclick="sendCommand('pause_bot')">PAUSAR</button>
+            <button class="btn-opt" style="background:#da3633; color:white;" onclick="sendCommand('stop_bot')">PARAR</button>
         </div>
+        
         <div id="menu-mercado" class="sub-menu">
             <button class="btn-opt {{ 'btn-active' if modo == 'FOREX' }}" onclick="sendCommand('mkt_FOREX')">FOREX</button>
             <button class="btn-opt {{ 'btn-active' if modo == 'CRIPTO' }}" onclick="sendCommand('mkt_CRIPTO')">CRIPTO</button>
             <button class="btn-opt {{ 'btn-active' if modo == 'TODOS' }}" onclick="sendCommand('mkt_TODOS')">TODOS</button>
         </div>
+        
         <div id="menu-times" class="sub-menu">
             <button class="btn-opt {{ 'btn-active' if tf == 1 }}" onclick="sendCommand('tf_1')">M1</button>
             <button class="btn-opt {{ 'btn-active' if tf == 5 }}" onclick="sendCommand('tf_5')">M5</button>
             <button class="btn-opt {{ 'btn-active' if tf == 15 }}" onclick="sendCommand('tf_15')">M15</button>
         </div>
+        
         <div id="menu-estrategias" class="sub-menu" style="grid-template-columns: 1fr 1fr;">
             <button class="btn-opt {{ 'btn-active' if estrat == 'TODAS' }}" onclick="sendCommand('set_est_TODAS')">💎 TODAS (AUTO)</button>
             <button class="btn-opt {{ 'btn-active' if estrat == 'LOGICA_DO_PRECO' }}" onclick="sendCommand('set_est_LOGICA_DO_PRECO')">LÓGICA DO PREÇO</button>
             <button class="btn-opt {{ 'btn-active' if estrat == 'RSI_MACD_MA' }}" onclick="sendCommand('set_est_RSI_MACD_MA')">RSI + MACD + MA</button>
-            <button class="btn-opt {{ 'btn-active' if estrat == 'MHI1' }}" onclick="sendCommand('set_est_MHI1')">MHI1</button>
+            <button class="btn-opt {{ 'btn-active' if estrat == 'MHI1' }}" onclick="sendCommand('set_est_MHI1')">MHI 1</button>
             <button class="btn-opt {{ 'btn-active' if estrat == 'REVERSAO' }}" onclick="sendCommand('set_est_REVERSAO')">REVERSÃO / RETRAÇÃO</button>
         </div>
     </div>
@@ -342,12 +412,12 @@ HTML_INDEX = """
     <script>
         const chartElement = document.getElementById('chart-container');
         const chart = LightweightCharts.createChart(chartElement, {
-            layout: { backgroundColor: '#131722', textColor: '#d1d4dc' },
-            grid: { vertLines: { color: 'rgba(42, 46, 57, 0.5)' }, horzLines: { color: 'rgba(42, 46, 57, 0.5)' } },
+            layout: { backgroundColor: '#0d1117', textColor: '#8b949e' },
+            grid: { vertLines: { color: 'rgba(48, 54, 61, 0.4)' }, horzLines: { color: 'rgba(48, 54, 61, 0.4)' } },
             timeScale: { timeVisible: true, secondsVisible: false }
         });
         const candleSeries = chart.addCandlestickSeries({
-            upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+            upColor: '#3fb950', downColor: '#f85149', borderVisible: false, wickUpColor: '#3fb950', wickDownColor: '#f85149'
         });
 
         function updateChart() {
@@ -356,7 +426,7 @@ HTML_INDEX = """
                     candleSeries.setData(res.data);
                     document.getElementById('chart-symbol').innerText = res.symbol;
                     const lastCandle = res.data[res.data.length - 1];
-                    document.getElementById('chart-price').innerText = lastCandle.close;
+                    document.getElementById('chart-price').innerText = lastCandle.close.toFixed(5);
                 }
             });
         }
@@ -389,13 +459,13 @@ HTML_INDEX = """
                 let histHtml = "";
                 if(data.historico) {
                     data.historico.forEach(item => {
-                        let cor = "#8a99a8";
-                        if(item.res.includes("Win")) cor = "#4caf50";
-                        if(item.res.includes("Red")) cor = "#ff5252";
+                        let cor = "#8b949e";
+                        if(item.res.includes("Win")) cor = "#3fb950";
+                        if(item.res.includes("Red")) cor = "#f85149";
                         histHtml += `<div class="historico-item"><span>🕒 ${item.sinal}</span><b style="color:${cor}">${item.res}</b></div>`;
                     });
                 }
-                document.getElementById('lista-sinais').innerHTML = histHtml || "<div style='text-align:center; font-size:11px; color:#555;'>Nenhum sinal.</div>";
+                document.getElementById('lista-sinais').innerHTML = histHtml || "<div style='text-align:center; font-size:11px; color:#8b949e;'>Nenhum sinal no histórico.</div>";
             });
         }, 1500);
     </script>
@@ -589,29 +659,46 @@ def health():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        e = request.form.get('email', '').strip()
+        e = request.form.get('email', '').strip().lower()
         s = request.form.get('password', '').strip()
 
         if not e or not s:
             return render_template_string(HTML_LOGIN, erro="Preencha todos os campos.")
 
-        usuarios = carregar_usuarios()
-
-        # Criação automática caso o e-mail do Admin ainda não exista no Supabase
-        if e == ADMIN_EMAIL and e not in usuarios:
-            salvar_usuario(e, s)
+        try:
             usuarios = carregar_usuarios()
+        except Exception as err:
+            return render_template_string(HTML_LOGIN, erro=f"Erro de Conexão DB: {err}")
 
-        # Validação de credenciais
-        if e in usuarios and check_password_hash(usuarios[e]['senha'], s):
-            ativo, _ = verificar_assinatura(e)
-            if ativo:
-                session['user'] = e
-                USUARIOS_ONLINE[e] = time.time()
-                init_user_session(e)
-                return redirect('/')
+        # Se for o Admin e não existir, cria. Se já existir, atualiza a senha para a que digitou agora!
+        if e == ADMIN_EMAIL.lower():
+            try:
+                salvar_usuario(e, s, datetime.now().strftime("%Y-%m-%d"))
+                usuarios = carregar_usuarios() # Recarrega
+            except Exception as err:
+                return render_template_string(HTML_LOGIN, erro=f"Erro ao salvar Admin: {err}")
 
-        return render_template_string(HTML_LOGIN, erro="Acesso Negado ou Senha Incorreta")
+        # Valida existência
+        if e not in usuarios:
+            return render_template_string(HTML_LOGIN, erro="Usuário não encontrado.")
+
+        user_db = usuarios[e]
+
+        # Valida Senha
+        if not check_password_hash(user_db['senha'], s):
+            return render_template_string(HTML_LOGIN, erro="Senha Incorreta.")
+
+        # Valida Assinatura
+        ativo, dias = verificar_assinatura(e)
+        if not ativo:
+            return render_template_string(HTML_LOGIN, erro=f"Assinatura expirada (Dias: {dias}). Contate o suporte.")
+
+        # Sucesso!
+        session['user'] = e
+        USUARIOS_ONLINE[e] = time.time()
+        init_user_session(e)
+        return redirect('/')
+
     return render_template_string(HTML_LOGIN)
 
 @app.route('/logout')
@@ -801,3 +888,7 @@ def bot_loop():
 
 # Thread em background
 threading.Thread(target=bot_loop, daemon=True).start()
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
