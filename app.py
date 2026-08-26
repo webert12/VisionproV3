@@ -589,8 +589,20 @@ def health():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
+        e = request.form.get('email', '').strip()
+        s = request.form.get('password', '').strip()
+
+        if not e or not s:
+            return render_template_string(HTML_LOGIN, erro="Preencha todos os campos.")
+
         usuarios = carregar_usuarios()
-        e, s = request.form['email'], request.form['password']
+
+        # Criação automática caso o e-mail do Admin ainda não exista no Supabase
+        if e == ADMIN_EMAIL and e not in usuarios:
+            salvar_usuario(e, s)
+            usuarios = carregar_usuarios()
+
+        # Validação de credenciais
         if e in usuarios and check_password_hash(usuarios[e]['senha'], s):
             ativo, _ = verificar_assinatura(e)
             if ativo:
@@ -598,7 +610,8 @@ def login():
                 USUARIOS_ONLINE[e] = time.time()
                 init_user_session(e)
                 return redirect('/')
-        return render_template_string(HTML_LOGIN, erro="Acesso Negado ou Conta Inexistente")
+
+        return render_template_string(HTML_LOGIN, erro="Acesso Negado ou Senha Incorreta")
     return render_template_string(HTML_LOGIN)
 
 @app.route('/logout')
