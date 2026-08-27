@@ -78,18 +78,18 @@ HTML_ADM = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GESTOR DE CLIENTES</title>
     <style>
-        body { background: #0e1621; color: white; font-family: sans-serif; padding: 10px; }
-        .card { background: rgba(23, 33, 43, 0.8); padding: 15px; border-radius: 10px; border: 1px solid #2481cc; margin-bottom: 10px; font-size: 13px; backdrop-filter: blur(5px); }
+        body { background: #0a0f1d; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 10px; }
+        .card { background: rgba(15, 23, 42, 0.9); padding: 15px; border-radius: 12px; border: 1px solid #00f2fe; margin-bottom: 10px; font-size: 13px; box-shadow: 0 4px 15px rgba(0, 242, 254, 0.1); }
         .user-header { cursor: pointer; display: flex; justify-content: space-between; align-items: center; padding: 5px 0; }
-        .user-header:hover { color: #2481cc; }
-        .user-details { display: none; margin-top: 15px; border-top: 1px solid #242f3d; padding-top: 15px; }
-        .btn-adm { padding: 8px 12px; border-radius: 5px; text-decoration: none; color: white; font-weight: bold; font-size: 11px; display: inline-block; margin: 5px 2px; border:none; cursor:pointer; }
-        .green { background: #2e7d32; } .red { background: #c62828; } .blue { background: #2481cc; }
-        h2 { color: #2481cc; text-align: center; }
-        input { background: #242f3d; color: white; border: 1px solid #2b5278; padding: 5px; border-radius: 4px; margin-bottom: 5px; width: 100%; box-sizing: border-box; }
-        .status-badge { padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; margin-left: 5px; }
-        .online { background: #4caf50; color: white; }
-        .offline { background: #555; color: #ccc; }
+        .user-header:hover { color: #00f2fe; }
+        .user-details { display: none; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 15px; }
+        .btn-adm { padding: 10px 14px; border-radius: 6px; text-decoration: none; color: white; font-weight: bold; font-size: 11px; display: inline-block; margin: 5px 2px; border:none; cursor:pointer; text-transform: uppercase; letter-spacing: 0.5px; }
+        .green { background: #10b981; } .red { background: #ef4444; } .blue { background: #3b82f6; }
+        h2 { color: #00f2fe; text-align: center; text-transform: uppercase; letter-spacing: 1px; }
+        input { background: #1e293b; color: white; border: 1px solid #334155; padding: 8px; border-radius: 6px; margin-bottom: 5px; width: 100%; box-sizing: border-box; }
+        .status-badge { padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: bold; margin-left: 5px; }
+        .online { background: #10b981; color: white; box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
+        .offline { background: #475569; color: #cbd5e1; }
     </style>
     <script>
         function toggleUser(id) {
@@ -105,8 +105,8 @@ HTML_ADM = """
 </head>
 <body>
     <h2>👥 GESTÃO DE USUÁRIOS</h2>
-    <p style="text-align:center; color:#8a99a8;">Total Online: {{ online_count }}</p>
-    <a href="/" style="color: #8a99a8; text-decoration:none; display:block; margin-bottom: 20px; text-align: center;">⬅ Voltar ao Painel</a>
+    <p style="text-align:center; color:#94a3b8;">Total Online: {{ online_count }}</p>
+    <a href="/" style="color: #00f2fe; text-decoration:none; display:block; margin-bottom: 20px; text-align: center; font-weight: bold;">⬅ Voltar ao Painel Principal</a>
 
     {% for email, info in lista.items() %}
     <div class="card">
@@ -119,13 +119,13 @@ HTML_ADM = """
                     <span class="status-badge offline">OFFLINE</span>
                 {% endif %}
             </span>
-            <span style="color:#2481cc; font-size: 10px;">Exibir Dados ▾</span>
+            <span style="color:#00f2fe; font-size: 10px;">Exibir Dados ▾</span>
         </div>
 
         <div id="details-{{ loop.index }}" class="user-details">
             <div style="margin-bottom:10px;">
-                <span style="color:#2481cc;">Assertividade: <b>{{ info.winrate if info.winrate else 0 }}%</b></span><br>
-                <span style="color:#8a99a8;">Wins: {{ info.wins }} | Reds: {{ info.reds }}</span>
+                <span style="color:#00f2fe;">Assertividade: <b>{{ info.winrate if info.winrate else 0 }}%</b></span><br>
+                <span style="color:#94a3b8;">Wins: {{ info.wins }} | Reds: {{ info.reds }}</span>
             </div>
             <form action="/adm/editar" method="POST">
                 <input type="hidden" name="email_original" value="{{ email }}">
@@ -149,11 +149,11 @@ HTML_TERMOS = """
 <!DOCTYPE html>
 <html>
 <head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TERMOS DE USO</title><style>
-    body { background: #0e1621; color: white; font-family: sans-serif; padding: 20px; line-height: 1.6; }
-    .card { background: #17212b; padding: 25px; border-radius: 15px; max-width: 600px; margin: auto; border: 1px solid #2481cc; }
-    h2 { color: #2481cc; border-bottom: 1px solid #242f3d; padding-bottom: 10px; }
-    p { font-size: 14px; color: #8a99a8; }
-    .btn { display: block; text-align: center; background: #2481cc; color: white; padding: 12px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 20px; }
+    body { background: #0a0f1d; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; line-height: 1.6; }
+    .card { background: #0f172a; padding: 25px; border-radius: 15px; max-width: 600px; margin: auto; border: 1px solid #00f2fe; box-shadow: 0 0 20px rgba(0,242,254,0.15); }
+    h2 { color: #00f2fe; border-bottom: 1px solid #1e293b; padding-bottom: 10px; text-transform: uppercase; }
+    p { font-size: 14px; color: #94a3b8; }
+    .btn { display: block; text-align: center; background: linear-gradient(135deg, #00c6ff, #0072ff); color: white; padding: 14px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 20px; box-shadow: 0 4px 15px rgba(0,198,255,0.4); }
 </style></head>
 <body>
     <div class="card">
@@ -173,27 +173,31 @@ HTML_LOGIN = """
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LOGIN - VISION PRO</title>
+    <title>LOGIN - VISION PRO ULTRA</title>
     <style>
-        body { background: #0e1621; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .login-card { background: #17212b; padding: 30px; border-radius: 15px; width: 90%; max-width: 350px; text-align: center; border: 1px solid #242f3d; min-height: 400px; display: flex; flex-direction: column; justify-content: center; }
-        input { width: 100%; box-sizing: border-box; padding: 15px; margin: 10px 0; border-radius: 8px; border: none; background: #242f3d; color: white; font-size: 16px; }
-        button { width: 100%; padding: 15px; background: #2481cc; border: none; color: white; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 16px; margin-top: 10px; }
-        .links { margin-top: 25px; font-size: 14px; }
-        a { color: #2481cc; text-decoration: none; margin: 0 10px; }
+        body { background: #060913; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .login-card { background: rgba(15, 23, 42, 0.95); padding: 35px 30px; border-radius: 20px; width: 90%; max-width: 360px; text-align: center; border: 1px solid rgba(0, 242, 254, 0.3); box-shadow: 0 10px 30px rgba(0, 242, 254, 0.15); backdrop-filter: blur(10px); }
+        h2 { color: #00f2fe; margin-bottom: 25px; letter-spacing: 1.5px; text-transform: uppercase; font-size: 22px; text-shadow: 0 0 10px rgba(0,242,254,0.5); }
+        input { width: 100%; box-sizing: border-box; padding: 14px; margin: 10px 0; border-radius: 10px; border: 1px solid #1e293b; background: #0f172a; color: white; font-size: 15px; outline: none; transition: 0.3s; }
+        input:focus { border-color: #00f2fe; box-shadow: 0 0 10px rgba(0,242,254,0.3); }
+        button { width: 100%; padding: 14px; background: linear-gradient(135deg, #00c6ff, #0072ff); border: none; color: white; border-radius: 10px; cursor: pointer; font-weight: bold; font-size: 15px; margin-top: 15px; letter-spacing: 1px; box-shadow: 0 4px 15px rgba(0,198,255,0.4); transition: 0.3s; }
+        button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,198,255,0.6); }
+        .links { margin-top: 25px; font-size: 13px; }
+        a { color: #00f2fe; text-decoration: none; margin: 0 8px; font-weight: 500; }
+        a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
     <div class="login-card">
         <h2>VISION PRO V3</h2>
-        {% if erro %}<div style="color:#ff5252; margin-bottom:10px;">{{erro}}</div>{% endif %}
+        {% if erro %}<div style="color:#ef4444; margin-bottom:15px; font-size:13px; background:rgba(239,68,68,0.1); padding:10px; border-radius:8px; border:1px solid rgba(239,68,68,0.3);">{{erro}}</div>{% endif %}
         <form method="POST" action="/login">
-            <input type="email" name="email" placeholder="E-mail" required>
-            <input type="password" name="password" placeholder="Senha" required>
-            <button type="submit">ENTRAR NO SISTEMA</button>
+            <input type="email" name="email" placeholder="Seu E-mail" required>
+            <input type="password" name="password" placeholder="Sua Senha" required>
+            <button type="submit">ACESSAR O TERMINAL</button>
         </form>
         <div class="links">
-            <a href="/register">Cadastrar</a> | <a href="/termos" style="color:#8a99a8">Termos</a>
+            <a href="/register">Criar Conta</a> | <a href="/termos" style="color:#94a3b8">Termos de Uso</a>
         </div>
     </div>
 </body>
@@ -205,25 +209,28 @@ HTML_REGISTER = """
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CADASTRO - VISION PRO</title>
+    <title>CADASTRO - VISION PRO ULTRA</title>
     <style>
-        body { background: #0e1621; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .login-card { background: #17212b; padding: 30px; border-radius: 15px; width: 90%; max-width: 350px; text-align: center; border: 1px solid #242f3d; }
-        input { width: 100%; box-sizing: border-box; padding: 15px; margin: 10px 0; border-radius: 8px; border: none; background: #242f3d; color: white; font-size: 16px; }
-        button { width: 100%; padding: 15px; background: #2e7d32; border: none; color: white; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 16px; margin-top: 10px; }
-        a { color: #2481cc; text-decoration: none; font-size: 14px; display: block; margin-top: 20px; }
+        body { background: #060913; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .login-card { background: rgba(15, 23, 42, 0.95); padding: 35px 30px; border-radius: 20px; width: 90%; max-width: 360px; text-align: center; border: 1px solid rgba(16, 185, 129, 0.3); box-shadow: 0 10px 30px rgba(16, 185, 129, 0.15); backdrop-filter: blur(10px); }
+        h2 { color: #10b981; margin-bottom: 25px; letter-spacing: 1.5px; text-transform: uppercase; font-size: 22px; text-shadow: 0 0 10px rgba(16,185,129,0.5); }
+        input { width: 100%; box-sizing: border-box; padding: 14px; margin: 10px 0; border-radius: 10px; border: 1px solid #1e293b; background: #0f172a; color: white; font-size: 15px; outline: none; transition: 0.3s; }
+        input:focus { border-color: #10b981; box-shadow: 0 0 10px rgba(16,185,129,0.3); }
+        button { width: 100%; padding: 14px; background: linear-gradient(135deg, #10b981, #059669); border: none; color: white; border-radius: 10px; cursor: pointer; font-weight: bold; font-size: 15px; margin-top: 15px; letter-spacing: 1px; box-shadow: 0 4px 15px rgba(16,185,129,0.4); transition: 0.3s; }
+        button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(16,185,129,0.6); }
+        a { color: #00f2fe; text-decoration: none; font-size: 13px; display: block; margin-top: 20px; font-weight: 500; }
     </style>
 </head>
 <body>
     <div class="login-card">
-        <h2>CRIAR CONTA</h2>
-        {% if erro %}<div style="color:#ff5252; margin-bottom:10px;">{{erro}}</div>{% endif %}
+        <h2>CRIAR CONTA NOVA</h2>
+        {% if erro %}<div style="color:#ef4444; margin-bottom:15px; font-size:13px; background:rgba(239,68,68,0.1); padding:10px; border-radius:8px; border:1px solid rgba(239,68,68,0.3);">{{erro}}</div>{% endif %}
         <form method="POST" action="/register">
             <input type="email" name="email" placeholder="Novo E-mail" required>
             <input type="password" name="password" placeholder="Nova Senha" required>
-            <button type="submit">FINALIZAR CADASTRO</button>
+            <button type="submit">CONCLUIR CADASTRO</button>
         </form>
-        <a href="/login">Já tenho conta</a>
+        <a href="/login">Já possui uma conta? Faça Login</a>
     </div>
 </body>
 </html>
@@ -235,72 +242,85 @@ HTML_INDEX = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VISION PRO V3 - HIGH FREQUENCY ANALYTICS</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <title>VISION PRO V3 - HIGH FREQUENCY BOT ANALYTICS</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
-        body { background-color: #090c10; color: #f0f6fc; display: flex; justify-content: center; min-height: 100vh; padding: 20px 10px; }
+        body { background-color: #060913; color: #f1f5f9; display: flex; justify-content: center; min-height: 100vh; padding: 15px 10px; }
         
         .container {
             width: 100%;
-            max-width: 500px;
-            background: #161b22;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 20px;
+            max-width: 520px;
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(0, 242, 254, 0.2);
+            border-radius: 24px;
             padding: 20px;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 242, 254, 0.05);
+            backdrop-filter: blur(12px);
         }
 
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
-        .brand { font-size: 16px; font-weight: 800; letter-spacing: 1px; color: #2f81f7; display: flex; align-items: center; gap: 8px; }
-        .brand span { background: rgba(47, 129, 247, 0.15); color: #58a6ff; font-size: 10px; padding: 3px 8px; border-radius: 12px; border: 1px solid rgba(56, 139, 253, 0.4); }
-        .btn-logout { font-size: 12px; color: #f85149; text-decoration: none; font-weight: 600; padding: 6px 12px; border-radius: 8px; background: rgba(248, 81, 73, 0.1); border: 1px solid rgba(248, 81, 73, 0.2); transition: 0.2s; }
-        .btn-logout:hover { background: rgba(248, 81, 73, 0.2); }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+        .brand { font-size: 17px; font-weight: 900; letter-spacing: 1px; color: #00f2fe; display: flex; align-items: center; gap: 8px; text-shadow: 0 0 10px rgba(0,242,254,0.4); }
+        .brand span { background: rgba(0, 242, 254, 0.15); color: #38ef7d; font-size: 10px; padding: 3px 8px; border-radius: 12px; border: 1px solid rgba(56, 239, 125, 0.4); font-weight: 700; }
+        .btn-logout { font-size: 12px; color: #ef4444; text-decoration: none; font-weight: 700; padding: 6px 14px; border-radius: 10px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); transition: 0.2s; }
+        .btn-logout:hover { background: rgba(239, 68, 68, 0.2); }
 
-        .placar-card { background: #0d1117; border: 1px solid #30363d; border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+        .placar-card { background: #0b1120; border: 1px solid #1e293b; border-radius: 16px; padding: 16px; margin-bottom: 16px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); }
         .placar-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; text-align: center; }
-        .placar-item .title { font-size: 11px; text-transform: uppercase; color: #8b949e; font-weight: 600; margin-bottom: 4px; }
-        .placar-item .val { font-size: 18px; font-weight: 700; }
-        .win-color { color: #3fb950; }
-        .loss-color { color: #f85149; }
-        .wr-color { color: #58a6ff; }
-        .winrate-bar { height: 6px; background: #21262d; border-radius: 10px; overflow: hidden; margin-top: 12px; }
-        .winrate-fill { height: 100%; background: linear-gradient(90deg, #238636, #3fb950); width: 0%; transition: width 0.5s ease-in-out; }
+        .placar-item .title { font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 700; margin-bottom: 4px; letter-spacing: 0.5px; }
+        .placar-item .val { font-size: 20px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+        .win-color { color: #10b981; text-shadow: 0 0 10px rgba(16,185,129,0.3); }
+        .loss-color { color: #ef4444; text-shadow: 0 0 10px rgba(239,68,68,0.3); }
+        .wr-color { color: #3b82f6; text-shadow: 0 0 10px rgba(59,130,246,0.3); }
+        .winrate-bar { height: 6px; background: #1e293b; border-radius: 10px; overflow: hidden; margin-top: 14px; }
+        .winrate-fill { height: 100%; background: linear-gradient(90deg, #059669, #10b981); width: 0%; transition: width 0.5s ease-in-out; }
 
-        #chart-wrapper { background: #0d1117; border-radius: 14px; border: 1px solid #30363d; padding: 12px; margin-bottom: 16px; }
+        #chart-wrapper { background: #0b1120; border-radius: 16px; border: 1px solid #1e293b; padding: 12px; margin-bottom: 16px; }
         #chart-header { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 10px; }
-        #chart-symbol { color: #c9d1d9; }
-        #chart-price { color: #39d353; font-family: monospace; font-size: 14px; }
-        #chart-container { width: 100%; height: 210px; border-radius: 8px; overflow: hidden; }
+        #chart-symbol { color: #cbd5e1; font-family: 'JetBrains Mono', monospace; }
+        #chart-price { color: #10b981; font-family: 'JetBrains Mono', monospace; font-size: 15px; }
+        #chart-container { width: 100%; height: 210px; border-radius: 10px; overflow: hidden; }
 
-        .status-box { background: linear-gradient(145deg, #161b22, #0d1117); border: 1px solid #30363d; padding: 18px; border-radius: 14px; margin-bottom: 16px; min-height: 85px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.4); }
+        .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 90px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
         
+        .termux-console { font-family: 'JetBrains Mono', monospace; color: #38ef7d; font-size: 13px; text-shadow: 0 0 5px rgba(56, 239, 125, 0.5); width: 100%; }
+
         .result-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
-        .btn-res { border: none; padding: 10px; border-radius: 8px; font-weight: 700; font-size: 12px; cursor: pointer; color: white; transition: transform 0.1s; }
+        .btn-res { border: none; padding: 12px; border-radius: 10px; font-weight: 800; font-size: 12px; cursor: pointer; color: white; transition: transform 0.1s, box-shadow 0.2s; text-transform: uppercase; }
         .btn-res:active { transform: scale(0.95); }
-        .btn-res-win { background: #238636; }
-        .btn-res-g1 { background: #d29922; color: #0d1117; }
-        .btn-res-red { background: #da3633; }
-        .btn-res-skip { background: #30363d; }
+        .btn-res-win { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
+        .btn-res-g1 { background: linear-gradient(135deg, #f59e0b, #d97706); color: #000; box-shadow: 0 4px 12px rgba(245,158,11,0.3); }
+        .btn-res-red { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 12px rgba(239,68,68,0.3); }
+        .btn-res-skip { background: #334155; box-shadow: 0 4px 12px rgba(51,65,85,0.3); }
 
-        .section-label { font-size: 11px; font-weight: 700; color: #8b949e; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.5px; }
+        .section-label { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 10px; letter-spacing: 1px; }
         .menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
-        .sub-menu { display: none; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 12px; margin-bottom: 16px; }
+        .sub-menu { display: none; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 14px; background: #0b1120; border: 1px solid #1e293b; border-radius: 14px; margin-bottom: 16px; }
         
-        button.btn-menu { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 12px; border-radius: 10px; font-weight: 600; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; transition: 0.2s; }
-        button.btn-menu:hover { background: #30363d; border-color: #8b949e; }
+        button.btn-menu { background: #0f172a; border: 1px solid #1e293b; color: #cbd5e1; padding: 12px; border-radius: 12px; font-weight: 700; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; transition: 0.2s; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        button.btn-menu:hover { background: #1e293b; border-color: #334155; color: #fff; }
         
-        .btn-opt { padding: 9px; font-size: 11px; background: #21262d; border: 1px solid #30363d; color: #8b949e; border-radius: 8px; font-weight: 600; cursor: pointer; }
-        .btn-opt:hover { color: #fff; }
-        .btn-active { background: #1f6feb !important; color: #ffffff !important; border-color: #58a6ff !important; box-shadow: 0 0 10px rgba(31, 111, 235, 0.4); }
+        .btn-opt { padding: 10px; font-size: 11px; background: #0f172a; border: 1px solid #1e293b; color: #94a3b8; border-radius: 10px; font-weight: 700; cursor: pointer; transition: 0.2s; }
+        .btn-opt:hover { color: #fff; border-color: #00f2fe; }
+        .btn-active { background: linear-gradient(135deg, #00c6ff, #0072ff) !important; color: #ffffff !important; border-color: #00f2fe !important; box-shadow: 0 0 12px rgba(0, 198, 255, 0.4); }
 
-        .historico-box { display: none; background: #0d1117; border: 1px solid #30363d; border-radius: 12px; padding: 12px; margin-bottom: 16px; }
+        /* Estilo dos Botões das Corretoras */
+        .broker-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+        .btn-broker { border: 1px solid #1e293b; background: #0f172a; color: #fff; padding: 12px; border-radius: 12px; font-weight: 800; font-size: 12px; cursor: pointer; transition: 0.3s; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .btn-broker:hover { transform: translateY(-2px); border-color: #00f2fe; box-shadow: 0 4px 15px rgba(0, 242, 254, 0.2); }
+        
+        /* Modal Corretora Embedded */
+        .broker-modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(6, 9, 19, 0.95); z-index: 9999; flex-direction: column; padding: 10px; }
+        .broker-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 15px; background: #0f172a; border-radius: 10px 10px 0 0; border: 1px solid #1e293b; }
+        .broker-iframe { width: 100%; height: 100%; border: 1px solid #1e293b; border-radius: 0 0 10px 10px; }
+
+        .historico-box { display: none; background: #0b1120; border: 1px solid #1e293b; border-radius: 14px; padding: 12px; margin-bottom: 16px; }
         .historico-scroll { max-height: 160px; overflow-y: auto; }
-        .historico-item { font-size: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; }
+        .historico-item { font-size: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; font-family: 'JetBrains Mono', monospace; }
         .historico-item:last-child { border-bottom: none; }
 
-        .tech-scanner { width: 26px; height: 26px; margin: 8px auto 0; border: 3px solid rgba(88, 166, 255, 0.2); border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        .tech-scanner { width: 26px; height: 26px; margin: 8px auto 0; border: 3px solid rgba(0, 242, 254, 0.2); border-top-color: #00f2fe; border-radius: 50%; animation: spin 0.8s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
@@ -319,7 +339,7 @@ HTML_INDEX = """
                 </div>
                 <div class="placar-item">
                     <div class="title">ASSERTIVIDADE</div>
-                    <div class="val wr-text" id="wr-text">0%</div>
+                    <div class="val wr-color" id="wr-text">0%</div>
                 </div>
                 <div class="placar-item">
                     <div class="title">LOSS</div>
@@ -346,15 +366,23 @@ HTML_INDEX = """
             <button class="btn-res btn-res-skip" onclick="fetch('/resultado/pular')">PULAR</button>
         </div>
 
-        <div class="section-label">PAINEL DE CONTROLE</div>
+        <div class="section-label">PLATAFORMAS DE OPERAÇÃO</div>
+        <div class="broker-grid">
+            <button class="btn-broker" onclick="openBroker('https://qxbroker.com')">🌐 QUOTEX</button>
+            <button class="btn-broker" onclick="openBroker('https://iqoption.com')">📈 IQ OPTION</button>
+            <button class="btn-broker" onclick="openBroker('https://binomo.com')">🟡 BINOMO</button>
+            <button class="btn-broker" onclick="openBroker('https://pocketoption.com')">🟦 POCKET OPTION</button>
+        </div>
+
+        <div class="section-label">PAINEL DE CONTROLE DE BOT</div>
         <div class="menu-grid">
-            <button class="btn-menu" onclick="toggleSub('menu-inicio')">⚡ SISTEMA</button>
+            <button class="btn-menu" onclick="toggleSub('menu-inicio')">⚡ SISTEMA BOT</button>
             <button class="btn-menu" onclick="toggleSub('menu-historico')">📊 HISTÓRICO</button>
             <button class="btn-menu" onclick="toggleSub('menu-mercado')">🌐 MERCADO</button>
             <button class="btn-menu" onclick="toggleSub('menu-times')">⏱️ TIMEFRAME</button>
             <button class="btn-menu" onclick="toggleSub('menu-estrategias')" style="grid-column: span 2;">⚙️ ESTRATÉGIAS OPERACIONAIS</button>
             {% if user == admin %}
-            <button class="btn-menu" onclick="location.href='/admin_panel'" style="grid-column: span 2; background: rgba(31, 111, 235, 0.15); border-color: #1f6feb; color: #58a6ff;">🛡️ PAINEL ADMINISTRATIVO</button>
+            <button class="btn-menu" onclick="location.href='/admin_panel'" style="grid-column: span 2; background: rgba(0, 242, 254, 0.1); border-color: #00f2fe; color: #00f2fe;">🛡️ PAINEL ADMINISTRATIVO</button>
             {% endif %}
         </div>
 
@@ -363,9 +391,9 @@ HTML_INDEX = """
         </div>
         
         <div id="menu-inicio" class="sub-menu">
-            <button class="btn-opt" style="background:#238636; color:white;" onclick="sendCommand('start_bot')">START</button>
-            <button class="btn-opt" style="background:#d29922; color:#0d1117;" onclick="sendCommand('pause_bot')">PAUSAR</button>
-            <button class="btn-opt" style="background:#da3633; color:white;" onclick="sendCommand('stop_bot')">PARAR</button>
+            <button class="btn-opt" style="background: linear-gradient(135deg, #10b981, #059669); color:white;" onclick="sendCommand('start_bot')">ANALISAR / START</button>
+            <button class="btn-opt" style="background: linear-gradient(135deg, #f59e0b, #d97706); color:#000;" onclick="sendCommand('pause_bot')">PAUSAR</button>
+            <button class="btn-opt" style="background: linear-gradient(135deg, #ef4444, #dc2626); color:white;" onclick="sendCommand('stop_bot')">PARAR</button>
         </div>
         
         <div id="menu-mercado" class="sub-menu">
@@ -389,15 +417,24 @@ HTML_INDEX = """
         </div>
     </div>
 
+    <!-- MODAL CORRETORA EMBEDDED -->
+    <div id="brokerModal" class="broker-modal">
+        <div class="broker-modal-header">
+            <span style="font-weight: bold; color: #00f2fe; font-size: 13px;" id="brokerTitle">PLATAFORMA DA CORRETORA</span>
+            <button onclick="closeBroker()" style="background: #ef4444; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: bold;">FECHAR ✖</button>
+        </div>
+        <iframe id="brokerIframe" class="broker-iframe" src=""></iframe>
+    </div>
+
     <script>
         const chartElement = document.getElementById('chart-container');
         const chart = LightweightCharts.createChart(chartElement, {
-            layout: { backgroundColor: '#0d1117', textColor: '#8b949e' },
-            grid: { vertLines: { color: 'rgba(48, 54, 61, 0.4)' }, horzLines: { color: 'rgba(48, 54, 61, 0.4)' } },
+            layout: { backgroundColor: '#0b1120', textColor: '#64748b' },
+            grid: { vertLines: { color: 'rgba(30, 41, 59, 0.5)' }, horzLines: { color: 'rgba(30, 41, 59, 0.5)' } },
             timeScale: { timeVisible: true, secondsVisible: false }
         });
         const candleSeries = chart.addCandlestickSeries({
-            upColor: '#3fb950', downColor: '#f85149', borderVisible: false, wickUpColor: '#3fb950', wickDownColor: '#f85149'
+            upColor: '#10b981', downColor: '#ef4444', borderVisible: false, wickUpColor: '#10b981', wickDownColor: '#ef4444'
         });
 
         function updateChart() {
@@ -413,6 +450,16 @@ HTML_INDEX = """
         updateChart();
         setInterval(updateChart, 10000);
 
+        function openBroker(url) {
+            document.getElementById('brokerIframe').src = url;
+            document.getElementById('brokerModal').style.display = 'flex';
+        }
+
+        function closeBroker() {
+            document.getElementById('brokerModal').style.display = 'none';
+            document.getElementById('brokerIframe').src = '';
+        }
+
         function toggleSub(id) {
             ['menu-inicio', 'menu-mercado', 'menu-times', 'menu-historico', 'menu-estrategias'].forEach(m => {
                 const el = document.getElementById(m);
@@ -425,7 +472,6 @@ HTML_INDEX = """
                 if(data.redirect) window.location.href = data.redirect;
                 if(data.html) document.getElementById('panel-text').innerHTML = data.html;
                 
-                // Atualização visual instantânea das seleções dos botões
                 if(el) {
                     const parent = el.parentElement;
                     if(parent) {
@@ -434,7 +480,6 @@ HTML_INDEX = """
                     }
                 }
                 
-                // Atualizar gráfico se mudarmos o timeframe diretamente
                 if(cmd.startsWith('tf_')) {
                     updateChart();
                 }
@@ -454,13 +499,13 @@ HTML_INDEX = """
                 let histHtml = "";
                 if(data.historico) {
                     data.historico.forEach(item => {
-                        let cor = "#8b949e";
-                        if(item.res.includes("Win")) cor = "#3fb950";
-                        if(item.res.includes("Red")) cor = "#f85149";
+                        let cor = "#64748b";
+                        if(item.res.includes("Win")) cor = "#10b981";
+                        if(item.res.includes("Red")) cor = "#ef4444";
                         histHtml += `<div class="historico-item"><span>🕒 ${item.sinal}</span><b style="color:${cor}">${item.res}</b></div>`;
                     });
                 }
-                if(document.getElementById('lista-sinais')) document.getElementById('lista-sinais').innerHTML = histHtml || "<div style='text-align:center; font-size:11px; color:#8b949e;'>Nenhum sinal no histórico.</div>";
+                if(document.getElementById('lista-sinais')) document.getElementById('lista-sinais').innerHTML = histHtml || "<div style='text-align:center; font-size:11px; color:#64748b;'>Nenhum sinal no histórico.</div>";
             });
         }, 1500);
     </script>
@@ -897,13 +942,13 @@ def command(cmd):
     if cmd == "start_bot":
         QUEM_INICIOU_O_BOT = user
         BOT_INICIADO, BOT_PAUSADO, AG_RESULTADO = True, False, False
-        ULTIMO_SINAL_GLOBAL = "📡 Scanner Ativo...<div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = "<div class='termux-console'>[TERMUX] CONECTANDO AOS SERVIDORES...<br>[SCANNER] INICIANDO VARREDURA...</div><div class='tech-scanner'></div>"
         enviar_telegram(f"🚀 <b>SISTEMA VISION PRO V3 CONECTADO</b>\nSessão iniciada por {user}")
         return jsonify({"ok": True, "html": ULTIMO_SINAL_GLOBAL})
 
     elif cmd == "pause_bot":
         BOT_PAUSADO = not BOT_PAUSADO
-        ULTIMO_SINAL_GLOBAL = "PAUSADO" if BOT_PAUSADO else "📡 Scanner Ativo...<div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = "PAUSADO" if BOT_PAUSADO else "<div class='termux-console'>[SCANNER] REINICIANDO VARREDURA...</div><div class='tech-scanner'></div>"
         return jsonify({"ok": True, "html": ULTIMO_SINAL_GLOBAL})
 
     elif cmd == "stop_bot":
@@ -940,7 +985,7 @@ def resultado(res):
         elif res == 'pular':
             atualizar_ultimo_sinal_bd(user, "Ignorado")
 
-        ULTIMO_SINAL_GLOBAL = "📡 Scanner Ativo...<div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = "<div class='termux-console'>[SCANNER] PROCURANDO NOVO SINAL...</div><div class='tech-scanner'></div>"
     AG_RESULTADO = False
     return redirect('/')
 
@@ -958,6 +1003,9 @@ def bot_loop():
                 ticker = MAPA_TICKERS.get(ativo, ativo)
                 ATIVO_ATUAL_GLOBAL = ticker
                 
+                # Exibe feedback do scanner estilo Termux
+                ULTIMO_SINAL_GLOBAL = f"<div class='termux-console'>[ANALISANDO] > {ativo} (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[AGUARDE] MAPEANDO CANDLES...</span></div><div class='tech-scanner'></div>"
+                
                 data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
                 if not data: continue
 
@@ -970,15 +1018,17 @@ def bot_loop():
                     sinal = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
 
                 if sinal:
-                    dir_txt = "COMPRA" if sinal == "CALL" else "VENDA"
-                    ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>🎯 <b>SINAL CONFIRMADO: {ativo}</b><br>Entrada: {dir_txt}</div>"
+                    dir_txt = "COMPRA ⬆️" if sinal == "CALL" else "VENDA ⬇️"
+                    ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>🎯 <b style='color:#00f2fe; font-size:16px;'>SINAL CONFIRMADO!</b><br><span style='font-size:18px; font-weight:800; color:#fff;'>{ativo}</span><br>Entrada: <b style='color:#38ef7d;'>{dir_txt}</b></div>"
                     
                     for u in list(USUARIOS_ONLINE.keys()):
                         registrar_sinal_bd(u, f"{ativo} (M{TIMEFRAME_OPERACAO})")
                         
                     enviar_telegram(f"🎯 <b>SINAL CONFIRMADO</b>\n\n📈 Ativo: {ativo}\n🕒 Timeframe: M{TIMEFRAME_OPERACAO}\n↕️ Direção: {dir_txt}")
                     AG_RESULTADO = True; break
-            time.sleep(2)
+                
+                time.sleep(1)
+            time.sleep(1)
         except Exception as e: 
             print(f"Erro Loop Bot: {e}")
             time.sleep(5)
