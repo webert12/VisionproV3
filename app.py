@@ -244,7 +244,6 @@ HTML_INDEX = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VISION PRO V3 - HIGH FREQUENCY BOT ANALYTICS</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
-    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
         body { background-color: #060913; color: #f1f5f9; display: flex; justify-content: center; min-height: 100vh; padding: 15px 10px; }
@@ -276,15 +275,9 @@ HTML_INDEX = """
         .winrate-bar { height: 6px; background: #1e293b; border-radius: 10px; overflow: hidden; margin-top: 14px; }
         .winrate-fill { height: 100%; background: linear-gradient(90deg, #059669, #10b981); width: 0%; transition: width 0.5s ease-in-out; }
 
-        /* Área do Gráfico e Embed da Corretora */
-        #chart-wrapper { background: #0b1120; border-radius: 16px; border: 1px solid #1e293b; padding: 12px; margin-bottom: 16px; position: relative; }
-        #chart-header { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 10px; }
-        #chart-symbol { color: #cbd5e1; font-family: 'JetBrains Mono', monospace; }
-        #chart-price { color: #10b981; font-family: 'JetBrains Mono', monospace; font-size: 15px; }
-        #chart-container { width: 100%; height: 260px; border-radius: 10px; overflow: hidden; }
-        
-        #broker-view-container { display: none; width: 100%; height: 260px; border-radius: 10px; overflow: hidden; flex-direction: column; }
-        .broker-iframe-inline { width: 100%; height: 100%; border: none; background: #0b1120; }
+        /* EMBED DA CORRETORA (OCULTO POR PADRÃO) */
+        #broker-view-container { display: none; width: 100%; height: 350px; border-radius: 16px; overflow: hidden; flex-direction: column; margin-bottom: 16px; background: #0b1120; border: 1px solid #1e293b; padding: 8px; }
+        .broker-iframe-inline { width: 100%; height: 100%; border: none; background: #0b1120; border-radius: 10px; }
         .btn-close-broker { background: #1e293b; border: 1px solid #334155; color: #00f2fe; padding: 6px 12px; font-size: 11px; font-weight: 700; border-radius: 6px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: center; }
 
         .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 90px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
@@ -349,19 +342,10 @@ HTML_INDEX = """
             <div class="winrate-bar"><div id="wr-fill" class="winrate-fill"></div></div>
         </div>
 
-        <!-- GRÁFICO / VISUALIZADOR DA CORRETORA INTEAGRADO -->
-        <div id="chart-wrapper">
-            <div id="chart-header">
-                <span id="chart-symbol">EURUSD</span>
-                <span id="chart-price">--.--</span>
-            </div>
-            
-            <div id="chart-container"></div>
-            
-            <div id="broker-view-container">
-                <button class="btn-close-broker" onclick="closeBrokerView()">📈 VOLTAR AO GRÁFICO TÉCNICO</button>
-                <iframe id="brokerIframe" class="broker-iframe-inline" src=""></iframe>
-            </div>
+        <!-- VISUALIZADOR DA CORRETORA INTEGRADO -->
+        <div id="broker-view-container">
+            <button class="btn-close-broker" onclick="closeBrokerView()">❌ FECHAR CORRETORA</button>
+            <iframe id="brokerIframe" class="broker-iframe-inline" src=""></iframe>
         </div>
 
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
@@ -373,7 +357,7 @@ HTML_INDEX = """
             <button class="btn-res btn-res-skip" onclick="fetch('/resultado/pular')">PULAR</button>
         </div>
 
-        <!-- PAINEL DE CONTROLE DE BOT E RETRÁTIL DAS CORRETORAS -->
+        <!-- PAINEL DE CONTROLE DO BOT -->
         <div class="menu-grid">
             <button class="btn-menu" onclick="toggleSub('menu-brokers')" style="grid-column: span 2; border-color: rgba(0, 242, 254, 0.3);">🌐 PLATAFORMAS DE OPERAÇÃO (CORRETORAS)</button>
             
@@ -426,31 +410,7 @@ HTML_INDEX = """
     </div>
 
     <script>
-        const chartElement = document.getElementById('chart-container');
-        const chart = LightweightCharts.createChart(chartElement, {
-            layout: { backgroundColor: '#0b1120', textColor: '#64748b' },
-            grid: { vertLines: { color: 'rgba(30, 41, 59, 0.5)' }, horzLines: { color: 'rgba(30, 41, 59, 0.5)' } },
-            timeScale: { timeVisible: true, secondsVisible: false }
-        });
-        const candleSeries = chart.addCandlestickSeries({
-            upColor: '#10b981', downColor: '#ef4444', borderVisible: false, wickUpColor: '#10b981', wickDownColor: '#ef4444'
-        });
-
-        function updateChart() {
-            fetch('/api/chart-data').then(r => r.json()).then(res => {
-                if(res.data && res.data.length > 0) {
-                    candleSeries.setData(res.data);
-                    document.getElementById('chart-symbol').innerText = res.symbol;
-                    const lastCandle = res.data[res.data.length - 1];
-                    document.getElementById('chart-price').innerText = lastCandle.close.toFixed(5);
-                }
-            });
-        }
-        updateChart();
-        setInterval(updateChart, 10000);
-
         function openBroker(url) {
-            document.getElementById('chart-container').style.display = 'none';
             const brokerContainer = document.getElementById('broker-view-container');
             document.getElementById('brokerIframe').src = url;
             brokerContainer.style.display = 'flex';
@@ -460,7 +420,6 @@ HTML_INDEX = """
         function closeBrokerView() {
             document.getElementById('broker-view-container').style.display = 'none';
             document.getElementById('brokerIframe').src = '';
-            document.getElementById('chart-container').style.display = 'block';
         }
 
         function toggleSub(id) {
@@ -473,18 +432,12 @@ HTML_INDEX = """
         function sendCommand(cmd, el = null) {
             fetch('/command/' + cmd).then(r => r.json()).then(data => {
                 if(data.redirect) window.location.href = data.redirect;
-                if(data.html) document.getElementById('panel-text').innerHTML = data.html;
-                
                 if(el) {
                     const parent = el.parentElement;
                     if(parent) {
                         parent.querySelectorAll('.btn-opt').forEach(btn => btn.classList.remove('btn-active'));
                         el.classList.add('btn-active');
                     }
-                }
-                
-                if(cmd.startsWith('tf_')) {
-                    updateChart();
                 }
             });
         }
@@ -516,9 +469,8 @@ HTML_INDEX = """
 </html>
 """
 
-# ================= FUNÇÕES DE BANCO DE DADOS VIA DB_URL =================
+# ================= BANCO DE DADOS =================
 def carregar_usuarios():
-    """Lê os dados dos usuários diretamente via SQL usando DB_URL."""
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -534,11 +486,10 @@ def carregar_usuarios():
                 dict_usuarios[email] = dict(u)
         return dict_usuarios
     except Exception as e:
-        print(f"Erro no Banco (carregar_usuarios): {e}")
+        print(f"Erro Banco (carregar_usuarios): {e}")
         return {}
 
 def salvar_usuario(email, senha, data=None):
-    """Grava ou atualiza um usuário via UPSERT SQL puro."""
     try:
         email_clean = email.strip().lower()
         data_criacao = data if data else datetime.now().strftime("%Y-%m-%d")
@@ -557,7 +508,7 @@ def salvar_usuario(email, senha, data=None):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro no Banco (salvar_usuario): {e}")
+        print(f"Erro Banco (salvar_usuario): {e}")
         raise e
 
 def atualizar_estatisticas_usuario(email, is_win):
@@ -584,7 +535,7 @@ def atualizar_estatisticas_usuario(email, is_win):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro no Banco (atualizar_estatisticas): {e}")
+        print(f"Erro Banco (atualizar_estatisticas): {e}")
 
 def renovar_usuario_db(email):
     try:
@@ -596,7 +547,7 @@ def renovar_usuario_db(email):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro no Banco (renovar_usuario): {e}")
+        print(f"Erro Banco (renovar_usuario): {e}")
 
 def excluir_usuario_db(email):
     try:
@@ -609,7 +560,7 @@ def excluir_usuario_db(email):
             cur.close()
             conn.close()
     except Exception as e:
-        print(f"Erro no Banco (excluir_usuario): {e}")
+        print(f"Erro Banco (excluir_usuario): {e}")
 
 def verificar_assinatura(email):
     email_clean = email.strip().lower()
@@ -650,7 +601,7 @@ def registrar_sinal_bd(email, sinal_str):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro no Banco (registrar_sinal): {e}")
+        print(f"Erro Banco (registrar_sinal): {e}")
 
 def buscar_historico_bd(email):
     try:
@@ -667,7 +618,7 @@ def buscar_historico_bd(email):
         conn.close()
         return [{"id": r["id"], "sinal": r["sinal"], "res": r["resultado"]} for r in res]
     except Exception as e:
-        print(f"Erro no Banco (buscar_historico): {e}")
+        print(f"Erro Banco (buscar_historico): {e}")
         return []
 
 def atualizar_ultimo_sinal_bd(email, resultado):
@@ -694,7 +645,7 @@ def atualizar_ultimo_sinal_bd(email, resultado):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro no Banco (atualizar_ultimo_sinal): {e}")
+        print(f"Erro Banco (atualizar_ultimo_sinal): {e}")
 
 # ================= BOT CONFIGS =================
 TIMEFRAME_OPERACAO = 5
@@ -720,23 +671,34 @@ for par in ATIVOS_BASE["CRIPTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE =================
 def get_data_v2(ticker, tf, period='5d'):
+    """Requisicao resiliente ao Yahoo Finance evitando travamentos no Render."""
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval={tf}m&range={period}"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5).json()
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5'
+        }
+        session_req = requests.Session()
+        res = session_req.get(url, headers=headers, timeout=6).json()
+        
         result = res['chart']['result'][0]
         timestamps = result['timestamp']
+        quote = result['indicators']['quote'][0]
+        
         ohlc = {
             "time": np.array(timestamps),
-            "open": np.array(result['indicators']['quote'][0]['open']),
-            "high": np.array(result['indicators']['quote'][0]['high']),
-            "low": np.array(result['indicators']['quote'][0]['low']),
-            "close": np.array(result['indicators']['quote'][0]['close']),
-            "volume": np.array(result['indicators']['quote'][0]['volume'])
+            "open": np.array(quote['open']),
+            "high": np.array(quote['high']),
+            "low": np.array(quote['low']),
+            "close": np.array(quote['close']),
+            "volume": np.array(quote['volume'])
         }
         idx = ~np.isnan(ohlc["close"])
         for k in ohlc: ohlc[k] = ohlc[k][idx]
         return ohlc
-    except: return None
+    except Exception as e:
+        return None
 
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
@@ -796,12 +758,12 @@ def login():
             try:
                 salvar_usuario(e, s, datetime.now().strftime("%Y-%m-%d"))
             except Exception as err:
-                return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM no Banco: {err}")
+                return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM: {err}")
 
         usuarios = carregar_usuarios()
 
         if e not in usuarios:
-            return render_template_string(HTML_LOGIN, erro=f"Usuário não cadastrado ({e}). Faça o cadastro primeiro.")
+            return render_template_string(HTML_LOGIN, erro=f"Usuário não cadastrado ({e}). Faça o cadastro.")
 
         user_db = usuarios[e]
 
@@ -810,7 +772,7 @@ def login():
 
         ativo, dias = verificar_assinatura(e)
         if not ativo:
-            return render_template_string(HTML_LOGIN, erro=f"Assinatura expirada (Dias restantes: {dias}). Contate o suporte.")
+            return render_template_string(HTML_LOGIN, erro=f"Assinatura expirada (Dias: {dias}).")
 
         session['user'] = e
         USUARIOS_ONLINE[e] = time.time()
@@ -835,7 +797,7 @@ def register():
             init_user_session(e)
             return redirect('/')
         except Exception as err:
-            return render_template_string(HTML_REGISTER, erro=f"Erro ao salvar no Banco: {err}")
+            return render_template_string(HTML_REGISTER, erro=f"Erro ao salvar: {err}")
 
     return render_template_string(HTML_REGISTER)
 
@@ -903,21 +865,6 @@ def index():
     init_user_session(user)
     return render_template_string(HTML_INDEX, modo=TIPO_MERCADO, tf=TIMEFRAME_OPERACAO, estrat=ESTRATEGIA_ESCOLHIDA, user=user, admin=ADMIN_EMAIL)
 
-@app.route('/api/chart-data')
-def chart_data():
-    data = get_data_v2(ATIVO_ATUAL_GLOBAL, TIMEFRAME_OPERACAO, period='1d')
-    chart_list = []
-    if data and len(data["close"]) > 0:
-        for j in range(len(data["close"])):
-            chart_list.append({
-                "time": int(data["time"][j]),
-                "open": float(data["open"][j]),
-                "high": float(data["high"][j]),
-                "low": float(data["low"][j]),
-                "close": float(data["close"][j])
-            })
-    return jsonify({"symbol": ATIVO_ATUAL_GLOBAL.replace("=X", ""), "data": chart_list})
-
 @app.route('/status')
 def status():
     user = session.get('user')
@@ -944,18 +891,21 @@ def command(cmd):
 
     if cmd == "start_bot":
         QUEM_INICIOU_O_BOT = user
-        BOT_INICIADO, BOT_PAUSADO, AG_RESULTADO = True, False, False
-        ULTIMO_SINAL_GLOBAL = "<div class='system-console'>[VISION CORE] CONECTANDO AOS SERVIDORES...<br>[SCANNER] INICIANDO VARREDURA DOS ATIVOS...</div><div class='tech-scanner'></div>"
+        BOT_INICIADO = True
+        BOT_PAUSADO = False
+        AG_RESULTADO = False
+        ULTIMO_SINAL_GLOBAL = "<div class='system-console'>[VISION CORE] SERVIDORES CONECTADOS<br>[SCANNER] SCANNER EM TEMPO REAL INICIADO...</div><div class='tech-scanner'></div>"
         enviar_telegram(f"🚀 <b>SISTEMA VISION PRO V3 CONECTADO</b>\nSessão iniciada por {user}")
-        return jsonify({"ok": True, "html": ULTIMO_SINAL_GLOBAL})
+        return jsonify({"ok": True})
 
     elif cmd == "pause_bot":
         BOT_PAUSADO = not BOT_PAUSADO
-        ULTIMO_SINAL_GLOBAL = "PAUSADO" if BOT_PAUSADO else "<div class='system-console'>[SCANNER] REINICIANDO VARREDURA...</div><div class='tech-scanner'></div>"
-        return jsonify({"ok": True, "html": ULTIMO_SINAL_GLOBAL})
+        ULTIMO_SINAL_GLOBAL = "<div class='system-console' style='color:#f59e0b;'>[PAUSADO] VARREDURA EM PAUSA...</div>" if BOT_PAUSADO else "<div class='system-console'>[SCANNER] REINICIANDO VARREDURA...</div><div class='tech-scanner'></div>"
+        return jsonify({"ok": True})
 
     elif cmd == "stop_bot":
-        BOT_INICIADO, BOT_PAUSADO = False, True
+        BOT_INICIADO = False
+        BOT_PAUSADO = True
         ULTIMO_SINAL_GLOBAL = "Aguardando Início..."
         return jsonify({"ok": True, "redirect": "/login"})
 
@@ -966,7 +916,7 @@ def command(cmd):
     elif cmd.startswith("set_est_"): 
         ESTRATEGIA_ESCOLHIDA = cmd.replace("set_est_", "")
     
-    return jsonify({"ok": True, "html": ULTIMO_SINAL_GLOBAL})
+    return jsonify({"ok": True})
 
 @app.route('/resultado/<res>')
 def resultado(res):
@@ -998,19 +948,25 @@ def bot_loop():
     while BOT_RODANDO:
         try:
             if not BOT_INICIADO or BOT_PAUSADO or AG_RESULTADO:
-                time.sleep(1); continue
+                time.sleep(1)
+                continue
 
             ativos = ATIVOS_BASE["FOREX"] + ATIVOS_BASE["CRIPTO"] if TIPO_MERCADO == "TODOS" else ATIVOS_BASE[TIPO_MERCADO]
+            
             for ativo in ativos:
-                if not BOT_INICIADO or BOT_PAUSADO: break
+                if not BOT_INICIADO or BOT_PAUSADO or AG_RESULTADO:
+                    break
+                    
                 ticker = MAPA_TICKERS.get(ativo, ativo)
                 ATIVO_ATUAL_GLOBAL = ticker
                 
-                # Exibe o ativo e timeframe atualmente sendo analisado
-                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[AGUARDE] PROCESSANDO INDICADORES...</span></div><div class='tech-scanner'></div>"
+                # Atualização visual da varredura
+                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[SCANNER] PROCESSANDO VELAS E INDICADORES...</span></div><div class='tech-scanner'></div>"
                 
                 data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
-                if not data: continue
+                if not data:
+                    time.sleep(0.3)
+                    continue
 
                 sinal = None
                 if ESTRATEGIA_ESCOLHIDA == "TODAS":
@@ -1028,13 +984,14 @@ def bot_loop():
                         registrar_sinal_bd(u, f"{ativo} (M{TIMEFRAME_OPERACAO})")
                         
                     enviar_telegram(f"🎯 <b>SINAL CONFIRMADO</b>\n\n📈 Ativo: {ativo}\n🕒 Timeframe: M{TIMEFRAME_OPERACAO}\n↕️ Direção: {dir_txt}")
-                    AG_RESULTADO = True; break
+                    AG_RESULTADO = True
+                    break
                 
-                time.sleep(1)
+                time.sleep(0.5)
             time.sleep(1)
         except Exception as e: 
             print(f"Erro Loop Bot: {e}")
-            time.sleep(5)
+            time.sleep(2)
 
 # Thread em background
 threading.Thread(target=bot_loop, daemon=True).start()
