@@ -13,26 +13,21 @@ import re
 from datetime import datetime
 from flask import Flask, render_template_string, request, jsonify, session, redirect, abort
 from werkzeug.security import generate_password_hash, check_password_hash
-from supabase import create_client, Client
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # ================= CONFIGURAÇÕES DE AMBIENTE =================
 TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "")
 CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
 
-# Conexão Robusta com Supabase
-_supabase_client = None
-
-def get_supabase() -> Client:
-    global _supabase_client
-    if _supabase_client is None:
-        if not SUPABASE_URL or not SUPABASE_KEY:
-            raise ValueError("As variáveis SUPABASE_URL e SUPABASE_KEY precisam ser configuradas no Render.")
-        _supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    return _supabase_client
+def get_db_connection():
+    """Cria e retorna uma conexão direta via DB_URL."""
+    if not DB_URL:
+        raise ValueError("A variável de ambiente DB_URL (ou DATABASE_URL) precisa estar configurada.")
+    return psycopg2.connect(DB_URL)
 
 USUARIOS_ONLINE = {}
 DADOS_USUARIOS = {}
@@ -458,87 +453,115 @@ HTML_INDEX = """
 </html>
 """
 
-# ================= FUNÇÕES DE BANCO DE DADOS CORRIGIDAS =================
+# ================= FUNÇÕES DE BANCO DE DADOS VIA DB_URL =================
 def carregar_usuarios():
-    """Lê com segurança os dados do Supabase ignorando estruturas incorretas."""
+    """Lê os dados dos usuários diretamente via SQL usando DB_URL."""
     try:
-        res = get_supabase().table("usuarios").select("*").execute()
-        raw_data = res.data if hasattr(res, 'data') else []
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM usuarios;")
+        raw_data = cur.fetchall()
+        cur.close()
+        conn.close()
+
         dict_usuarios = {}
         for u in raw_data:
             email = u.get("email", "").strip().lower()
             if email:
-                dict_usuarios[email] = u
+                dict_usuarios[email] = dict(u)
         return dict_usuarios
     except Exception as e:
-        print(f"Erro Supabase (carregar_usuarios): {e}")
+        print(f"Erro no Banco (carregar_usuarios): {e}")
         return {}
 
 def salvar_usuario(email, senha, data=None):
-    """Grava ou atualiza um usuário aplicando hash seguro de senha."""
+    """Grava ou atualiza um usuário via UPSERT SQL puro."""
     try:
         email_clean = email.strip().lower()
         data_criacao = data if data else datetime.now().strftime("%Y-%m-%d")
-        
-        # Só gera o hash se a senha não estiver no formato gerado pelo Werkzeug
         senha_hash = senha if senha.startswith("scrypt:") or senha.startswith("pbkdf2:") else generate_password_hash(senha)
 
-        dados = {
-            "email": email_clean,
-            "senha": senha_hash,
-            "criado_em": data_criacao,
-            "wins": 0,
-            "reds": 0,
-            "winrate": 0.0
-        }
-        res = get_supabase().table("usuarios").upsert(dados).execute()
-        return res
+        conn = get_db_connection()
+        cur = conn.cursor()
+        query = """
+            INSERT INTO usuarios (email, senha, criado_em, wins, reds, winrate)
+            VALUES (%s, %s, %s, 0, 0, 0.0)
+            ON CONFLICT (email) DO UPDATE 
+            SET senha = EXCLUDED.senha;
+        """
+        cur.execute(query, (email_clean, senha_hash, data_criacao))
+        conn.commit()
+        cur.close()
+        conn.close()
     except Exception as e:
-        print(f"Erro Supabase (salvar_usuario): {e}")
+        print(f"Erro no Banco (salvar_usuario): {e}")
         raise e
 
 def atualizar_estatisticas_usuario(email, is_win):
     try:
         email_clean = email.strip().lower()
-        res = get_supabase().table("usuarios").select("wins", "reds").eq("email", email_clean).execute()
-        if res.data:
-            u = res.data[0]
-            wins = u.get("wins", 0) + (1 if is_win else 0)
-            reds = u.get("reds", 0) + (0 if is_win else 1)
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT wins, reds FROM usuarios WHERE email = %s;", (email_clean,))
+        res = cur.fetchone()
+
+        if res:
+            wins = res.get("wins", 0) + (1 if is_win else 0)
+            reds = res.get("reds", 0) + (0 if is_win else 1)
             total = wins + reds
             winrate = round((wins / total) * 100, 1) if total > 0 else 0.0
 
-            get_supabase().table("usuarios").update({
-                "wins": wins,
-                "reds": reds,
-                "winrate": winrate
-            }).eq("email", email_clean).execute()
+            cur.execute("""
+                UPDATE usuarios 
+                SET wins = %s, reds = %s, winrate = %s 
+                WHERE email = %s;
+            """, (wins, reds, winrate, email_clean))
+            conn.commit()
+
+        cur.close()
+        conn.close()
     except Exception as e:
-        print(f"Erro Supabase (atualizar_estatisticas): {e}")
+        print(f"Erro no Banco (atualizar_estatisticas): {e}")
 
 def renovar_usuario_db(email):
     try:
         hoje = datetime.now().strftime("%Y-%m-%d")
-        get_supabase().table("usuarios").update({"criado_em": hoje}).eq("email", email.strip().lower()).execute()
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE usuarios SET criado_em = %s WHERE email = %s;", (hoje, email.strip().lower()))
+        conn.commit()
+        cur.close()
+        conn.close()
     except Exception as e:
-        print(f"Erro Supabase (renovar_usuario): {e}")
+        print(f"Erro no Banco (renovar_usuario): {e}")
 
 def excluir_usuario_db(email):
     try:
         email_clean = email.strip().lower()
         if email_clean != ADMIN_EMAIL:
-            get_supabase().table("usuarios").delete().eq("email", email_clean).execute()
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM usuarios WHERE email = %s;", (email_clean,))
+            conn.commit()
+            cur.close()
+            conn.close()
     except Exception as e:
-        print(f"Erro Supabase (excluir_usuario): {e}")
+        print(f"Erro no Banco (excluir_usuario): {e}")
 
 def verificar_assinatura(email):
     email_clean = email.strip().lower()
     if email_clean == ADMIN_EMAIL: return True, 999
     try:
-        res = get_supabase().table("usuarios").select("criado_em").eq("email", email_clean).execute()
-        if not res.data: return False, 0
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT criado_em FROM usuarios WHERE email = %s;", (email_clean,))
+        res = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not res: return False, 0
         
-        criado_str = str(res.data[0]["criado_em"]).split("T")[0]
+        criado_str = str(res["criado_em"]).split("T")[0]
         data_criacao = datetime.strptime(criado_str, "%Y-%m-%d")
         dias_restantes = 30 - (datetime.now() - data_criacao).days
         return (True, dias_restantes) if dias_restantes > 0 else (False, 0)
@@ -554,28 +577,61 @@ def init_user_session(email):
 
 def registrar_sinal_bd(email, sinal_str):
     try:
-        dados = {"user_email": email.strip().lower(), "sinal": sinal_str, "resultado": "Analisando..."}
-        get_supabase().table("historico_sinais").insert(dados).execute()
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO historico_sinais (user_email, sinal, resultado)
+            VALUES (%s, %s, %s);
+        """, (email.strip().lower(), sinal_str, "Analisando..."))
+        conn.commit()
+        cur.close()
+        conn.close()
     except Exception as e:
-        print(f"Erro Supabase (registrar_sinal): {e}")
+        print(f"Erro no Banco (registrar_sinal): {e}")
 
 def buscar_historico_bd(email):
     try:
-        res = get_supabase().table("historico_sinais").select("id, sinal, resultado").eq("user_email", email.strip().lower()).order("id", desc=True).limit(10).execute()
-        return [{"id": r["id"], "sinal": r["sinal"], "res": r["resultado"]} for r in (res.data or [])]
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id, sinal, resultado 
+            FROM historico_sinais 
+            WHERE user_email = %s 
+            ORDER BY id DESC LIMIT 10;
+        """, (email.strip().lower(),))
+        res = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [{"id": r["id"], "sinal": r["sinal"], "res": r["resultado"]} for r in res]
     except Exception as e:
-        print(f"Erro Supabase (buscar_historico): {e}")
+        print(f"Erro no Banco (buscar_historico): {e}")
         return []
 
 def atualizar_ultimo_sinal_bd(email, resultado):
     try:
         email_clean = email.strip().lower()
-        res = get_supabase().table("historico_sinais").select("id").eq("user_email", email_clean).order("id", desc=True).limit(1).execute()
-        if res.data:
-            ultimo_id = res.data[0]["id"]
-            get_supabase().table("historico_sinais").update({"resultado": resultado}).eq("id", ultimo_id).execute()
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id FROM historico_sinais 
+            WHERE user_email = %s 
+            ORDER BY id DESC LIMIT 1;
+        """, (email_clean,))
+        res = cur.fetchone()
+
+        if res:
+            ultimo_id = res["id"]
+            cur.execute("""
+                UPDATE historico_sinais 
+                SET resultado = %s 
+                WHERE id = %s;
+            """, (resultado, ultimo_id))
+            conn.commit()
+
+        cur.close()
+        conn.close()
     except Exception as e:
-        print(f"Erro Supabase (atualizar_ultimo_sinal): {e}")
+        print(f"Erro no Banco (atualizar_ultimo_sinal): {e}")
 
 # ================= BOT CONFIGS =================
 TIMEFRAME_OPERACAO = 5
@@ -673,14 +729,12 @@ def login():
         if not e or not s:
             return render_template_string(HTML_LOGIN, erro="Preencha todos os campos.")
 
-        # Se for o e-mail Admin configurado no Render, força o cadastro/atualização imediata
         if e == ADMIN_EMAIL:
             try:
                 salvar_usuario(e, s, datetime.now().strftime("%Y-%m-%d"))
             except Exception as err:
-                return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM no Supabase: {err}")
+                return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM no Banco: {err}")
 
-        # Busca do banco
         usuarios = carregar_usuarios()
 
         if e not in usuarios:
@@ -688,16 +742,13 @@ def login():
 
         user_db = usuarios[e]
 
-        # Checagem de Senha
         if not check_password_hash(user_db['senha'], s):
             return render_template_string(HTML_LOGIN, erro="Senha Incorreta.")
 
-        # Checagem de Assinatura
         ativo, dias = verificar_assinatura(e)
         if not ativo:
             return render_template_string(HTML_LOGIN, erro=f"Assinatura expirada (Dias restantes: {dias}). Contate o suporte.")
 
-        # Login Autenticado
         session['user'] = e
         USUARIOS_ONLINE[e] = time.time()
         init_user_session(e)
@@ -760,11 +811,16 @@ def adm_editar():
     nova_senha = request.form.get('nova_senha', '').strip()
     
     try:
-        dados_upd = {"email": novo_email}
+        conn = get_db_connection()
+        cur = conn.cursor()
         if nova_senha:
-            dados_upd["senha"] = generate_password_hash(nova_senha)
-            
-        get_supabase().table("usuarios").update(dados_upd).eq("email", original).execute()
+            hash_senha = generate_password_hash(nova_senha)
+            cur.execute("UPDATE usuarios SET email = %s, senha = %s WHERE email = %s;", (novo_email, hash_senha, original))
+        else:
+            cur.execute("UPDATE usuarios SET email = %s WHERE email = %s;", (novo_email, original))
+        conn.commit()
+        cur.close()
+        conn.close()
     except Exception as e:
         print(f"Erro Editar Admin: {e}")
         
@@ -907,5 +963,4 @@ def bot_loop():
 threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run()
