@@ -423,18 +423,19 @@ HTML_INDEX = """
         function sendCommand(cmd) {
             fetch('/command/' + cmd).then(r => r.json()).then(data => {
                 if(data.redirect) window.location.href = data.redirect;
+                if(data.html) document.getElementById('panel-text').innerHTML = data.html;
             });
         }
 
         setInterval(() => {
             fetch('/status').then(r => r.json()).then(data => {
                 const panel = document.getElementById('panel-text');
-                if(panel) panel.innerHTML = data.html;
-                document.getElementById('win-count').innerText = data.wins;
-                document.getElementById('loss-count').innerText = data.reds;
-                document.getElementById('wr-text').innerText = data.winrate + "%";
-                document.getElementById('wr-fill').style.width = data.winrate + "%";
-                document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
+                if(panel && data.html) panel.innerHTML = data.html;
+                if(document.getElementById('win-count')) document.getElementById('win-count').innerText = data.wins;
+                if(document.getElementById('loss-count')) document.getElementById('loss-count').innerText = data.reds;
+                if(document.getElementById('wr-text')) document.getElementById('wr-text').innerText = data.winrate + "%";
+                if(document.getElementById('wr-fill')) document.getElementById('wr-fill').style.width = data.winrate + "%";
+                if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
                 
                 let histHtml = "";
                 if(data.historico) {
@@ -445,7 +446,7 @@ HTML_INDEX = """
                         histHtml += `<div class="historico-item"><span>🕒 ${item.sinal}</span><b style="color:${cor}">${item.res}</b></div>`;
                     });
                 }
-                document.getElementById('lista-sinais').innerHTML = histHtml || "<div style='text-align:center; font-size:11px; color:#8b949e;'>Nenhum sinal no histórico.</div>";
+                if(document.getElementById('lista-sinais')) document.getElementById('lista-sinais').innerHTML = histHtml || "<div style='text-align:center; font-size:11px; color:#8b949e;'>Nenhum sinal no histórico.</div>";
             });
         }, 1500);
     </script>
@@ -881,20 +882,26 @@ def command(cmd):
 
     if cmd == "start_bot":
         QUEM_INICIOU_O_BOT = user
-        BOT_INICIADO, BOT_PAUSADO = True, False
+        BOT_INICIADO, BOT_PAUSADO, AG_RESULTADO = True, False, False
         ULTIMO_SINAL_GLOBAL = "📡 Scanner Ativo...<div class='tech-scanner'></div>"
         enviar_telegram(f"🚀 <b>SISTEMA VISION PRO V3 CONECTADO</b>\nSessão iniciada por {user}")
+        return jsonify({"ok": True, "html": ULTIMO_SINAL_GLOBAL})
+
     elif cmd == "pause_bot":
         BOT_PAUSADO = not BOT_PAUSADO
         ULTIMO_SINAL_GLOBAL = "PAUSADO" if BOT_PAUSADO else "📡 Scanner Ativo...<div class='tech-scanner'></div>"
+        return jsonify({"ok": True, "html": ULTIMO_SINAL_GLOBAL})
+
     elif cmd == "stop_bot":
         BOT_INICIADO, BOT_PAUSADO = False, True
         ULTIMO_SINAL_GLOBAL = "Aguardando Início..."
         return jsonify({"ok": True, "redirect": "/login"})
+
     elif cmd.startswith("tf_"): TIMEFRAME_OPERACAO = int(cmd.split('_')[1])
     elif cmd.startswith("mkt_"): TIPO_MERCADO = cmd.split('_')[1]
     elif cmd.startswith("set_est_"): ESTRATEGIA_ESCOLHIDA = cmd.replace("set_est_", "")
-    return jsonify({"ok": True})
+    
+    return jsonify({"ok": True, "html": ULTIMO_SINAL_GLOBAL})
 
 @app.route('/resultado/<res>')
 def resultado(res):
@@ -949,7 +956,7 @@ def bot_loop():
                     dir_txt = "COMPRA" if sinal == "CALL" else "VENDA"
                     ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>🎯 <b>SINAL CONFIRMADO: {ativo}</b><br>Entrada: {dir_txt}</div>"
                     
-                    for u in USUARIOS_ONLINE.keys():
+                    for u in list(USUARIOS_ONLINE.keys()):
                         registrar_sinal_bd(u, f"{ativo} (M{TIMEFRAME_OPERACAO})")
                         
                     enviar_telegram(f"🎯 <b>SINAL CONFIRMADO</b>\n\n📈 Ativo: {ativo}\n🕒 Timeframe: M{TIMEFRAME_OPERACAO}\n↕️ Direção: {dir_txt}")
