@@ -342,13 +342,11 @@ HTML_INDEX = """
             <div class="winrate-bar"><div id="wr-fill" class="winrate-fill"></div></div>
         </div>
 
-        <!-- VISUALIZADOR DA CORRETORA INTEGRADO -->
         <div id="broker-view-container">
             <button class="btn-close-broker" onclick="closeBrokerView()">❌ FECHAR CORRETORA</button>
             <iframe id="brokerIframe" class="broker-iframe-inline" src=""></iframe>
         </div>
 
-        <!-- HUD DE VARREDURA EM TEMPO REAL -->
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
             MERCADO: <b id="mkt-badge" style="color: #00f2fe;">TODOS</b> | 
             ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
@@ -363,7 +361,6 @@ HTML_INDEX = """
             <button class="btn-res btn-res-skip" onclick="fetch('/resultado/pular')">PULAR</button>
         </div>
 
-        <!-- PAINEL DE CONTROLE DO BOT -->
         <div class="menu-grid">
             <button class="btn-menu" onclick="toggleSub('menu-brokers')" style="grid-column: span 2; border-color: rgba(0, 242, 254, 0.3);">🌐 PLATAFORMAS DE OPERAÇÃO (CORRETORAS)</button>
             
@@ -674,7 +671,7 @@ BOT_PAUSADO = True
 BOT_INICIADO = False
 AG_RESULTADO = False
 ULTIMO_SINAL_GLOBAL = "Aguardando Início..."
-ATIVO_ATUAL_GLOBAL = "EURUSD=X"
+ATIVO_ATUAL_GLOBAL = "INICIANDO..."
 
 ATIVOS_BASE = {
     "FOREX": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "USDCAD", "USDCHF", "GBPJPY"],
@@ -905,7 +902,7 @@ def status():
 
 @app.route('/command/<cmd>')
 def command(cmd):
-    global BOT_INICIADO, BOT_PAUSADO, TIMEFRAME_OPERACAO, TIPO_MERCADO, QUEM_INICIOU_O_BOT, ULTIMO_SINAL_GLOBAL, AG_RESULTADO, ESTRATEGIA_ESCOLHIDA
+    global BOT_INICIADO, BOT_PAUSADO, TIMEFRAME_OPERACAO, TIPO_MERCADO, QUEM_INICIOU_O_BOT, ULTIMO_SINAL_GLOBAL, AG_RESULTADO, ESTRATEGIA_ESCOLHIDA, ATIVO_ATUAL_GLOBAL
     user = session.get('user')
 
     if cmd == "start_bot":
@@ -913,13 +910,12 @@ def command(cmd):
         BOT_INICIADO = True
         BOT_PAUSADO = False
         AG_RESULTADO = False
-        ULTIMO_SINAL_GLOBAL = "<div class='system-console'>[VISION CORE] SERVIDORES CONECTADOS<br>[SCANNER] SCANNER EM TEMPO REAL INICIADO...</div><div class='tech-scanner'></div>"
         enviar_telegram(f"🚀 <b>SISTEMA VISION PRO V3 CONECTADO</b>\nSessão iniciada por {user}")
         return jsonify({"ok": True})
 
     elif cmd == "pause_bot":
         BOT_PAUSADO = not BOT_PAUSADO
-        ULTIMO_SINAL_GLOBAL = "<div class='system-console' style='color:#f59e0b;'>[PAUSADO] VARREDURA EM PAUSA...</div>" if BOT_PAUSADO else "<div class='system-console'>[SCANNER] REINICIANDO VARREDURA...</div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = "<div class='system-console' style='color:#f59e0b;'>[PAUSADO] VARREDURA EM PAUSA...</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[SCANNER] PROCESSANDO VELAS E INDICADORES...</span></div><div class='tech-scanner'></div>"
         return jsonify({"ok": True})
 
     elif cmd == "stop_bot":
@@ -957,7 +953,7 @@ def resultado(res):
         elif res == 'pular':
             atualizar_ultimo_sinal_bd(user, "Ignorado")
 
-        ULTIMO_SINAL_GLOBAL = "<div class='system-console'>[SCANNER] BUSCANDO PRÓXIMA OPORTUNIDADE...</div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[SCANNER] PROCESSANDO VELAS E INDICADORES...</span></div><div class='tech-scanner'></div>"
     AG_RESULTADO = False
     return redirect('/')
 
@@ -970,7 +966,11 @@ def bot_loop():
                 time.sleep(1)
                 continue
 
-            ativos = ATIVOS_BASE["FOREX"] + ATIVOS_BASE["CRIPTO"] if TIPO_MERCADO == "TODOS" else ATIVOS_BASE[TIPO_MERCADO]
+            # Atualiza dinamicamente a lista de ativos conforme a escolha de mercado
+            if TIPO_MERCADO == "TODOS":
+                ativos = ATIVOS_BASE["FOREX"] + ATIVOS_BASE["CRIPTO"]
+            else:
+                ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX"])
             
             for ativo in ativos:
                 if not BOT_INICIADO or BOT_PAUSADO or AG_RESULTADO:
@@ -979,7 +979,7 @@ def bot_loop():
                 ticker = MAPA_TICKERS.get(ativo, ativo)
                 ATIVO_ATUAL_GLOBAL = ativo
                 
-                # Atualização visual da varredura
+                # Atualização visual da varredura diretamente com o ativo dinâmico
                 ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[SCANNER] PROCESSANDO VELAS E INDICADORES...</span></div><div class='tech-scanner'></div>"
                 
                 data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
