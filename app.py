@@ -319,7 +319,7 @@ HTML_INDEX = """
                 </div>
                 <div class="placar-item">
                     <div class="title">ASSERTIVIDADE</div>
-                    <div class="val wr-color" id="wr-text">0%</div>
+                    <div class="val wr-text" id="wr-text">0%</div>
                 </div>
                 <div class="placar-item">
                     <div class="title">LOSS</div>
@@ -369,23 +369,23 @@ HTML_INDEX = """
         </div>
         
         <div id="menu-mercado" class="sub-menu">
-            <button class="btn-opt {{ 'btn-active' if modo == 'FOREX' }}" onclick="sendCommand('mkt_FOREX')">FOREX</button>
-            <button class="btn-opt {{ 'btn-active' if modo == 'CRIPTO' }}" onclick="sendCommand('mkt_CRIPTO')">CRIPTO</button>
-            <button class="btn-opt {{ 'btn-active' if modo == 'TODOS' }}" onclick="sendCommand('mkt_TODOS')">TODOS</button>
+            <button class="btn-opt {{ 'btn-active' if modo == 'FOREX' }}" onclick="sendCommand('mkt_FOREX', this)">FOREX</button>
+            <button class="btn-opt {{ 'btn-active' if modo == 'CRIPTO' }}" onclick="sendCommand('mkt_CRIPTO', this)">CRIPTO</button>
+            <button class="btn-opt {{ 'btn-active' if modo == 'TODOS' }}" onclick="sendCommand('mkt_TODOS', this)">TODOS</button>
         </div>
         
         <div id="menu-times" class="sub-menu">
-            <button class="btn-opt {{ 'btn-active' if tf == 1 }}" onclick="sendCommand('tf_1')">M1</button>
-            <button class="btn-opt {{ 'btn-active' if tf == 5 }}" onclick="sendCommand('tf_5')">M5</button>
-            <button class="btn-opt {{ 'btn-active' if tf == 15 }}" onclick="sendCommand('tf_15')">M15</button>
+            <button class="btn-opt {{ 'btn-active' if tf == 1 }}" onclick="sendCommand('tf_1', this)">M1</button>
+            <button class="btn-opt {{ 'btn-active' if tf == 5 }}" onclick="sendCommand('tf_5', this)">M5</button>
+            <button class="btn-opt {{ 'btn-active' if tf == 15 }}" onclick="sendCommand('tf_15', this)">M15</button>
         </div>
         
         <div id="menu-estrategias" class="sub-menu" style="grid-template-columns: 1fr 1fr;">
-            <button class="btn-opt {{ 'btn-active' if estrat == 'TODAS' }}" onclick="sendCommand('set_est_TODAS')">💎 TODAS (AUTO)</button>
-            <button class="btn-opt {{ 'btn-active' if estrat == 'LOGICA_DO_PRECO' }}" onclick="sendCommand('set_est_LOGICA_DO_PRECO')">LÓGICA DO PREÇO</button>
-            <button class="btn-opt {{ 'btn-active' if estrat == 'RSI_MACD_MA' }}" onclick="sendCommand('set_est_RSI_MACD_MA')">RSI + MACD + MA</button>
-            <button class="btn-opt {{ 'btn-active' if estrat == 'MHI1' }}" onclick="sendCommand('set_est_MHI1')">MHI 1</button>
-            <button class="btn-opt {{ 'btn-active' if estrat == 'REVERSAO' }}" onclick="sendCommand('set_est_REVERSAO')">REVERSÃO / RETRAÇÃO</button>
+            <button class="btn-opt {{ 'btn-active' if estrat == 'TODAS' }}" onclick="sendCommand('set_est_TODAS', this)">💎 TODAS (AUTO)</button>
+            <button class="btn-opt {{ 'btn-active' if estrat == 'LOGICA_DO_PRECO' }}" onclick="sendCommand('set_est_LOGICA_DO_PRECO', this)">LÓGICA DO PREÇO</button>
+            <button class="btn-opt {{ 'btn-active' if estrat == 'RSI_MACD_MA' }}" onclick="sendCommand('set_est_RSI_MACD_MA', this)">RSI + MACD + MA</button>
+            <button class="btn-opt {{ 'btn-active' if estrat == 'MHI1' }}" onclick="sendCommand('set_est_MHI1', this)">MHI 1</button>
+            <button class="btn-opt {{ 'btn-active' if estrat == 'REVERSAO' }}" onclick="sendCommand('set_est_REVERSAO', this)">REVERSÃO / RETRAÇÃO</button>
         </div>
     </div>
 
@@ -420,10 +420,24 @@ HTML_INDEX = """
             });
         }
 
-        function sendCommand(cmd) {
+        function sendCommand(cmd, el = null) {
             fetch('/command/' + cmd).then(r => r.json()).then(data => {
                 if(data.redirect) window.location.href = data.redirect;
                 if(data.html) document.getElementById('panel-text').innerHTML = data.html;
+                
+                // Atualização visual instantânea das seleções dos botões
+                if(el) {
+                    const parent = el.parentElement;
+                    if(parent) {
+                        parent.querySelectorAll('.btn-opt').forEach(btn => btn.classList.remove('btn-active'));
+                        el.classList.add('btn-active');
+                    }
+                }
+                
+                // Atualizar gráfico se mudarmos o timeframe diretamente
+                if(cmd.startsWith('tf_')) {
+                    updateChart();
+                }
             });
         }
 
@@ -897,9 +911,12 @@ def command(cmd):
         ULTIMO_SINAL_GLOBAL = "Aguardando Início..."
         return jsonify({"ok": True, "redirect": "/login"})
 
-    elif cmd.startswith("tf_"): TIMEFRAME_OPERACAO = int(cmd.split('_')[1])
-    elif cmd.startswith("mkt_"): TIPO_MERCADO = cmd.split('_')[1]
-    elif cmd.startswith("set_est_"): ESTRATEGIA_ESCOLHIDA = cmd.replace("set_est_", "")
+    elif cmd.startswith("tf_"): 
+        TIMEFRAME_OPERACAO = int(cmd.split('_')[1])
+    elif cmd.startswith("mkt_"): 
+        TIPO_MERCADO = cmd.split('_')[1]
+    elif cmd.startswith("set_est_"): 
+        ESTRATEGIA_ESCOLHIDA = cmd.replace("set_est_", "")
     
     return jsonify({"ok": True, "html": ULTIMO_SINAL_GLOBAL})
 
