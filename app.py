@@ -24,7 +24,6 @@ ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
 
 def get_db_connection():
-    """Cria e retorna uma conexão direta via DB_URL."""
     if not DB_URL:
         raise ValueError("A variável de ambiente DB_URL (ou DATABASE_URL) precisa estar configurada.")
     return psycopg2.connect(DB_URL)
@@ -292,25 +291,34 @@ HTML_INDEX = """
         .btn-res-red { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 12px rgba(239,68,68,0.3); }
         .btn-res-skip { background: #334155; box-shadow: 0 4px 12px rgba(51,65,85,0.3); }
 
-        .section-label { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 10px; letter-spacing: 1px; }
-        .menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
-        .sub-menu { display: none; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 14px; background: #0b1120; border: 1px solid #1e293b; border-radius: 14px; margin-bottom: 16px; }
+        /* NOVO DESIGN DO PAINEL DE CONTROLE (DROPDOWNS E FLEX) */
+        .control-panel { background: #0b1120; border: 1px solid #1e293b; border-radius: 16px; padding: 15px; margin-bottom: 16px; }
+        .section-label { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 10px; letter-spacing: 1px; display: block; border-bottom: 1px solid #1e293b; padding-bottom: 5px;}
         
-        button.btn-menu { background: #0f172a; border: 1px solid #1e293b; color: #cbd5e1; padding: 12px; border-radius: 12px; font-weight: 700; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; transition: 0.2s; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
-        button.btn-menu:hover { background: #1e293b; border-color: #334155; color: #fff; }
+        .action-flex { display: flex; gap: 8px; margin-bottom: 15px; }
+        .btn-action { flex: 1; padding: 12px 5px; border: none; border-radius: 10px; font-weight: 800; font-size: 12px; color: white; cursor: pointer; transition: 0.2s; text-transform: uppercase; }
+        .btn-action:active { transform: scale(0.95); }
+        .btn-start { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 12px rgba(16,185,129,0.2); }
+        .btn-pause { background: linear-gradient(135deg, #f59e0b, #d97706); box-shadow: 0 4px 12px rgba(245,158,11,0.2); }
+        .btn-stop { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 12px rgba(239,68,68,0.2); }
+
+        .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        .settings-grid.full { grid-template-columns: 1fr; margin-bottom: 15px; }
+        .setting-group label { font-size: 10px; font-weight: 700; color: #94a3b8; margin-bottom: 4px; display: block; }
         
-        .btn-opt { padding: 10px; font-size: 11px; background: #0f172a; border: 1px solid #1e293b; color: #94a3b8; border-radius: 10px; font-weight: 700; cursor: pointer; transition: 0.2s; }
-        .btn-opt:hover { color: #fff; border-color: #00f2fe; }
-        .btn-active { background: linear-gradient(135deg, #00c6ff, #0072ff) !important; color: #ffffff !important; border-color: #00f2fe !important; box-shadow: 0 0 12px rgba(0, 198, 255, 0.4); }
+        .select-wrapper { position: relative; width: 100%; }
+        .select-wrapper::after { content: "▼"; position: absolute; right: 12px; top: 12px; color: #00f2fe; font-size: 10px; pointer-events: none; }
+        .modern-select { background: #0f172a; color: #f1f5f9; border: 1px solid #1e293b; padding: 10px 12px; border-radius: 8px; font-weight: 600; font-size: 12px; width: 100%; outline: none; appearance: none; cursor: pointer; transition: 0.2s; }
+        .modern-select:hover, .modern-select:focus { border-color: #00f2fe; box-shadow: 0 0 8px rgba(0,242,254,0.2); }
 
-        /* Estilo dos Botões das Corretoras */
-        .broker-grid { display: none; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; padding: 12px; background: #0b1120; border: 1px solid #1e293b; border-radius: 14px; }
-        .btn-broker { border: 1px solid #1e293b; background: #0f172a; color: #fff; padding: 12px; border-radius: 12px; font-weight: 800; font-size: 12px; cursor: pointer; transition: 0.3s; display: flex; align-items: center; justify-content: center; gap: 8px; }
-        .btn-broker:hover { transform: translateY(-2px); border-color: #00f2fe; box-shadow: 0 4px 15px rgba(0, 242, 254, 0.2); }
+        .broker-flex { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 5px; scrollbar-width: none; }
+        .broker-flex::-webkit-scrollbar { display: none; }
+        .btn-broker { min-width: 100px; flex: 1; border: 1px solid #1e293b; background: #0f172a; color: #cbd5e1; padding: 10px; border-radius: 8px; font-weight: 700; font-size: 11px; cursor: pointer; transition: 0.3s; text-align: center; white-space: nowrap;}
+        .btn-broker:hover { color: #fff; border-color: #00f2fe; background: #1e293b; }
 
-        .historico-box { display: none; background: #0b1120; border: 1px solid #1e293b; border-radius: 14px; padding: 12px; margin-bottom: 16px; }
-        .historico-scroll { max-height: 160px; overflow-y: auto; }
-        .historico-item { font-size: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; font-family: 'JetBrains Mono', monospace; }
+        .historico-box { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; margin-top: 15px; }
+        .historico-scroll { max-height: 140px; overflow-y: auto; }
+        .historico-item { font-size: 11px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; font-family: 'JetBrains Mono', monospace; }
         .historico-item:last-child { border-bottom: none; }
 
         .tech-scanner { width: 28px; height: 28px; margin: 10px auto 0; border: 3px solid rgba(0, 242, 254, 0.2); border-top-color: #00f2fe; border-radius: 50%; animation: spin 0.8s linear infinite; }
@@ -361,55 +369,73 @@ HTML_INDEX = """
             <button class="btn-res btn-res-skip" onclick="fetch('/resultado/pular')">PULAR</button>
         </div>
 
-        <div class="menu-grid">
-            <button class="btn-menu" onclick="toggleSub('menu-brokers')" style="grid-column: span 2; border-color: rgba(0, 242, 254, 0.3);">🌐 PLATAFORMAS DE OPERAÇÃO (CORRETORAS)</button>
+        <div class="control-panel">
+            <span class="section-label">Controles do Robô</span>
             
-            <div id="menu-brokers" class="broker-grid" style="grid-column: span 2;">
-                <button class="btn-broker" onclick="openBroker('https://qxbroker.com')">🌐 QUOTEX</button>
-                <button class="btn-broker" onclick="openBroker('https://iqoption.com')">📈 IQ OPTION</button>
-                <button class="btn-broker" onclick="openBroker('https://binomo.com')">🟡 BINOMO</button>
-                <button class="btn-broker" onclick="openBroker('https://pocketoption.com')">🟦 POCKET OPTION</button>
+            <div class="action-flex">
+                <button class="btn-action btn-start" onclick="sendCommand('start_bot')">▶ START</button>
+                <button class="btn-action btn-pause" onclick="sendCommand('pause_bot')">⏸ PAUSE</button>
+                <button class="btn-action btn-stop" onclick="sendCommand('stop_bot')">⏹ STOP</button>
             </div>
 
-            <button class="btn-menu" onclick="toggleSub('menu-inicio')">⚡ SISTEMA BOT</button>
-            <button class="btn-menu" onclick="toggleSub('menu-historico')">📊 HISTÓRICO</button>
-            <button class="btn-menu" onclick="toggleSub('menu-mercado')">🌐 MERCADO</button>
-            <button class="btn-menu" onclick="toggleSub('menu-times')">⏱️ TIMEFRAME</button>
-            <button class="btn-menu" onclick="toggleSub('menu-estrategias')" style="grid-column: span 2;">⚙️ ESTRATÉGIAS OPERACIONAIS</button>
+            <span class="section-label">Configurações de Análise</span>
+            
+            <div class="settings-grid">
+                <div class="setting-group">
+                    <label>TIPO DE MERCADO</label>
+                    <div class="select-wrapper">
+                        <select class="modern-select" onchange="sendCommand('mkt_' + this.value)">
+                            <option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>Todos os Ativos</option>
+                            <option value="FOREX" {% if modo == 'FOREX' %}selected{% endif %}>Apenas Forex</option>
+                            <option value="CRIPTO" {% if modo == 'CRIPTO' %}selected{% endif %}>Apenas Cripto</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="setting-group">
+                    <label>TIMEFRAME</label>
+                    <div class="select-wrapper">
+                        <select class="modern-select" onchange="sendCommand('tf_' + this.value)">
+                            <option value="1" {% if tf == 1 %}selected{% endif %}>M1 (1 Minuto)</option>
+                            <option value="5" {% if tf == 5 %}selected{% endif %}>M5 (5 Minutos)</option>
+                            <option value="15" {% if tf == 15 %}selected{% endif %}>M15 (15 Minutos)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="settings-grid full">
+                <div class="setting-group">
+                    <label>ESTRATÉGIA OPERACIONAL (C/ FILTROS MACD)</label>
+                    <div class="select-wrapper">
+                        <select class="modern-select" onchange="sendCommand('set_est_' + this.value)">
+                            <option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS (Modo Inteligente)</option>
+                            <option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + Cruzamento MACD + MA</option>
+                            <option value="LOGICA_DO_PRECO" {% if estrat == 'LOGICA_DO_PRECO' %}selected{% endif %}>Lógica do Preço</option>
+                            <option value="MHI1" {% if estrat == 'MHI1' %}selected{% endif %}>MHI 1 (+ Filtro Tendência)</option>
+                            <option value="REVERSAO" {% if estrat == 'REVERSAO' %}selected{% endif %}>Reversão de Bandas</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <span class="section-label" style="margin-top: 5px;">Plataformas de Operação</span>
+            <div class="broker-flex">
+                <button class="btn-broker" onclick="openBroker('https://qxbroker.com')">🌐 Quotex</button>
+                <button class="btn-broker" onclick="openBroker('https://iqoption.com')">📈 IQ Option</button>
+                <button class="btn-broker" onclick="openBroker('https://binomo.com')">🟡 Binomo</button>
+                <button class="btn-broker" onclick="openBroker('https://pocketoption.com')">🟦 Pocket Opt.</button>
+            </div>
+
             {% if user == admin %}
-            <button class="btn-menu" onclick="location.href='/admin_panel'" style="grid-column: span 2; background: rgba(0, 242, 254, 0.1); border-color: #00f2fe; color: #00f2fe;">🛡️ PAINEL ADMINISTRATIVO</button>
+            <button onclick="location.href='/admin_panel'" style="width:100%; margin-top:15px; padding:12px; background:rgba(0,242,254,0.1); border:1px solid #00f2fe; color:#00f2fe; font-weight:bold; border-radius:10px; cursor:pointer;">🛡️ ABRIR PAINEL ADMINISTRATIVO</button>
             {% endif %}
+
+            <div class="historico-box">
+                <span class="section-label">Histórico de Sinais</span>
+                <div class="historico-scroll" id="lista-sinais"></div>
+            </div>
         </div>
 
-        <div id="menu-historico" class="historico-box">
-            <div class="historico-scroll" id="lista-sinais"></div>
-        </div>
-        
-        <div id="menu-inicio" class="sub-menu">
-            <button class="btn-opt" style="background: linear-gradient(135deg, #10b981, #059669); color:white;" onclick="sendCommand('start_bot')">ANALISAR / START</button>
-            <button class="btn-opt" style="background: linear-gradient(135deg, #f59e0b, #d97706); color:#000;" onclick="sendCommand('pause_bot')">PAUSAR</button>
-            <button class="btn-opt" style="background: linear-gradient(135deg, #ef4444, #dc2626); color:white;" onclick="sendCommand('stop_bot')">PARAR</button>
-        </div>
-        
-        <div id="menu-mercado" class="sub-menu">
-            <button class="btn-opt {{ 'btn-active' if modo == 'FOREX' }}" onclick="sendCommand('mkt_FOREX', this)">FOREX</button>
-            <button class="btn-opt {{ 'btn-active' if modo == 'CRIPTO' }}" onclick="sendCommand('mkt_CRIPTO', this)">CRIPTO</button>
-            <button class="btn-opt {{ 'btn-active' if modo == 'TODOS' }}" onclick="sendCommand('mkt_TODOS', this)">TODOS</button>
-        </div>
-        
-        <div id="menu-times" class="sub-menu">
-            <button class="btn-opt {{ 'btn-active' if tf == 1 }}" onclick="sendCommand('tf_1', this)">M1</button>
-            <button class="btn-opt {{ 'btn-active' if tf == 5 }}" onclick="sendCommand('tf_5', this)">M5</button>
-            <button class="btn-opt {{ 'btn-active' if tf == 15 }}" onclick="sendCommand('tf_15', this)">M15</button>
-        </div>
-        
-        <div id="menu-estrategias" class="sub-menu" style="grid-template-columns: 1fr 1fr;">
-            <button class="btn-opt {{ 'btn-active' if estrat == 'TODAS' }}" onclick="sendCommand('set_est_TODAS', this)">💎 TODAS (AUTO)</button>
-            <button class="btn-opt {{ 'btn-active' if estrat == 'LOGICA_DO_PRECO' }}" onclick="sendCommand('set_est_LOGICA_DO_PRECO', this)">LÓGICA DO PREÇO</button>
-            <button class="btn-opt {{ 'btn-active' if estrat == 'RSI_MACD_MA' }}" onclick="sendCommand('set_est_RSI_MACD_MA', this)">RSI + MACD + MA</button>
-            <button class="btn-opt {{ 'btn-active' if estrat == 'MHI1' }}" onclick="sendCommand('set_est_MHI1', this)">MHI 1</button>
-            <button class="btn-opt {{ 'btn-active' if estrat == 'REVERSAO' }}" onclick="sendCommand('set_est_REVERSAO', this)">REVERSÃO / RETRAÇÃO</button>
-        </div>
     </div>
 
     <script>
@@ -417,7 +443,6 @@ HTML_INDEX = """
             const brokerContainer = document.getElementById('broker-view-container');
             document.getElementById('brokerIframe').src = url;
             brokerContainer.style.display = 'flex';
-            document.getElementById('menu-brokers').style.display = 'none';
         }
 
         function closeBrokerView() {
@@ -425,23 +450,9 @@ HTML_INDEX = """
             document.getElementById('brokerIframe').src = '';
         }
 
-        function toggleSub(id) {
-            ['menu-inicio', 'menu-mercado', 'menu-times', 'menu-historico', 'menu-estrategias', 'menu-brokers'].forEach(m => {
-                const el = document.getElementById(m);
-                if(el) el.style.display = (m === id && el.style.display !== 'grid' && el.style.display !== 'block') ? (id === 'menu-historico' ? 'block' : 'grid') : 'none';
-            });
-        }
-
-        function sendCommand(cmd, el = null) {
+        function sendCommand(cmd) {
             fetch('/command/' + cmd).then(r => r.json()).then(data => {
                 if(data.redirect) window.location.href = data.redirect;
-                if(el) {
-                    const parent = el.parentElement;
-                    if(parent) {
-                        parent.querySelectorAll('.btn-opt').forEach(btn => btn.classList.remove('btn-active'));
-                        el.classList.add('btn-active');
-                    }
-                }
             });
         }
 
@@ -684,7 +695,7 @@ for par in ATIVOS_BASE["CRIPTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE =================
 def get_data_v2(ticker, tf, period='5d'):
-    """Requisição resiliente e tratada em tempo real direto do Yahoo Finance."""
+    """Requisição resiliente ao Yahoo Finance."""
     try:
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval={tf}m&range={period}"
         headers = {
@@ -717,17 +728,29 @@ def get_data_v2(ticker, tf, period='5d'):
         for k in ohlc: 
             ohlc[k] = ohlc[k][idx]
             
-        if len(ohlc["close"]) < 20:
+        if len(ohlc["close"]) < 40: # Aumentado para garantir dados suficientes para o MACD
             return None
             
         return ohlc
     except Exception as e:
         return None
 
+def calcular_ema(dados, periodo):
+    """Calcula a Média Móvel Exponencial (EMA)."""
+    ema = np.zeros_like(dados)
+    multiplicador = 2 / (periodo + 1)
+    ema[periodo-1] = np.mean(dados[:periodo])
+    for i in range(periodo, len(dados)):
+        ema[i] = (dados[i] - ema[i-1]) * multiplicador + ema[i-1]
+    return ema
+
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
-    if len(c) < 30: return None
+    
+    # Prevenção extra
+    if len(c) < 40: return None
 
+    # ESTRATÉGIA 1: LÓGICA DO PREÇO (Inalterada)
     if estrategia == "LOGICA_DO_PRECO":
         cor = "G" if c[i] > o[i] else "R"
         tamanho = abs(c[i] - o[i])
@@ -739,8 +762,12 @@ def analisar_estrategia(data, estrategia, i=-1):
         if p_inf > tamanho * 2: return "CALL"
         if p_sup > tamanho * 2: return "PUT"
 
+    # ESTRATÉGIA 2: RSI + MACD REAL + MA
     if estrategia == "RSI_MACD_MA":
+        # Média Simples 20
         ma = np.mean(c[i-20:i])
+        
+        # RSI 14
         diff = np.diff(c[i-15:i])
         up = diff[diff>0]
         down = diff[diff<0]
@@ -748,14 +775,33 @@ def analisar_estrategia(data, estrategia, i=-1):
         avg_down = abs(np.mean(down)) if len(down) > 0 else 0.001
         rs = avg_up / avg_down if avg_down != 0 else 0
         rsi = 100 - (100 / (1 + rs))
-        if c[i] > ma and rsi < 30: return "CALL"
-        if c[i] < ma and rsi > 70: return "PUT"
+        
+        # MACD (12, 26, 9) Real
+        ema12 = calcular_ema(c, 12)
+        ema26 = calcular_ema(c, 26)
+        macd_line = ema12 - ema26
+        signal_line = calcular_ema(macd_line, 9)
+        
+        # Regra de Cruzamento do MACD
+        macd_cruza_cima = macd_line[i] > signal_line[i] and macd_line[i-1] <= signal_line[i-1]
+        macd_cruza_baixo = macd_line[i] < signal_line[i] and macd_line[i-1] >= signal_line[i-1]
+        
+        # Lógica de Entrada Refinada: Preço a favor da tendência, RSI indicando fim do pullback, MACD confirmando reversão.
+        if c[i] > ma and rsi < 45 and macd_cruza_cima: return "CALL"
+        if c[i] < ma and rsi > 55 and macd_cruza_baixo: return "PUT"
 
+    # ESTRATÉGIA 3: MHI 1 (COM FILTRO DE TENDÊNCIA MA20)
     if estrategia == "MHI1":
+        ma20 = np.mean(c[i-20:i])
+        tendencia_alta = c[i] > ma20
+        tendencia_baixa = c[i] < ma20
+        
         cores = [("G" if c[j] > o[j] else "R") for j in range(i-2, i+1)]
-        if cores.count("G") > cores.count("R"): return "PUT"
-        if cores.count("R") > cores.count("G"): return "CALL"
+        # Só opera contra a minoria se estiver a favor da tendência principal
+        if cores.count("G") > cores.count("R") and tendencia_baixa: return "PUT"
+        if cores.count("R") > cores.count("G") and tendencia_alta: return "CALL"
 
+    # ESTRATÉGIA 4: REVERSÃO DE BANDAS (Bollinger 20, 2)
     if estrategia in ["REVERSAO", "RETRACAO"]:
         std = np.std(c[i-20:i])
         ma = np.mean(c[i-20:i])
