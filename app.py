@@ -280,7 +280,7 @@ HTML_INDEX = """
         .broker-iframe-inline { width: 100%; height: 100%; border: none; background: #0b1120; border-radius: 10px; }
         .btn-close-broker { background: #1e293b; border: 1px solid #334155; color: #00f2fe; padding: 6px 12px; font-size: 11px; font-weight: 700; border-radius: 6px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: center; }
 
-        .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 90px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
+        .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 100px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
         
         .system-console { font-family: 'JetBrains Mono', monospace; color: #38ef7d; font-size: 13px; text-shadow: 0 0 5px rgba(56, 239, 125, 0.5); width: 100%; }
 
@@ -313,7 +313,7 @@ HTML_INDEX = """
         .historico-item { font-size: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; font-family: 'JetBrains Mono', monospace; }
         .historico-item:last-child { border-bottom: none; }
 
-        .tech-scanner { width: 26px; height: 26px; margin: 8px auto 0; border: 3px solid rgba(0, 242, 254, 0.2); border-top-color: #00f2fe; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        .tech-scanner { width: 28px; height: 28px; margin: 10px auto 0; border: 3px solid rgba(0, 242, 254, 0.2); border-top-color: #00f2fe; border-radius: 50%; animation: spin 0.8s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
@@ -348,7 +348,7 @@ HTML_INDEX = """
         </div>
 
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
-            MERCADO: <b id="mkt-badge" style="color: #00f2fe;">TODOS</b> | 
+            MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">TODOS</b> | 
             ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
         </div>
 
@@ -670,8 +670,8 @@ BOT_RODANDO = True
 BOT_PAUSADO = True
 BOT_INICIADO = False
 AG_RESULTADO = False
-ULTIMO_SINAL_GLOBAL = "Aguardando Início..."
-ATIVO_ATUAL_GLOBAL = "INICIANDO..."
+ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
+ATIVO_ATUAL_GLOBAL = "AGUARDANDO..."
 
 ATIVOS_BASE = {
     "FOREX": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "USDCAD", "USDCHF", "GBPJPY"],
@@ -684,18 +684,23 @@ for par in ATIVOS_BASE["CRIPTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE =================
 def get_data_v2(ticker, tf, period='5d'):
-    """Requisicao resiliente ao Yahoo Finance evitando travamentos no Render."""
+    """Requisição resiliente e tratada em tempo real direto do Yahoo Finance."""
     try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval={tf}m&range={period}"
+        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval={tf}m&range={period}"
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Referer': 'https://finance.yahoo.com/'
         }
-        session_req = requests.Session()
-        res = session_req.get(url, headers=headers, timeout=6).json()
         
-        result = res['chart']['result'][0]
+        session_req = requests.Session()
+        res = session_req.get(url, headers=headers, timeout=5)
+        
+        if res.status_code != 200:
+            return None
+            
+        data_json = res.json()
+        result = data_json['chart']['result'][0]
         timestamps = result['timestamp']
         quote = result['indicators']['quote'][0]
         
@@ -705,17 +710,23 @@ def get_data_v2(ticker, tf, period='5d'):
             "high": np.array(quote['high']),
             "low": np.array(quote['low']),
             "close": np.array(quote['close']),
-            "volume": np.array(quote['volume'])
+            "volume": np.array(quote.get('volume', [0]*len(timestamps)))
         }
+        
         idx = ~np.isnan(ohlc["close"])
-        for k in ohlc: ohlc[k] = ohlc[k][idx]
+        for k in ohlc: 
+            ohlc[k] = ohlc[k][idx]
+            
+        if len(ohlc["close"]) < 20:
+            return None
+            
         return ohlc
     except Exception as e:
         return None
 
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
-    if len(c) < 50: return None
+    if len(c) < 30: return None
 
     if estrategia == "LOGICA_DO_PRECO":
         cor = "G" if c[i] > o[i] else "R"
@@ -910,18 +921,21 @@ def command(cmd):
         BOT_INICIADO = True
         BOT_PAUSADO = False
         AG_RESULTADO = False
+        ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>VARREDURA INICIADA</b><br><span style='color:#00f2fe;'>[VARREDURA DE ATIVOS EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
         enviar_telegram(f"🚀 <b>SISTEMA VISION PRO V3 CONECTADO</b>\nSessão iniciada por {user}")
         return jsonify({"ok": True})
 
     elif cmd == "pause_bot":
         BOT_PAUSADO = not BOT_PAUSADO
-        ULTIMO_SINAL_GLOBAL = "<div class='system-console' style='color:#f59e0b;'>[PAUSADO] VARREDURA EM PAUSA...</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[SCANNER] PROCESSANDO VELAS E INDICADORES...</span></div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = "<div class='system-console' style='color:#f59e0b;'>[PAUSADO] VARREDURA EM PAUSA...</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA DE ATIVOS EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
         return jsonify({"ok": True})
 
     elif cmd == "stop_bot":
         BOT_INICIADO = False
         BOT_PAUSADO = True
-        ULTIMO_SINAL_GLOBAL = "Aguardando Início..."
+        ATIVO_ATUAL_GLOBAL = "DESCONECTADO"
+        ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
         return jsonify({"ok": True, "redirect": "/login"})
 
     elif cmd.startswith("tf_"): 
@@ -953,7 +967,7 @@ def resultado(res):
         elif res == 'pular':
             atualizar_ultimo_sinal_bd(user, "Ignorado")
 
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[SCANNER] PROCESSANDO VELAS E INDICADORES...</span></div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA DE ATIVOS EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
     AG_RESULTADO = False
     return redirect('/')
 
@@ -966,7 +980,6 @@ def bot_loop():
                 time.sleep(1)
                 continue
 
-            # Atualiza dinamicamente a lista de ativos conforme a escolha de mercado
             if TIPO_MERCADO == "TODOS":
                 ativos = ATIVOS_BASE["FOREX"] + ATIVOS_BASE["CRIPTO"]
             else:
@@ -979,12 +992,12 @@ def bot_loop():
                 ticker = MAPA_TICKERS.get(ativo, ativo)
                 ATIVO_ATUAL_GLOBAL = ativo
                 
-                # Atualização visual da varredura diretamente com o ativo dinâmico
-                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[SCANNER] PROCESSANDO VELAS E INDICADORES...</span></div><div class='tech-scanner'></div>"
+                # Exibe dinamicamente no painel central o ativo sendo varrido e o spinner
+                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 VARRENDO ATIVO: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#38ef7d;'>[VARREDURA EM TEMPO REAL YAHOO FINANCE]</span></div><div class='tech-scanner'></div>"
                 
                 data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
                 if not data:
-                    time.sleep(0.3)
+                    time.sleep(0.4)
                     continue
 
                 sinal = None
@@ -1006,8 +1019,8 @@ def bot_loop():
                     AG_RESULTADO = True
                     break
                 
-                time.sleep(0.5)
-            time.sleep(1)
+                time.sleep(0.6)
+            time.sleep(0.5)
         except Exception as e: 
             print(f"Erro Loop Bot: {e}")
             time.sleep(2)
