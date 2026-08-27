@@ -289,7 +289,7 @@ HTML_INDEX = """
 
         .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 90px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
         
-        .termux-console { font-family: 'JetBrains Mono', monospace; color: #38ef7d; font-size: 13px; text-shadow: 0 0 5px rgba(56, 239, 125, 0.5); width: 100%; }
+        .system-console { font-family: 'JetBrains Mono', monospace; color: #38ef7d; font-size: 13px; text-shadow: 0 0 5px rgba(56, 239, 125, 0.5); width: 100%; }
 
         .result-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
         .btn-res { border: none; padding: 12px; border-radius: 10px; font-weight: 800; font-size: 12px; cursor: pointer; color: white; transition: transform 0.1s, box-shadow 0.2s; text-transform: uppercase; }
@@ -454,7 +454,6 @@ HTML_INDEX = """
             const brokerContainer = document.getElementById('broker-view-container');
             document.getElementById('brokerIframe').src = url;
             brokerContainer.style.display = 'flex';
-            // Oculta as corretoras novamente após escolher uma
             document.getElementById('menu-brokers').style.display = 'none';
         }
 
@@ -946,13 +945,13 @@ def command(cmd):
     if cmd == "start_bot":
         QUEM_INICIOU_O_BOT = user
         BOT_INICIADO, BOT_PAUSADO, AG_RESULTADO = True, False, False
-        ULTIMO_SINAL_GLOBAL = "<div class='termux-console'>[TERMUX] CONECTANDO AOS SERVIDORES...<br>[SCANNER] INICIANDO VARREDURA...</div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = "<div class='system-console'>[VISION CORE] CONECTANDO AOS SERVIDORES...<br>[SCANNER] INICIANDO VARREDURA DOS ATIVOS...</div><div class='tech-scanner'></div>"
         enviar_telegram(f"🚀 <b>SISTEMA VISION PRO V3 CONECTADO</b>\nSessão iniciada por {user}")
         return jsonify({"ok": True, "html": ULTIMO_SINAL_GLOBAL})
 
     elif cmd == "pause_bot":
         BOT_PAUSADO = not BOT_PAUSADO
-        ULTIMO_SINAL_GLOBAL = "PAUSADO" if BOT_PAUSADO else "<div class='termux-console'>[SCANNER] REINICIANDO VARREDURA...</div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = "PAUSADO" if BOT_PAUSADO else "<div class='system-console'>[SCANNER] REINICIANDO VARREDURA...</div><div class='tech-scanner'></div>"
         return jsonify({"ok": True, "html": ULTIMO_SINAL_GLOBAL})
 
     elif cmd == "stop_bot":
@@ -989,7 +988,7 @@ def resultado(res):
         elif res == 'pular':
             atualizar_ultimo_sinal_bd(user, "Ignorado")
 
-        ULTIMO_SINAL_GLOBAL = "<div class='termux-console'>[SCANNER] PROCURANDO NOVO SINAL...</div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = "<div class='system-console'>[SCANNER] BUSCANDO PRÓXIMA OPORTUNIDADE...</div><div class='tech-scanner'></div>"
     AG_RESULTADO = False
     return redirect('/')
 
@@ -1007,8 +1006,8 @@ def bot_loop():
                 ticker = MAPA_TICKERS.get(ativo, ativo)
                 ATIVO_ATUAL_GLOBAL = ticker
                 
-                # Exibe feedback do scanner estilo Termux
-                ULTIMO_SINAL_GLOBAL = f"<div class='termux-console'>[ANALISANDO] > {ativo} (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[AGUARDE] MAPEANDO CANDLES...</span></div><div class='tech-scanner'></div>"
+                # Exibe o ativo e timeframe atualmente sendo analisado
+                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[AGUARDE] PROCESSANDO INDICADORES...</span></div><div class='tech-scanner'></div>"
                 
                 data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
                 if not data: continue
