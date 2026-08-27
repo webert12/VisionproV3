@@ -280,7 +280,7 @@ HTML_INDEX = """
         .broker-iframe-inline { width: 100%; height: 100%; border: none; background: #0b1120; border-radius: 10px; }
         .btn-close-broker { background: #1e293b; border: 1px solid #334155; color: #00f2fe; padding: 6px 12px; font-size: 11px; font-weight: 700; border-radius: 6px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: center; }
 
-        .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 100px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
+        .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 90px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
         
         .system-console { font-family: 'JetBrains Mono', monospace; color: #38ef7d; font-size: 13px; text-shadow: 0 0 5px rgba(56, 239, 125, 0.5); width: 100%; }
 
@@ -764,213 +764,6 @@ def analisar_estrategia(data, estrategia, i=-1):
 
     return None
 
-# ================= ROTAS =================
-@app.route('/health')
-def health():
-    return jsonify({"status": "ok"}), 200
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        e = request.form.get('email', '').strip().lower()
-        s = request.form.get('password', '').strip()
-
-        if not e or not s:
-            return render_template_string(HTML_LOGIN, erro="Preencha todos os campos.")
-
-        if e == ADMIN_EMAIL:
-            try:
-                salvar_usuario(e, s, datetime.now().strftime("%Y-%m-%d"))
-            except Exception as err:
-                return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM: {err}")
-
-        usuarios = carregar_usuarios()
-
-        if e not in usuarios:
-            return render_template_string(HTML_LOGIN, erro=f"Usuário não cadastrado ({e}). Faça o cadastro.")
-
-        user_db = usuarios[e]
-
-        if not check_password_hash(user_db['senha'], s):
-            return render_template_string(HTML_LOGIN, erro="Senha Incorreta.")
-
-        ativo, dias = verificar_assinatura(e)
-        if not ativo:
-            return render_template_string(HTML_LOGIN, erro=f"Assinatura expirada (Dias: {dias}).")
-
-        session['user'] = e
-        USUARIOS_ONLINE[e] = time.time()
-        init_user_session(e)
-        return redirect('/')
-
-    return render_template_string(HTML_LOGIN)
-
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    if request.method == 'POST':
-        e = request.form.get('email', '').strip().lower()
-        s = request.form.get('password', '').strip()
-        
-        if not e or not s:
-            return render_template_string(HTML_REGISTER, erro="Preencha todos os campos.")
-            
-        try:
-            salvar_usuario(e, s)
-            session['user'] = e
-            USUARIOS_ONLINE[e] = time.time()
-            init_user_session(e)
-            return redirect('/')
-        except Exception as err:
-            return render_template_string(HTML_REGISTER, erro=f"Erro ao salvar: {err}")
-
-    return render_template_string(HTML_REGISTER)
-
-@app.route('/logout')
-def logout():
-    global QUEM_INICIOU_O_BOT
-    user = session.get('user')
-    if user in USUARIOS_ONLINE: del USUARIOS_ONLINE[user]
-    if user == QUEM_INICIOU_O_BOT: QUEM_INICIOU_O_BOT = None
-    session.clear()
-    return redirect('/login')
-
-@app.route('/termos')
-def termos():
-    return render_template_string(HTML_TERMOS)
-
-@app.route('/admin_panel')
-def admin_panel():
-    if session.get('user') != ADMIN_EMAIL: return abort(403)
-    now = time.time()
-    for u in list(USUARIOS_ONLINE.keys()):
-        if now - USUARIOS_ONLINE[u] > 60: del USUARIOS_ONLINE[u]
-    return render_template_string(HTML_ADM, lista=carregar_usuarios(), admin=ADMIN_EMAIL, online_count=len(USUARIOS_ONLINE), online_list=USUARIOS_ONLINE.keys())
-
-@app.route('/adm/renovar/<email>')
-def adm_renovar(email):
-    if session.get('user') != ADMIN_EMAIL: return abort(403)
-    renovar_usuario_db(email)
-    return redirect('/admin_panel')
-
-@app.route('/adm/editar', methods=['POST'])
-def adm_editar():
-    if session.get('user') != ADMIN_EMAIL: return abort(403)
-    original = request.form.get('email_original', '').strip().lower()
-    novo_email = request.form.get('novo_email', '').strip().lower()
-    nova_senha = request.form.get('nova_senha', '').strip()
-    
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        if nova_senha:
-            hash_senha = generate_password_hash(nova_senha)
-            cur.execute("UPDATE usuarios SET email = %s, senha = %s WHERE email = %s;", (novo_email, hash_senha, original))
-        else:
-            cur.execute("UPDATE usuarios SET email = %s WHERE email = %s;", (novo_email, original))
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        print(f"Erro Editar Admin: {e}")
-        
-    return redirect('/admin_panel')
-
-@app.route('/adm/excluir/<email>')
-def adm_excluir(email):
-    if session.get('user') != ADMIN_EMAIL: return abort(403)
-    excluir_usuario_db(email)
-    return redirect('/admin_panel')
-
-@app.route('/')
-def index():
-    if 'user' not in session: return redirect('/login')
-    user = session['user']
-    USUARIOS_ONLINE[user] = time.time()
-    init_user_session(user)
-    return render_template_string(HTML_INDEX, modo=TIPO_MERCADO, tf=TIMEFRAME_OPERACAO, estrat=ESTRATEGIA_ESCOLHIDA, user=user, admin=ADMIN_EMAIL)
-
-@app.route('/status')
-def status():
-    user = session.get('user')
-    if not user: return jsonify({})
-    USUARIOS_ONLINE[user] = time.time()
-    
-    usuarios = carregar_usuarios()
-    u_info = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
-    historico = buscar_historico_bd(user)
-    
-    return jsonify({
-        "html": ULTIMO_SINAL_GLOBAL, 
-        "aguardando": AG_RESULTADO, 
-        "wins": u_info.get("wins", 0),
-        "reds": u_info.get("reds", 0), 
-        "winrate": u_info.get("winrate", 0.0), 
-        "historico": historico,
-        "ativo_atual": ATIVO_ATUAL_GLOBAL,
-        "mercado": TIPO_MERCADO,
-        "rodando": BOT_INICIADO and not BOT_PAUSADO
-    })
-
-@app.route('/command/<cmd>')
-def command(cmd):
-    global BOT_INICIADO, BOT_PAUSADO, TIMEFRAME_OPERACAO, TIPO_MERCADO, QUEM_INICIOU_O_BOT, ULTIMO_SINAL_GLOBAL, AG_RESULTADO, ESTRATEGIA_ESCOLHIDA, ATIVO_ATUAL_GLOBAL
-    user = session.get('user')
-
-    if cmd == "start_bot":
-        QUEM_INICIOU_O_BOT = user
-        BOT_INICIADO = True
-        BOT_PAUSADO = False
-        AG_RESULTADO = False
-        ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>VARREDURA INICIADA</b><br><span style='color:#00f2fe;'>[VARREDURA DE ATIVOS EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
-        enviar_telegram(f"🚀 <b>SISTEMA VISION PRO V3 CONECTADO</b>\nSessão iniciada por {user}")
-        return jsonify({"ok": True})
-
-    elif cmd == "pause_bot":
-        BOT_PAUSADO = not BOT_PAUSADO
-        ULTIMO_SINAL_GLOBAL = "<div class='system-console' style='color:#f59e0b;'>[PAUSADO] VARREDURA EM PAUSA...</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA DE ATIVOS EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
-        return jsonify({"ok": True})
-
-    elif cmd == "stop_bot":
-        BOT_INICIADO = False
-        BOT_PAUSADO = True
-        ATIVO_ATUAL_GLOBAL = "DESCONECTADO"
-        ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
-        return jsonify({"ok": True, "redirect": "/login"})
-
-    elif cmd.startswith("tf_"): 
-        TIMEFRAME_OPERACAO = int(cmd.split('_')[1])
-    elif cmd.startswith("mkt_"): 
-        TIPO_MERCADO = cmd.split('_')[1]
-    elif cmd.startswith("set_est_"): 
-        ESTRATEGIA_ESCOLHIDA = cmd.replace("set_est_", "")
-    
-    return jsonify({"ok": True})
-
-@app.route('/resultado/<res>')
-def resultado(res):
-    global AG_RESULTADO, ULTIMO_SINAL_GLOBAL
-    user = session.get('user')
-    if user:
-        if res == 'win':
-            atualizar_estatisticas_usuario(user, True)
-            atualizar_ultimo_sinal_bd(user, "Win")
-            enviar_telegram("💎 <b>WIN DIRETO!</b>")
-        elif res == 'g1':
-            atualizar_estatisticas_usuario(user, True)
-            atualizar_ultimo_sinal_bd(user, "WinG1")
-            enviar_telegram("🔄 <b>WIN NO GALE 1!</b>")
-        elif res == 'red':
-            atualizar_estatisticas_usuario(user, False)
-            atualizar_ultimo_sinal_bd(user, "Red")
-            enviar_telegram("📉 <b>STOP LOSS / RED</b>")
-        elif res == 'pular':
-            atualizar_ultimo_sinal_bd(user, "Ignorado")
-
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA DE ATIVOS EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
-    AG_RESULTADO = False
-    return redirect('/')
-
 # ================= LOOP DO BOT =================
 def bot_loop():
     global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL
@@ -1025,8 +818,17 @@ def bot_loop():
             print(f"Erro Loop Bot: {e}")
             time.sleep(2)
 
-# Thread em background
-threading.Thread(target=bot_loop, daemon=True).start()
+thread_iniciada = False
+lock_thread = threading.Lock()
+
+@app.before_request
+def start_background_loop():
+    global thread_iniciada
+    if not thread_iniciada:
+        with lock_thread:
+            if not thread_iniciada:
+                threading.Thread(target=bot_loop, daemon=True).start()
+                thread_iniciada = True
 
 if __name__ == "__main__":
     app.run()
