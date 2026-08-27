@@ -348,6 +348,12 @@ HTML_INDEX = """
             <iframe id="brokerIframe" class="broker-iframe-inline" src=""></iframe>
         </div>
 
+        <!-- HUD DE VARREDURA EM TEMPO REAL -->
+        <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
+            MERCADO: <b id="mkt-badge" style="color: #00f2fe;">TODOS</b> | 
+            ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
+        </div>
+
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
 
         <div id="result-area" class="result-grid" style="display:none;">
@@ -452,6 +458,16 @@ HTML_INDEX = """
                 if(document.getElementById('wr-fill')) document.getElementById('wr-fill').style.width = data.winrate + "%";
                 if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
                 
+                // --- ATUALIZAÇÃO DO ATIVO EM TEMPO REAL ---
+                if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
+                if(document.getElementById('current-asset')) {
+                    if(data.rodando) {
+                        document.getElementById('current-asset').innerText = data.ativo_atual || "VARRENDO...";
+                    } else {
+                        document.getElementById('current-asset').innerText = "SISTEMA PAUSADO";
+                    }
+                }
+
                 let histHtml = "";
                 if(data.historico) {
                     data.historico.forEach(item => {
@@ -463,7 +479,7 @@ HTML_INDEX = """
                 }
                 if(document.getElementById('lista-sinais')) document.getElementById('lista-sinais').innerHTML = histHtml || "<div style='text-align:center; font-size:11px; color:#64748b;'>Nenhum sinal no histórico.</div>";
             });
-        }, 1500);
+        }, 1000);
     </script>
 </body>
 </html>
@@ -881,7 +897,10 @@ def status():
         "wins": u_info.get("wins", 0),
         "reds": u_info.get("reds", 0), 
         "winrate": u_info.get("winrate", 0.0), 
-        "historico": historico
+        "historico": historico,
+        "ativo_atual": ATIVO_ATUAL_GLOBAL,
+        "mercado": TIPO_MERCADO,
+        "rodando": BOT_INICIADO and not BOT_PAUSADO
     })
 
 @app.route('/command/<cmd>')
@@ -958,7 +977,7 @@ def bot_loop():
                     break
                     
                 ticker = MAPA_TICKERS.get(ativo, ativo)
-                ATIVO_ATUAL_GLOBAL = ticker
+                ATIVO_ATUAL_GLOBAL = ativo
                 
                 # Atualização visual da varredura
                 ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[SCANNER] PROCESSANDO VELAS E INDICADORES...</span></div><div class='tech-scanner'></div>"
