@@ -276,11 +276,16 @@ HTML_INDEX = """
         .winrate-bar { height: 6px; background: #1e293b; border-radius: 10px; overflow: hidden; margin-top: 14px; }
         .winrate-fill { height: 100%; background: linear-gradient(90deg, #059669, #10b981); width: 0%; transition: width 0.5s ease-in-out; }
 
-        #chart-wrapper { background: #0b1120; border-radius: 16px; border: 1px solid #1e293b; padding: 12px; margin-bottom: 16px; }
+        /* Área do Gráfico e Embed da Corretora */
+        #chart-wrapper { background: #0b1120; border-radius: 16px; border: 1px solid #1e293b; padding: 12px; margin-bottom: 16px; position: relative; }
         #chart-header { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 10px; }
         #chart-symbol { color: #cbd5e1; font-family: 'JetBrains Mono', monospace; }
         #chart-price { color: #10b981; font-family: 'JetBrains Mono', monospace; font-size: 15px; }
-        #chart-container { width: 100%; height: 210px; border-radius: 10px; overflow: hidden; }
+        #chart-container { width: 100%; height: 260px; border-radius: 10px; overflow: hidden; }
+        
+        #broker-view-container { display: none; width: 100%; height: 260px; border-radius: 10px; overflow: hidden; flex-direction: column; }
+        .broker-iframe-inline { width: 100%; height: 100%; border: none; background: #0b1120; }
+        .btn-close-broker { background: #1e293b; border: 1px solid #334155; color: #00f2fe; padding: 6px 12px; font-size: 11px; font-weight: 700; border-radius: 6px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: center; }
 
         .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 90px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
         
@@ -306,14 +311,9 @@ HTML_INDEX = """
         .btn-active { background: linear-gradient(135deg, #00c6ff, #0072ff) !important; color: #ffffff !important; border-color: #00f2fe !important; box-shadow: 0 0 12px rgba(0, 198, 255, 0.4); }
 
         /* Estilo dos Botões das Corretoras */
-        .broker-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+        .broker-grid { display: none; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; padding: 12px; background: #0b1120; border: 1px solid #1e293b; border-radius: 14px; }
         .btn-broker { border: 1px solid #1e293b; background: #0f172a; color: #fff; padding: 12px; border-radius: 12px; font-weight: 800; font-size: 12px; cursor: pointer; transition: 0.3s; display: flex; align-items: center; justify-content: center; gap: 8px; }
         .btn-broker:hover { transform: translateY(-2px); border-color: #00f2fe; box-shadow: 0 4px 15px rgba(0, 242, 254, 0.2); }
-        
-        /* Modal Corretora Embedded */
-        .broker-modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(6, 9, 19, 0.95); z-index: 9999; flex-direction: column; padding: 10px; }
-        .broker-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 15px; background: #0f172a; border-radius: 10px 10px 0 0; border: 1px solid #1e293b; }
-        .broker-iframe { width: 100%; height: 100%; border: 1px solid #1e293b; border-radius: 0 0 10px 10px; }
 
         .historico-box { display: none; background: #0b1120; border: 1px solid #1e293b; border-radius: 14px; padding: 12px; margin-bottom: 16px; }
         .historico-scroll { max-height: 160px; overflow-y: auto; }
@@ -349,12 +349,19 @@ HTML_INDEX = """
             <div class="winrate-bar"><div id="wr-fill" class="winrate-fill"></div></div>
         </div>
 
+        <!-- GRÁFICO / VISUALIZADOR DA CORRETORA INTEAGRADO -->
         <div id="chart-wrapper">
             <div id="chart-header">
                 <span id="chart-symbol">EURUSD</span>
                 <span id="chart-price">--.--</span>
             </div>
+            
             <div id="chart-container"></div>
+            
+            <div id="broker-view-container">
+                <button class="btn-close-broker" onclick="closeBrokerView()">📈 VOLTAR AO GRÁFICO TÉCNICO</button>
+                <iframe id="brokerIframe" class="broker-iframe-inline" src=""></iframe>
+            </div>
         </div>
 
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
@@ -366,16 +373,17 @@ HTML_INDEX = """
             <button class="btn-res btn-res-skip" onclick="fetch('/resultado/pular')">PULAR</button>
         </div>
 
-        <div class="section-label">PLATAFORMAS DE OPERAÇÃO</div>
-        <div class="broker-grid">
-            <button class="btn-broker" onclick="openBroker('https://qxbroker.com')">🌐 QUOTEX</button>
-            <button class="btn-broker" onclick="openBroker('https://iqoption.com')">📈 IQ OPTION</button>
-            <button class="btn-broker" onclick="openBroker('https://binomo.com')">🟡 BINOMO</button>
-            <button class="btn-broker" onclick="openBroker('https://pocketoption.com')">🟦 POCKET OPTION</button>
-        </div>
-
-        <div class="section-label">PAINEL DE CONTROLE DE BOT</div>
+        <!-- PAINEL DE CONTROLE DE BOT E RETRÁTIL DAS CORRETORAS -->
         <div class="menu-grid">
+            <button class="btn-menu" onclick="toggleSub('menu-brokers')" style="grid-column: span 2; border-color: rgba(0, 242, 254, 0.3);">🌐 PLATAFORMAS DE OPERAÇÃO (CORRETORAS)</button>
+            
+            <div id="menu-brokers" class="broker-grid" style="grid-column: span 2;">
+                <button class="btn-broker" onclick="openBroker('https://qxbroker.com')">🌐 QUOTEX</button>
+                <button class="btn-broker" onclick="openBroker('https://iqoption.com')">📈 IQ OPTION</button>
+                <button class="btn-broker" onclick="openBroker('https://binomo.com')">🟡 BINOMO</button>
+                <button class="btn-broker" onclick="openBroker('https://pocketoption.com')">🟦 POCKET OPTION</button>
+            </div>
+
             <button class="btn-menu" onclick="toggleSub('menu-inicio')">⚡ SISTEMA BOT</button>
             <button class="btn-menu" onclick="toggleSub('menu-historico')">📊 HISTÓRICO</button>
             <button class="btn-menu" onclick="toggleSub('menu-mercado')">🌐 MERCADO</button>
@@ -417,15 +425,6 @@ HTML_INDEX = """
         </div>
     </div>
 
-    <!-- MODAL CORRETORA EMBEDDED -->
-    <div id="brokerModal" class="broker-modal">
-        <div class="broker-modal-header">
-            <span style="font-weight: bold; color: #00f2fe; font-size: 13px;" id="brokerTitle">PLATAFORMA DA CORRETORA</span>
-            <button onclick="closeBroker()" style="background: #ef4444; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: bold;">FECHAR ✖</button>
-        </div>
-        <iframe id="brokerIframe" class="broker-iframe" src=""></iframe>
-    </div>
-
     <script>
         const chartElement = document.getElementById('chart-container');
         const chart = LightweightCharts.createChart(chartElement, {
@@ -451,17 +450,22 @@ HTML_INDEX = """
         setInterval(updateChart, 10000);
 
         function openBroker(url) {
+            document.getElementById('chart-container').style.display = 'none';
+            const brokerContainer = document.getElementById('broker-view-container');
             document.getElementById('brokerIframe').src = url;
-            document.getElementById('brokerModal').style.display = 'flex';
+            brokerContainer.style.display = 'flex';
+            // Oculta as corretoras novamente após escolher uma
+            document.getElementById('menu-brokers').style.display = 'none';
         }
 
-        function closeBroker() {
-            document.getElementById('brokerModal').style.display = 'none';
+        function closeBrokerView() {
+            document.getElementById('broker-view-container').style.display = 'none';
             document.getElementById('brokerIframe').src = '';
+            document.getElementById('chart-container').style.display = 'block';
         }
 
         function toggleSub(id) {
-            ['menu-inicio', 'menu-mercado', 'menu-times', 'menu-historico', 'menu-estrategias'].forEach(m => {
+            ['menu-inicio', 'menu-mercado', 'menu-times', 'menu-historico', 'menu-estrategias', 'menu-brokers'].forEach(m => {
                 const el = document.getElementById(m);
                 if(el) el.style.display = (m === id && el.style.display !== 'grid' && el.style.display !== 'block') ? (id === 'menu-historico' ? 'block' : 'grid') : 'none';
             });
