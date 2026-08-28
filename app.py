@@ -10,7 +10,7 @@ import os
 import logging
 import numpy as np
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, render_template_string, request, jsonify, session, redirect, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 import psycopg2
@@ -54,13 +54,19 @@ def enviar_telegram(mensagem, auto_delete=None):
         print(f"Erro Telegram: {e}")
         return None
 
-def deletar_mensagem_atrasada(msg_id, delay):
-    if delay > 0: time.sleep(delay)
+def deletar_mensagem_telegram(msg_id):
+    if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM or not msg_id:
+        return
     try:
         url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/deleteMessage"
         payload = {"chat_id": CHAT_ID_TELEGRAM, "message_id": msg_id}
         requests.post(url, json=payload, timeout=5)
-    except: pass
+    except Exception as e:
+        print(f"Erro ao deletar mensagem: {e}")
+
+def deletar_mensagem_atrasada(msg_id, delay):
+    if delay > 0: time.sleep(delay)
+    deletar_mensagem_telegram(msg_id)
 
 # ================= SERVIDOR FLASK =================
 APP_SECRET = os.getenv("FLASK_SECRET", "chave_secreta_vision_pro_ultra_premium_v3_security")
@@ -1020,54 +1026,169 @@ def resultado(res):
 # ================= LOOP DO BOT =================
 def bot_loop():
     global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL
+    
+    pre_alerta_enviado = False
+    msg_pre_alerta_id = None
+    ativo_alerta = None
+    estrategia_alerta = None
+    sinal_alerta = None
+
     while BOT_RODANDO:
         try:
             if not BOT_INICIADO or BOT_PAUSADO or AG_RESULTADO:
                 time.sleep(1)
                 continue
 
+            agora = datetime.now()
+            segundos_atuais = agora.second
+            minutos_atuais = agora.minute
+
+            # Calcula os segundos restantes para o fechamento da vela atual do timeframe
+            segundos_restantes_vela = (TIMEFRAME_OPERACAO * 60) - ((minutos_atuais % TIMEFRAME_OPERACAO) * 60 + segundos_atuais)
+
             if TIPO_MERCADO == "TODOS":
                 ativos = ATIVOS_BASE["FOREX"] + ATIVOS_BASE["CRIPTO"]
             else:
                 ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX"])
-            
-            for ativo in ativos:
-                if not BOT_INICIADO or BOT_PAUSADO or AG_RESULTADO:
-                    break
-                    
-                ticker = MAPA_TICKERS.get(ativo, ativo)
-                ATIVO_ATUAL_GLOBAL = ativo
-                
-                # Exibe dinamicamente no painel central o ativo sendo varrido e o spinner
-                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 VARRENDO ATIVO: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#38ef7d;'>[VARREDURA EM TEMPO REAL YAHOO FINANCE]</span></div><div class='tech-scanner'></div>"
-                
-                data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
-                if not data:
-                    time.sleep(0.4)
-                    continue
 
-                sinal = None
-                if ESTRATEGIA_ESCOLHIDA == "TODAS":
-                    for est_nome in LISTA_ESTRATEGIAS:
-                        sinal = analisar_estrategia(data, est_nome)
-                        if sinal: break
-                else:
-                    sinal = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
+            # ---------------- 1. ETAPA DE PRÉ-ALERTA (Aproximadamente 30s Antes) ----------------
+            if 25 <= segundos_restantes_vela <= 35 and not pre_alerta_enviado:
+                for ativo in ativos:
+                    if not BOT_INICIADO or BOT_PAUSADO or AG_RESULTADO:
+                        break
 
-                if sinal:
-                    dir_txt = "COMPRA ⬆️" if sinal == "CALL" else "VENDA ⬇️"
-                    ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>🎯 <b style='color:#00f2fe; font-size:16px;'>SINAL CONFIRMADO!</b><br><span style='font-size:18px; font-weight:800; color:#fff;'>{ativo}</span><br>Entrada: <b style='color:#38ef7d;'>{dir_txt}</b></div>"
+                    ticker = MAPA_TICKERS.get(ativo, ativo)
+                    ATIVO_ATUAL_GLOBAL = ativo
                     
-                    for u in list(USUARIOS_ONLINE.keys()):
-                        registrar_sinal_bd(u, f"{ativo} (M{TIMEFRAME_OPERACAO})")
+                    ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO PRÉ-ALERTA: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#f59e0b;'>[BUSCANDO PADRÃO DE ANTECIPAÇÃO]</span></div><div class='tech-scanner'></div>"
+
+                    data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
+                    if not data:
+                        time.sleep(0.2)
+                        continue
+
+                    sinal_encontrado = None
+                    est_nome_encontrada = ESTRATEGIA_ESCOLHIDA
+
+                    if ESTRATEGIA_ESCOLHIDA == "TODAS":
+                        for est_nome in LISTA_ESTRATEGIAS:
+                            sinal_encontrado = analisar_estrategia(data, est_nome)
+                            if sinal_encontrado:
+                                est_nome_encontrada = est_nome
+                                break
+                    else:
+                        sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
+
+                    if sinal_encontrado:
+                        ativo_alerta = ativo
+                        estrategia_alerta = est_nome_encontrada
+                        sinal_alerta = sinal_encontrado
                         
-                    enviar_telegram(f"🎯 <b>SINAL CONFIRMADO</b>\n\n📈 Ativo: {ativo}\n🕒 Timeframe: M{TIMEFRAME_OPERACAO}\n↕️ Direção: {dir_txt}")
-                    AG_RESULTADO = True
-                    break
-                
-                time.sleep(0.6)
+                        msg_pre_alerta = (
+                            f"⚠️ <b>PRÉ-ALERTA DE ENTRADA</b> ⚠️\n\n"
+                            f"📊 <b>Ativo:</b> {ativo}\n"
+                            f"⏱️ <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
+                            f"🧠 <b>Estratégia:</b> {est_nome_encontrada}\n\n"
+                            f"⏳ <i>Fique atento ao gráfico! Validação em breve...</i>"
+                        )
+                        msg_pre_alerta_id = enviar_telegram(msg_pre_alerta)
+                        pre_alerta_enviado = True
+                        
+                        ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>⚠️ <b style='color:#f59e0b; font-size:16px;'>PRÉ-ALERTA ENVIADO!</b><br><span style='font-size:16px; font-weight:800; color:#fff;'>{ativo}</span><br>Aguardando confirmação...</div>"
+                        break
+                    
+                    time.sleep(0.2)
+
+            # ---------------- 2. ETAPA DE CONFIRMAÇÃO DO SINAL (Na virada da vela) ----------------
+            if segundos_restantes_vela <= 3 or segundos_restantes_vela >= (TIMEFRAME_OPERACAO * 60 - 2):
+                if pre_alerta_enviado and ativo_alerta:
+                    ticker = MAPA_TICKERS.get(ativo_alerta, ativo_alerta)
+                    data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
+
+                    if data:
+                        sinal_confirmado = analisar_estrategia(data, estrategia_alerta)
+                        
+                        if sinal_confirmado:
+                            # Apaga a mensagem de pré-alerta enviada previamente
+                            if msg_pre_alerta_id:
+                                deletar_mensagem_telegram(msg_pre_alerta_id)
+
+                            # Cálculo exato de horários de Entrada e Saída
+                            horario_entrada = datetime.now()
+                            # Ajusta para o próximo minuto redondo se necessário
+                            if horario_entrada.second >= 50:
+                                horario_entrada = horario_entrada + timedelta(seconds=(60 - horario_entrada.second))
+                            
+                            horario_saida = horario_entrada + timedelta(minutes=TIMEFRAME_OPERACAO)
+                            
+                            str_entrada = horario_entrada.strftime("%H:%M")
+                            str_saida = horario_saida.strftime("%H:%M")
+
+                            if sinal_confirmado == "CALL":
+                                dir_texto = "COMPRA"
+                                cor_html = "#10b981"
+                                emoji_dir = "🟢 ⬆️"
+                            else:
+                                dir_texto = "VENDA"
+                                cor_html = "#ef4444"
+                                emoji_dir = "🔴 ⬇️"
+
+                            # Mensagem no formato solicitado
+                            msg_confirmada = (
+                                f"<b>Sinal confirmado</b>\n"
+                                f"<b>Ativo :</b> {ativo_alerta}\n"
+                                f"<b>Entrada :</b> {str_entrada}\n"
+                                f"<b>Saída :</b> {str_saida}\n"
+                                f"<b>Estratégia :</b> {estrategia_alerta}\n"
+                                f"<b>Direção :</b> <a href='#'>{emoji_dir} {dir_texto}</a>"
+                            )
+
+                            if sinal_confirmado == "CALL":
+                                msg_telegram = (
+                                    f"✅ <b>Sinal confirmado</b>\n\n"
+                                    f"<b>Ativo :</b> {ativo_alerta}\n"
+                                    f"<b>Entrada :</b> {str_entrada}\n"
+                                    f"<b>Saída :</b> {str_saida}\n"
+                                    f"<b>Estratégia :</b> {estrategia_alerta}\n"
+                                    f"<b>Direção :</b> 🟢 <b>COMPRA</b>"
+                                )
+                            else:
+                                msg_telegram = (
+                                    f"✅ <b>Sinal confirmado</b>\n\n"
+                                    f"<b>Ativo :</b> {ativo_alerta}\n"
+                                    f"<b>Entrada :</b> {str_entrada}\n"
+                                    f"<b>Saída :</b> {str_saida}\n"
+                                    f"<b>Estratégia :</b> {estrategia_alerta}\n"
+                                    f"<b>Direção :</b> 🔴 <b>VENDA</b>"
+                                )
+
+                            ULTIMO_SINAL_GLOBAL = (
+                                f"<div style='text-align:center; font-family: sans-serif;'>"
+                                f"🎯 <b style='color:#00f2fe; font-size:16px;'>Sinal confirmado</b><br>"
+                                f"<b>Ativo :</b> <span style='font-weight:800; color:#fff;'>{ativo_alerta}</span><br>"
+                                f"<b>Entrada :</b> {str_entrada}<br>"
+                                f"<b>Saída :</b> {str_saida}<br>"
+                                f"<b>Estratégia :</b> {estrategia_alerta}<br>"
+                                f"<b>Direção :</b> <b style='color:{cor_html}; font-size:16px;'>{dir_texto}</b>"
+                                f"</div>"
+                            )
+
+                            for u in list(USUARIOS_ONLINE.keys()):
+                                registrar_sinal_bd(u, f"{ativo_alerta} (M{TIMEFRAME_OPERACAO})")
+
+                            enviar_telegram(msg_telegram)
+                            AG_RESULTADO = True
+
+                # Reset de variáveis após a virada de vela
+                pre_alerta_enviado = False
+                msg_pre_alerta_id = None
+                ativo_alerta = None
+                estrategia_alerta = None
+                sinal_alerta = None
+
             time.sleep(0.5)
-        except Exception as e: 
+
+        except Exception as e:
             print(f"Erro Loop Bot: {e}")
             time.sleep(2)
 
