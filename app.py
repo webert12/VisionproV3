@@ -297,7 +297,6 @@ HTML_INDEX = """
         .btn-res-red { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 12px rgba(239,68,68,0.3); }
         .btn-res-skip { background: #334155; box-shadow: 0 4px 12px rgba(51,65,85,0.3); }
 
-        /* NOVO DESIGN DO PAINEL DE CONTROLE (DROPDOWNS E FLEX) */
         .control-panel { background: #0b1120; border: 1px solid #1e293b; border-radius: 16px; padding: 15px; margin-bottom: 16px; }
         .section-label { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 10px; letter-spacing: 1px; display: block; border-bottom: 1px solid #1e293b; padding-bottom: 5px;}
         
@@ -322,7 +321,10 @@ HTML_INDEX = """
         .btn-broker { min-width: 100px; flex: 1; border: 1px solid #1e293b; background: #0f172a; color: #cbd5e1; padding: 10px; border-radius: 8px; font-weight: 700; font-size: 11px; cursor: pointer; transition: 0.3s; text-align: center; white-space: nowrap;}
         .btn-broker:hover { color: #fff; border-color: #00f2fe; background: #1e293b; }
 
-        .historico-box { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; margin-top: 15px; }
+        .btn-toggle-hist { width: 100%; padding: 10px; background: rgba(0, 242, 254, 0.08); border: 1px dashed #00f2fe; color: #00f2fe; border-radius: 8px; font-weight: bold; font-size: 11px; cursor: pointer; margin-top: 10px; transition: 0.3s; }
+        .btn-toggle-hist:hover { background: rgba(0, 242, 254, 0.2); }
+
+        .historico-box { display: none; background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; margin-top: 10px; }
         .historico-scroll { max-height: 140px; overflow-y: auto; }
         .historico-item { font-size: 11px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; font-family: 'JetBrains Mono', monospace; }
         .historico-item:last-child { border-bottom: none; }
@@ -436,8 +438,10 @@ HTML_INDEX = """
             <button onclick="location.href='/admin_panel'" style="width:100%; margin-top:15px; padding:12px; background:rgba(0,242,254,0.1); border:1px solid #00f2fe; color:#00f2fe; font-weight:bold; border-radius:10px; cursor:pointer;">🛡️ ABRIR PAINEL ADMINISTRATIVO</button>
             {% endif %}
 
-            <div class="historico-box">
-                <span class="section-label">Histórico de Sinais</span>
+            <button class="btn-toggle-hist" onclick="toggleHistorico()">👁️ EXIBIR HISTÓRICO PASSADO</button>
+
+            <div class="historico-box" id="box-historico">
+                <span class="section-label">Histórico de Sinais Salvo</span>
                 <div class="historico-scroll" id="lista-sinais"></div>
             </div>
         </div>
@@ -456,6 +460,15 @@ HTML_INDEX = """
             document.getElementById('brokerIframe').src = '';
         }
 
+        function toggleHistorico() {
+            const box = document.getElementById('box-historico');
+            if (box.style.display === 'block') {
+                box.style.display = 'none';
+            } else {
+                box.style.display = 'block';
+            }
+        }
+
         function sendCommand(cmd) {
             fetch('/command/' + cmd).then(r => r.json()).then(data => {
                 if(data.redirect) window.location.href = data.redirect;
@@ -472,7 +485,6 @@ HTML_INDEX = """
                 if(document.getElementById('wr-fill')) document.getElementById('wr-fill').style.width = data.winrate + "%";
                 if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
                 
-                // --- ATUALIZAÇÃO DO ATIVO EM TEMPO REAL ---
                 if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
                 if(document.getElementById('current-asset')) {
                     if(data.rodando) {
@@ -567,6 +579,23 @@ def atualizar_estatisticas_usuario(email, is_win):
     except Exception as e:
         print(f"Erro Banco (atualizar_estatisticas): {e}")
 
+def zerar_estatisticas_usuario(email):
+    """Zera totalmente placar e estatísticas ao acionar STOP."""
+    try:
+        email_clean = email.strip().lower()
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE usuarios 
+            SET wins = 0, reds = 0, winrate = 0.0 
+            WHERE email = %s;
+        """, (email_clean,))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Erro Banco (zerar_estatisticas): {e}")
+
 def renovar_usuario_db(email):
     try:
         hoje = datetime.now().strftime("%Y-%m-%d")
@@ -641,7 +670,7 @@ def buscar_historico_bd(email):
             SELECT id, sinal, resultado 
             FROM historico_sinais 
             WHERE user_email = %s 
-            ORDER BY id DESC LIMIT 10;
+            ORDER BY id DESC LIMIT 20;
         """, (email.strip().lower(),))
         res = cur.fetchall()
         cur.close()
@@ -687,26 +716,36 @@ BOT_RODANDO = True
 BOT_PAUSADO = True
 BOT_INICIADO = False
 
-# TRAVAS DE ESTADO DE ENVIO DE SINAIS
 AG_RESULTADO = False
-AGUARDANDO_CONFIRMACAO_RESULTADO = False  # Trava estrita para evitar sinais seguidos sem validação
+AGUARDANDO_CONFIRMACAO_RESULTADO = False
 
 ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
 SINAL_DISPLAY_PERMANENTE = None
 ATIVO_ATUAL_GLOBAL = "AGUARDANDO..."
 
+# ================= ATIVOS EXPANSAO TOTAL (FOREX + CRIPTO) =================
 ATIVOS_BASE = {
-    "FOREX": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "EURJPY", "USDCAD", "USDCHF", "GBPJPY"],
-    "CRIPTO": ["BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "ADAUSD", "AVAXUSD", "LINKUSD", "DOGEUSD"]
+    "FOREX": [
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
+        "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCAD", "EURCHF",
+        "GBPAUD", "GBPCAD", "GBPCHF", "AUDCAD", "AUDCHF", "CADJPY", "CHFJPY",
+        "NZDJPY", "NZDCAD", "NZDCHF", "AUDNZD", "EURNZD", "GBPNZD", "USDMXN",
+        "USDTRY", "USDZAR", "USDSEK", "USDNOK", "USDSGD", "USDHKD"
+    ],
+    "CRIPTO": [
+        "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "ADAUSD", "AVAXUSD",
+        "LINKUSD", "DOGEUSD", "DOTUSD", "MATICUSD", "LTCUSD", "SHIBUSD", "TRXUSD",
+        "NEARUSD", "ATOMUSD", "UNIUSD", "ETCUSD", "XLMUSD", "BCHUSD", "ALGOUSD",
+        "ICPUSD", "FILUSD", "APTUSD", "ARBITRUMUSD", "OPUSD", "INJUSD", "SUIUSD"
+    ]
 }
 
 MAPA_TICKERS = {}
 for par in ATIVOS_BASE["FOREX"]: MAPA_TICKERS[par] = f"{par}=X"
 for par in ATIVOS_BASE["CRIPTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
 
-# ================= MOTOR DE ANÁLISE PROFUNDA E PROFISSIONAL =================
+# ================= MOTOR DE ANÁLISE PROFUNDA =================
 def get_data_v2(ticker, tf, period='5d'):
-    """Requisição resiliente ao Yahoo Finance."""
     try:
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval={tf}m&range={period}"
         headers = {
@@ -739,7 +778,7 @@ def get_data_v2(ticker, tf, period='5d'):
         for k in ohlc: 
             ohlc[k] = ohlc[k][idx]
             
-        if len(ohlc["close"]) < 50: # Exige dados suficientes para Médias de longo prazo
+        if len(ohlc["close"]) < 50:
             return None
             
         return ohlc
@@ -747,7 +786,6 @@ def get_data_v2(ticker, tf, period='5d'):
         return None
 
 def calcular_ema(dados, periodo):
-    """Calcula a Média Móvel Exponencial (EMA)."""
     ema = np.zeros_like(dados)
     multiplicador = 2 / (periodo + 1)
     ema[periodo-1] = np.mean(dados[:periodo])
@@ -756,26 +794,20 @@ def calcular_ema(dados, periodo):
     return ema
 
 def validar_analise_profunda(data, direcao, i=-1):
-    """
-    Filtro de Análise Profunda Profissional: 
-    Evita entradas aleatórias validando Confluência Macro (Tendência EMA50 + Momentum + Volatilidade).
-    """
     c = data["close"]
     if len(c) < 50: return False
 
     ema50 = calcular_ema(c, 50)
     
-    # Validação de Tendência Macro de Fundo
     if direcao == "CALL" and c[i] < ema50[i]:
-        return False  # Cancela compra contra a tendência macro de queda
+        return False
     if direcao == "PUT" and c[i] > ema50[i]:
-        return False  # Cancela venda contra a tendência macro de alta
+        return False
 
-    # Validação de Volatilidade (Evita mercado lateral/consolidação sem volume)
     atr = np.mean(data["high"][i-14:i] - data["low"][i-14:i])
     corpo_atual = abs(c[i] - data["open"][i])
     if corpo_atual < (atr * 0.25):
-        return False  # Descarte de doji / velas sem expressão
+        return False
 
     return True
 
@@ -785,7 +817,6 @@ def analisar_estrategia(data, estrategia, i=-1):
     if len(c) < 50: return None
     sinal = None
 
-    # ESTRATÉGIA 1: LÓGICA DO PREÇO (COM FILTRO AVANÇADO DE REJEIÇÃO)
     if estrategia == "LOGICA_DO_PRECO":
         cor = "G" if c[i] > o[i] else "R"
         tamanho = abs(c[i] - o[i])
@@ -798,11 +829,9 @@ def analisar_estrategia(data, estrategia, i=-1):
         elif p_inf > (tamanho * 2.2): sinal = "CALL"
         elif p_sup > (tamanho * 2.2): sinal = "PUT"
 
-    # ESTRATÉGIA 2: RSI + MACD REAL + MA
     elif estrategia == "RSI_MACD_MA":
         ma = np.mean(c[i-20:i])
         
-        # RSI 14
         diff = np.diff(c[i-15:i])
         up = diff[diff>0]
         down = diff[diff<0]
@@ -811,7 +840,6 @@ def analisar_estrategia(data, estrategia, i=-1):
         rs = avg_up / avg_down if avg_down != 0 else 0
         rsi = 100 - (100 / (1 + rs))
         
-        # MACD (12, 26, 9)
         ema12 = calcular_ema(c, 12)
         ema26 = calcular_ema(c, 26)
         macd_line = ema12 - ema26
@@ -823,7 +851,6 @@ def analisar_estrategia(data, estrategia, i=-1):
         if c[i] > ma and rsi < 48 and macd_cruza_cima: sinal = "CALL"
         if c[i] < ma and rsi > 52 and macd_cruza_baixo: sinal = "PUT"
 
-    # ESTRATÉGIA 3: MHI 1 (COM FILTRO DE TENDÊNCIA MA20)
     elif estrategia == "MHI1":
         ma20 = np.mean(c[i-20:i])
         tendencia_alta = c[i] > ma20
@@ -833,14 +860,12 @@ def analisar_estrategia(data, estrategia, i=-1):
         if cores.count("G") > cores.count("R") and tendencia_baixa: sinal = "PUT"
         if cores.count("R") > cores.count("G") and tendencia_alta: sinal = "CALL"
 
-    # ESTRATÉGIA 4: REVERSÃO DE BANDAS DE BOLLINGER
     elif estrategia in ["REVERSAO", "RETRACAO"]:
         std = np.std(c[i-20:i])
         ma = np.mean(c[i-20:i])
         if c[i] < (ma - 2.1 * std): sinal = "CALL"
         if c[i] > (ma + 2.1 * std): sinal = "PUT"
 
-    # APLICA O FILTRO DE CONFLUÊNCIA DE ANÁLISE PROFUNDA ANTES DE CONFIRMAR
     if sinal and validar_analise_profunda(data, sinal, i):
         return sinal
 
@@ -981,7 +1006,6 @@ def status():
     u_info = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
     historico = buscar_historico_bd(user)
     
-    # Exibe o sinal travado em tela enquanto aguarda a confirmação do usuário
     display_texto = SINAL_DISPLAY_PERMANENTE if (AGUARDANDO_CONFIRMACAO_RESULTADO and SINAL_DISPLAY_PERMANENTE) else ULTIMO_SINAL_GLOBAL
 
     return jsonify({
@@ -1019,13 +1043,21 @@ def command(cmd):
         return jsonify({"ok": True})
 
     elif cmd == "stop_bot":
+        # RESET COMPLETO DO SISTEMA
         BOT_INICIADO = False
         BOT_PAUSADO = True
+        AG_RESULTADO = False
         AGUARDANDO_CONFIRMACAO_RESULTADO = False
         SINAL_DISPLAY_PERMANENTE = None
         ATIVO_ATUAL_GLOBAL = "DESCONECTADO"
         ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
-        return jsonify({"ok": True, "redirect": "/login"})
+        
+        # Zerar pontuação de Wins/Losses
+        if user:
+            zerar_estatisticas_usuario(user)
+
+        enviar_telegram("🔴 <b>ROBÔ ENCERRADO E SISTEMA LIMPO COM SUCESSO!</b>")
+        return jsonify({"ok": True})
 
     elif cmd.startswith("tf_"): 
         TIMEFRAME_OPERACAO = int(cmd.split('_')[1])
@@ -1056,7 +1088,6 @@ def resultado(res):
         elif res == 'pular':
             atualizar_ultimo_sinal_bd(user, "Ignorado")
 
-        # Libera o bot para enviar novos sinais no Telegram após a sua confirmação do resultado
         AGUARDANDO_CONFIRMACAO_RESULTADO = False
         SINAL_DISPLAY_PERMANENTE = None
         
@@ -1065,7 +1096,7 @@ def resultado(res):
     AG_RESULTADO = False
     return redirect('/')
 
-# ================= LOOP PRINCIPAL DO BOT (VARREDURA CONTÍNUA E MODO SUSPENSO) =================
+# ================= LOOP PRINCIPAL DO BOT =================
 def bot_loop():
     global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE
     
@@ -1077,8 +1108,6 @@ def bot_loop():
 
     while BOT_RODANDO:
         try:
-            # O robô SÓ para completamente se for desligado/pausado.
-            # Se tiver sinal aguardando confirmação (AGUARDANDO_CONFIRMACAO_RESULTADO), ele NÃO PARA de analisar.
             if not BOT_INICIADO or BOT_PAUSADO:
                 time.sleep(1)
                 continue
@@ -1094,7 +1123,7 @@ def bot_loop():
             else:
                 ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX"])
 
-            # ---------------- 1. ETAPA DE PRÉ-ALERTA (Análise e Antecipação) ----------------
+            # 1. PRÉ-ALERTA
             if 25 <= segundos_restantes_vela <= 35 and not pre_alerta_enviado:
                 for ativo in ativos:
                     if not BOT_INICIADO or BOT_PAUSADO:
@@ -1123,13 +1152,11 @@ def bot_loop():
                     else:
                         sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
 
-                    # Se achou sinal, salva os dados.
                     if sinal_encontrado:
                         ativo_alerta = ativo
                         estrategia_alerta = est_nome_encontrada
                         sinal_alerta = sinal_encontrado
                         
-                        # SÓ envia o pré-alerta no Telegram se NÃO estiver aguardando confirmação do sinal anterior
                         if not AGUARDANDO_CONFIRMACAO_RESULTADO:
                             msg_pre_alerta = (
                                 f"⚠️ <b>PRÉ-ALERTA DE ENTRADA</b> ⚠️\n\n"
@@ -1146,7 +1173,7 @@ def bot_loop():
                     
                     time.sleep(0.1)
 
-            # ---------------- 2. ETAPA DE CONFIRMAÇÃO DO SINAL (Virada da Vela) ----------------
+            # 2. CONFIRMAÇÃO DO SINAL
             if segundos_restantes_vela <= 3 or segundos_restantes_vela >= (TIMEFRAME_OPERACAO * 60 - 2):
                 if pre_alerta_enviado and ativo_alerta:
                     ticker = MAPA_TICKERS.get(ativo_alerta, ativo_alerta)
@@ -1155,10 +1182,7 @@ def bot_loop():
                     if data:
                         sinal_confirmado = analisar_estrategia(data, estrategia_alerta)
                         
-                        # Se a Análise Profunda reconfirmar o sinal na virada da vela
                         if sinal_confirmado:
-                            # SE O USUÁRIO AINDA NÃO CONFIRMOU O WIN/RED ANTERIOR:
-                            # O bot CONTINUA analisando o mercado em modo suspenso, mas DESPORTA o envio deste novo sinal!
                             if not AGUARDANDO_CONFIRMACAO_RESULTADO:
                                 if msg_pre_alerta_id:
                                     deletar_mensagem_telegram(msg_pre_alerta_id)
@@ -1174,7 +1198,6 @@ def bot_loop():
                                 if sinal_confirmado == "CALL":
                                     dir_texto = "COMPRA"
                                     cor_html = "#10b981"
-                                    emoji_dir = "🟢 ⬆️"
                                     msg_telegram = (
                                         f"✅ <b>Sinal confirmado</b>\n\n"
                                         f"<b>Ativo :</b> {ativo_alerta}\n"
@@ -1186,7 +1209,6 @@ def bot_loop():
                                 else:
                                     dir_texto = "VENDA"
                                     cor_html = "#ef4444"
-                                    emoji_dir = "🔴 ⬇️"
                                     msg_telegram = (
                                         f"✅ <b>Sinal confirmado</b>\n\n"
                                         f"<b>Ativo :</b> {ativo_alerta}\n"
@@ -1213,11 +1235,9 @@ def bot_loop():
 
                                 enviar_telegram(msg_telegram)
                                 
-                                # ATIVA A TRAVA: Impede envio de novo sinal até que você confirme Win/G1/Red no painel
                                 AGUARDANDO_CONFIRMACAO_RESULTADO = True
                                 AG_RESULTADO = True
 
-                # Reset de ciclo de alerta após a virada da vela
                 pre_alerta_enviado = False
                 msg_pre_alerta_id = None
                 ativo_alerta = None
