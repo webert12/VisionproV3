@@ -1043,7 +1043,6 @@ def command(cmd):
         return jsonify({"ok": True})
 
     elif cmd == "stop_bot":
-        # RESET COMPLETO DO SISTEMA
         BOT_INICIADO = False
         BOT_PAUSADO = True
         AG_RESULTADO = False
@@ -1052,7 +1051,6 @@ def command(cmd):
         ATIVO_ATUAL_GLOBAL = "DESCONECTADO"
         ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
         
-        # Zerar pontuação de Wins/Losses
         if user:
             zerar_estatisticas_usuario(user)
 
@@ -1096,7 +1094,7 @@ def resultado(res):
     AG_RESULTADO = False
     return redirect('/')
 
-# ================= LOOP PRINCIPAL DO BOT =================
+# ================= LOOP PRINCIPAL DO BOT (CORRIGIDO) =================
 def bot_loop():
     global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE
     
@@ -1112,73 +1110,65 @@ def bot_loop():
                 time.sleep(1)
                 continue
 
-            agora = datetime.now()
-            segundos_atuais = agora.second
-            minutos_atuais = agora.minute
-
-            segundos_restantes_vela = (TIMEFRAME_OPERACAO * 60) - ((minutos_atuais % TIMEFRAME_OPERACAO) * 60 + segundos_atuais)
-
+            # SELEÇÃO DINÂMICA DE ATIVOS
             if TIPO_MERCADO == "TODOS":
                 ativos = ATIVOS_BASE["FOREX"] + ATIVOS_BASE["CRIPTO"]
             else:
                 ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX"])
 
-            # 1. PRÉ-ALERTA
-            if 25 <= segundos_restantes_vela <= 35 and not pre_alerta_enviado:
-                for ativo in ativos:
-                    if not BOT_INICIADO or BOT_PAUSADO:
-                        break
+            # VARREDURA CONTÍNUA DOS ATIVOS (Aparece no painel em tempo real)
+            for ativo in ativos:
+                if not BOT_INICIADO or BOT_PAUSADO:
+                    break
 
-                    ticker = MAPA_TICKERS.get(ativo, ativo)
-                    ATIVO_ATUAL_GLOBAL = ativo
-                    
-                    if not AGUARDANDO_CONFIRMACAO_RESULTADO:
-                        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO PRÉ-ALERTA: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#f59e0b;'>[ANÁLISE DE CONFLUÊNCIA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+                ATIVO_ATUAL_GLOBAL = ativo
+                ticker = MAPA_TICKERS.get(ativo, ativo)
 
+                if not AGUARDANDO_CONFIRMACAO_RESULTADO and not pre_alerta_enviado:
+                    ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+
+                agora = datetime.now()
+                segundos_atuais = agora.second
+                minutos_atuais = agora.minute
+                segundos_restantes_vela = (TIMEFRAME_OPERACAO * 60) - ((minutos_atuais % TIMEFRAME_OPERACAO) * 60 + segundos_atuais)
+
+                # 1. VERIFICAÇÃO DE PRÉ-ALERTA
+                if 25 <= segundos_restantes_vela <= 35 and not pre_alerta_enviado:
                     data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
-                    if not data:
-                        time.sleep(0.1)
-                        continue
+                    if data:
+                        sinal_encontrado = None
+                        est_nome_encontrada = ESTRATEGIA_ESCOLHIDA
 
-                    sinal_encontrado = None
-                    est_nome_encontrada = ESTRATEGIA_ESCOLHIDA
+                        if ESTRATEGIA_ESCOLHIDA == "TODAS":
+                            for est_nome in LISTA_ESTRATEGIAS:
+                                sinal_encontrado = analisar_estrategia(data, est_nome)
+                                if sinal_encontrado:
+                                    est_nome_encontrada = est_nome
+                                    break
+                        else:
+                            sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
 
-                    if ESTRATEGIA_ESCOLHIDA == "TODAS":
-                        for est_nome in LISTA_ESTRATEGIAS:
-                            sinal_encontrado = analisar_estrategia(data, est_nome)
-                            if sinal_encontrado:
-                                est_nome_encontrada = est_nome
-                                break
-                    else:
-                        sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
+                        if sinal_encontrado:
+                            ativo_alerta = ativo
+                            estrategia_alerta = est_nome_encontrada
+                            sinal_alerta = sinal_encontrado
+                            
+                            if not AGUARDANDO_CONFIRMACAO_RESULTADO:
+                                msg_pre_alerta = (
+                                    f"⚠️ <b>PRÉ-ALERTA DE ENTRADA</b> ⚠️\n\n"
+                                    f"📊 <b>Ativo:</b> {ativo}\n"
+                                    f"⏱️ <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
+                                    f"🧠 <b>Estratégia:</b> {est_nome_encontrada}\n\n"
+                                    f"⏳ <i>Análise profunda em andamento... Validação na virada da vela!</i>"
+                                )
+                                msg_pre_alerta_id = enviar_telegram(msg_pre_alerta)
+                                ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>⚠️ <b style='color:#f59e0b; font-size:16px;'>PRÉ-ALERTA ENVIADO!</b><br><span style='font-size:16px; font-weight:800; color:#fff;'>{ativo}</span><br>Aguardando confirmação...</div>"
 
-                    if sinal_encontrado:
-                        ativo_alerta = ativo
-                        estrategia_alerta = est_nome_encontrada
-                        sinal_alerta = sinal_encontrado
-                        
-                        if not AGUARDANDO_CONFIRMACAO_RESULTADO:
-                            msg_pre_alerta = (
-                                f"⚠️ <b>PRÉ-ALERTA DE ENTRADA</b> ⚠️\n\n"
-                                f"📊 <b>Ativo:</b> {ativo}\n"
-                                f"⏱️ <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
-                                f"🧠 <b>Estratégia:</b> {est_nome_encontrada}\n\n"
-                                f"⏳ <i>Análise profunda em andamento... Validação na virada da vela!</i>"
-                            )
-                            msg_pre_alerta_id = enviar_telegram(msg_pre_alerta)
-                            ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>⚠️ <b style='color:#f59e0b; font-size:16px;'>PRÉ-ALERTA ENVIADO!</b><br><span style='font-size:16px; font-weight:800; color:#fff;'>{ativo}</span><br>Aguardando confirmação...</div>"
+                            pre_alerta_enviado = True
 
-                        pre_alerta_enviado = True
-                        break
-                    
-                    time.sleep(0.1)
-
-            # 2. CONFIRMAÇÃO DO SINAL
-            if segundos_restantes_vela <= 3 or segundos_restantes_vela >= (TIMEFRAME_OPERACAO * 60 - 2):
-                if pre_alerta_enviado and ativo_alerta:
-                    ticker = MAPA_TICKERS.get(ativo_alerta, ativo_alerta)
+                # 2. CONFIRMAÇÃO DO SINAL NA VIRADA DA VELA
+                if (segundos_restantes_vela <= 3 or segundos_restantes_vela >= (TIMEFRAME_OPERACAO * 60 - 2)) and pre_alerta_enviado and ativo_alerta == ativo:
                     data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
-
                     if data:
                         sinal_confirmado = analisar_estrategia(data, estrategia_alerta)
                         
@@ -1238,13 +1228,14 @@ def bot_loop():
                                 AGUARDANDO_CONFIRMACAO_RESULTADO = True
                                 AG_RESULTADO = True
 
-                pre_alerta_enviado = False
-                msg_pre_alerta_id = None
-                ativo_alerta = None
-                estrategia_alerta = None
-                sinal_alerta = None
+                    # Reset dos alertas após virada da vela
+                    pre_alerta_enviado = False
+                    msg_pre_alerta_id = None
+                    ativo_alerta = None
+                    estrategia_alerta = None
+                    sinal_alerta = None
 
-            time.sleep(0.5)
+                time.sleep(0.1)
 
         except Exception as e:
             print(f"Erro Loop Bot: {e}")
