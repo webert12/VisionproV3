@@ -44,7 +44,7 @@ def enviar_telegram(mensagem, auto_delete=None):
         r = requests.post(url, json=payload, timeout=10).json()
         if r.get("ok"):
             msg_id = r["result"]["message_id"]
-            if "SINAL CONFIRMADO" in mensagem or "🔥" in mensagem or "🎯" in mensagem:
+            if "SINAL CONFIRMADO" in mensagem or "🔥" in mensagem or "🎯" in mensagem or "Sinal confirmado" in mensagem:
                 ULTIMO_MSG_ID_TELEGRAM = msg_id
             if auto_delete:
                 threading.Thread(target=deletar_mensagem_atrasada, args=(msg_id, auto_delete)).start()
@@ -686,8 +686,13 @@ LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
 BOT_RODANDO = True
 BOT_PAUSADO = True
 BOT_INICIADO = False
+
+# TRAVAS DE ESTADO DE ENVIO DE SINAIS
 AG_RESULTADO = False
+AGUARDANDO_CONFIRMACAO_RESULTADO = False  # Trava estrita para evitar sinais seguidos sem validação
+
 ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
+SINAL_DISPLAY_PERMANENTE = None
 ATIVO_ATUAL_GLOBAL = "AGUARDANDO..."
 
 ATIVOS_BASE = {
@@ -699,7 +704,7 @@ MAPA_TICKERS = {}
 for par in ATIVOS_BASE["FOREX"]: MAPA_TICKERS[par] = f"{par}=X"
 for par in ATIVOS_BASE["CRIPTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
 
-# ================= MOTOR DE ANÁLISE =================
+# ================= MOTOR DE ANÁLISE PROFUNDA E PROFISSIONAL =================
 def get_data_v2(ticker, tf, period='5d'):
     """Requisição resiliente ao Yahoo Finance."""
     try:
@@ -734,7 +739,7 @@ def get_data_v2(ticker, tf, period='5d'):
         for k in ohlc: 
             ohlc[k] = ohlc[k][idx]
             
-        if len(ohlc["close"]) < 40: # Aumentado para garantir dados suficientes para o MACD
+        if len(ohlc["close"]) < 50: # Exige dados suficientes para Médias de longo prazo
             return None
             
         return ohlc
@@ -750,27 +755,51 @@ def calcular_ema(dados, periodo):
         ema[i] = (dados[i] - ema[i-1]) * multiplicador + ema[i-1]
     return ema
 
+def validar_analise_profunda(data, direcao, i=-1):
+    """
+    Filtro de Análise Profunda Profissional: 
+    Evita entradas aleatórias validando Confluência Macro (Tendência EMA50 + Momentum + Volatilidade).
+    """
+    c = data["close"]
+    if len(c) < 50: return False
+
+    ema50 = calcular_ema(c, 50)
+    
+    # Validação de Tendência Macro de Fundo
+    if direcao == "CALL" and c[i] < ema50[i]:
+        return False  # Cancela compra contra a tendência macro de queda
+    if direcao == "PUT" and c[i] > ema50[i]:
+        return False  # Cancela venda contra a tendência macro de alta
+
+    # Validação de Volatilidade (Evita mercado lateral/consolidação sem volume)
+    atr = np.mean(data["high"][i-14:i] - data["low"][i-14:i])
+    corpo_atual = abs(c[i] - data["open"][i])
+    if corpo_atual < (atr * 0.25):
+        return False  # Descarte de doji / velas sem expressão
+
+    return True
+
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
     
-    # Prevenção extra
-    if len(c) < 40: return None
+    if len(c) < 50: return None
+    sinal = None
 
-    # ESTRATÉGIA 1: LÓGICA DO PREÇO (Inalterada)
+    # ESTRATÉGIA 1: LÓGICA DO PREÇO (COM FILTRO AVANÇADO DE REJEIÇÃO)
     if estrategia == "LOGICA_DO_PRECO":
         cor = "G" if c[i] > o[i] else "R"
         tamanho = abs(c[i] - o[i])
         p_sup = h[i] - max(o[i], c[i])
         p_inf = min(o[i], c[i]) - l[i]
         media_corpo = np.mean(abs(c[i-10:i] - o[i-10:i])) if i >= 10 else 0.0001
-        if cor == "G" and p_inf == 0 and tamanho > media_corpo: return "CALL"
-        if cor == "R" and p_sup == 0 and tamanho > media_corpo: return "PUT"
-        if p_inf > tamanho * 2: return "CALL"
-        if p_sup > tamanho * 2: return "PUT"
+        
+        if cor == "G" and p_inf == 0 and tamanho > (media_corpo * 1.2): sinal = "CALL"
+        elif cor == "R" and p_sup == 0 and tamanho > (media_corpo * 1.2): sinal = "PUT"
+        elif p_inf > (tamanho * 2.2): sinal = "CALL"
+        elif p_sup > (tamanho * 2.2): sinal = "PUT"
 
     # ESTRATÉGIA 2: RSI + MACD REAL + MA
-    if estrategia == "RSI_MACD_MA":
-        # Média Simples 20
+    elif estrategia == "RSI_MACD_MA":
         ma = np.mean(c[i-20:i])
         
         # RSI 14
@@ -782,37 +811,38 @@ def analisar_estrategia(data, estrategia, i=-1):
         rs = avg_up / avg_down if avg_down != 0 else 0
         rsi = 100 - (100 / (1 + rs))
         
-        # MACD (12, 26, 9) Real
+        # MACD (12, 26, 9)
         ema12 = calcular_ema(c, 12)
         ema26 = calcular_ema(c, 26)
         macd_line = ema12 - ema26
         signal_line = calcular_ema(macd_line, 9)
         
-        # Regra de Cruzamento do MACD
         macd_cruza_cima = macd_line[i] > signal_line[i] and macd_line[i-1] <= signal_line[i-1]
         macd_cruza_baixo = macd_line[i] < signal_line[i] and macd_line[i-1] >= signal_line[i-1]
         
-        # Lógica de Entrada Refinada: Preço a favor da tendência, RSI indicando fim do pullback, MACD confirmando reversão.
-        if c[i] > ma and rsi < 45 and macd_cruza_cima: return "CALL"
-        if c[i] < ma and rsi > 55 and macd_cruza_baixo: return "PUT"
+        if c[i] > ma and rsi < 48 and macd_cruza_cima: sinal = "CALL"
+        if c[i] < ma and rsi > 52 and macd_cruza_baixo: sinal = "PUT"
 
     # ESTRATÉGIA 3: MHI 1 (COM FILTRO DE TENDÊNCIA MA20)
-    if estrategia == "MHI1":
+    elif estrategia == "MHI1":
         ma20 = np.mean(c[i-20:i])
         tendencia_alta = c[i] > ma20
         tendencia_baixa = c[i] < ma20
         
         cores = [("G" if c[j] > o[j] else "R") for j in range(i-2, i+1)]
-        # Só opera contra a minoria se estiver a favor da tendência principal
-        if cores.count("G") > cores.count("R") and tendencia_baixa: return "PUT"
-        if cores.count("R") > cores.count("G") and tendencia_alta: return "CALL"
+        if cores.count("G") > cores.count("R") and tendencia_baixa: sinal = "PUT"
+        if cores.count("R") > cores.count("G") and tendencia_alta: sinal = "CALL"
 
-    # ESTRATÉGIA 4: REVERSÃO DE BANDAS (Bollinger 20, 2)
-    if estrategia in ["REVERSAO", "RETRACAO"]:
+    # ESTRATÉGIA 4: REVERSÃO DE BANDAS DE BOLLINGER
+    elif estrategia in ["REVERSAO", "RETRACAO"]:
         std = np.std(c[i-20:i])
         ma = np.mean(c[i-20:i])
-        if c[i] < (ma - 2*std): return "CALL"
-        if c[i] > (ma + 2*std): return "PUT"
+        if c[i] < (ma - 2.1 * std): sinal = "CALL"
+        if c[i] > (ma + 2.1 * std): sinal = "PUT"
+
+    # APLICA O FILTRO DE CONFLUÊNCIA DE ANÁLISE PROFUNDA ANTES DE CONFIRMAR
+    if sinal and validar_analise_profunda(data, sinal, i):
+        return sinal
 
     return None
 
@@ -951,9 +981,12 @@ def status():
     u_info = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
     historico = buscar_historico_bd(user)
     
+    # Exibe o sinal travado em tela enquanto aguarda a confirmação do usuário
+    display_texto = SINAL_DISPLAY_PERMANENTE if (AGUARDANDO_CONFIRMACAO_RESULTADO and SINAL_DISPLAY_PERMANENTE) else ULTIMO_SINAL_GLOBAL
+
     return jsonify({
-        "html": ULTIMO_SINAL_GLOBAL, 
-        "aguardando": AG_RESULTADO, 
+        "html": display_texto, 
+        "aguardando": AGUARDANDO_CONFIRMACAO_RESULTADO, 
         "wins": u_info.get("wins", 0),
         "reds": u_info.get("reds", 0), 
         "winrate": u_info.get("winrate", 0.0), 
@@ -965,7 +998,7 @@ def status():
 
 @app.route('/command/<cmd>')
 def command(cmd):
-    global BOT_INICIADO, BOT_PAUSADO, TIMEFRAME_OPERACAO, TIPO_MERCADO, QUEM_INICIOU_O_BOT, ULTIMO_SINAL_GLOBAL, AG_RESULTADO, ESTRATEGIA_ESCOLHIDA, ATIVO_ATUAL_GLOBAL
+    global BOT_INICIADO, BOT_PAUSADO, TIMEFRAME_OPERACAO, TIPO_MERCADO, QUEM_INICIOU_O_BOT, ULTIMO_SINAL_GLOBAL, AG_RESULTADO, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, ESTRATEGIA_ESCOLHIDA, ATIVO_ATUAL_GLOBAL
     user = session.get('user')
 
     if cmd == "start_bot":
@@ -973,19 +1006,23 @@ def command(cmd):
         BOT_INICIADO = True
         BOT_PAUSADO = False
         AG_RESULTADO = False
+        AGUARDANDO_CONFIRMACAO_RESULTADO = False
+        SINAL_DISPLAY_PERMANENTE = None
         ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>VARREDURA INICIADA</b><br><span style='color:#00f2fe;'>[VARREDURA DE ATIVOS EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>VARREDURA INICIADA</b><br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
         enviar_telegram(f"🚀 <b>SISTEMA VISION PRO V3 CONECTADO</b>\nSessão iniciada por {user}")
         return jsonify({"ok": True})
 
     elif cmd == "pause_bot":
         BOT_PAUSADO = not BOT_PAUSADO
-        ULTIMO_SINAL_GLOBAL = "<div class='system-console' style='color:#f59e0b;'>[PAUSADO] VARREDURA EM PAUSA...</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA DE ATIVOS EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = "<div class='system-console' style='color:#f59e0b;'>[PAUSADO] VARREDURA EM PAUSA...</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
         return jsonify({"ok": True})
 
     elif cmd == "stop_bot":
         BOT_INICIADO = False
         BOT_PAUSADO = True
+        AGUARDANDO_CONFIRMACAO_RESULTADO = False
+        SINAL_DISPLAY_PERMANENTE = None
         ATIVO_ATUAL_GLOBAL = "DESCONECTADO"
         ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
         return jsonify({"ok": True, "redirect": "/login"})
@@ -1001,7 +1038,7 @@ def command(cmd):
 
 @app.route('/resultado/<res>')
 def resultado(res):
-    global AG_RESULTADO, ULTIMO_SINAL_GLOBAL
+    global AG_RESULTADO, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, ULTIMO_SINAL_GLOBAL
     user = session.get('user')
     if user:
         if res == 'win':
@@ -1019,13 +1056,18 @@ def resultado(res):
         elif res == 'pular':
             atualizar_ultimo_sinal_bd(user, "Ignorado")
 
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA DE ATIVOS EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+        # Libera o bot para enviar novos sinais no Telegram após a sua confirmação do resultado
+        AGUARDANDO_CONFIRMACAO_RESULTADO = False
+        SINAL_DISPLAY_PERMANENTE = None
+        
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+    
     AG_RESULTADO = False
     return redirect('/')
 
-# ================= LOOP DO BOT =================
+# ================= LOOP PRINCIPAL DO BOT (VARREDURA CONTÍNUA E MODO SUSPENSO) =================
 def bot_loop():
-    global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL
+    global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE
     
     pre_alerta_enviado = False
     msg_pre_alerta_id = None
@@ -1035,7 +1077,9 @@ def bot_loop():
 
     while BOT_RODANDO:
         try:
-            if not BOT_INICIADO or BOT_PAUSADO or AG_RESULTADO:
+            # O robô SÓ para completamente se for desligado/pausado.
+            # Se tiver sinal aguardando confirmação (AGUARDANDO_CONFIRMACAO_RESULTADO), ele NÃO PARA de analisar.
+            if not BOT_INICIADO or BOT_PAUSADO:
                 time.sleep(1)
                 continue
 
@@ -1043,7 +1087,6 @@ def bot_loop():
             segundos_atuais = agora.second
             minutos_atuais = agora.minute
 
-            # Calcula os segundos restantes para o fechamento da vela atual do timeframe
             segundos_restantes_vela = (TIMEFRAME_OPERACAO * 60) - ((minutos_atuais % TIMEFRAME_OPERACAO) * 60 + segundos_atuais)
 
             if TIPO_MERCADO == "TODOS":
@@ -1051,20 +1094,21 @@ def bot_loop():
             else:
                 ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX"])
 
-            # ---------------- 1. ETAPA DE PRÉ-ALERTA (Aproximadamente 30s Antes) ----------------
+            # ---------------- 1. ETAPA DE PRÉ-ALERTA (Análise e Antecipação) ----------------
             if 25 <= segundos_restantes_vela <= 35 and not pre_alerta_enviado:
                 for ativo in ativos:
-                    if not BOT_INICIADO or BOT_PAUSADO or AG_RESULTADO:
+                    if not BOT_INICIADO or BOT_PAUSADO:
                         break
 
                     ticker = MAPA_TICKERS.get(ativo, ativo)
                     ATIVO_ATUAL_GLOBAL = ativo
                     
-                    ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO PRÉ-ALERTA: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#f59e0b;'>[BUSCANDO PADRÃO DE ANTECIPAÇÃO]</span></div><div class='tech-scanner'></div>"
+                    if not AGUARDANDO_CONFIRMACAO_RESULTADO:
+                        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO PRÉ-ALERTA: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#f59e0b;'>[ANÁLISE DE CONFLUÊNCIA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
 
                     data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
                     if not data:
-                        time.sleep(0.2)
+                        time.sleep(0.1)
                         continue
 
                     sinal_encontrado = None
@@ -1079,27 +1123,30 @@ def bot_loop():
                     else:
                         sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
 
+                    # Se achou sinal, salva os dados.
                     if sinal_encontrado:
                         ativo_alerta = ativo
                         estrategia_alerta = est_nome_encontrada
                         sinal_alerta = sinal_encontrado
                         
-                        msg_pre_alerta = (
-                            f"⚠️ <b>PRÉ-ALERTA DE ENTRADA</b> ⚠️\n\n"
-                            f"📊 <b>Ativo:</b> {ativo}\n"
-                            f"⏱️ <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
-                            f"🧠 <b>Estratégia:</b> {est_nome_encontrada}\n\n"
-                            f"⏳ <i>Fique atento ao gráfico! Validação em breve...</i>"
-                        )
-                        msg_pre_alerta_id = enviar_telegram(msg_pre_alerta)
+                        # SÓ envia o pré-alerta no Telegram se NÃO estiver aguardando confirmação do sinal anterior
+                        if not AGUARDANDO_CONFIRMACAO_RESULTADO:
+                            msg_pre_alerta = (
+                                f"⚠️ <b>PRÉ-ALERTA DE ENTRADA</b> ⚠️\n\n"
+                                f"📊 <b>Ativo:</b> {ativo}\n"
+                                f"⏱️ <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
+                                f"🧠 <b>Estratégia:</b> {est_nome_encontrada}\n\n"
+                                f"⏳ <i>Análise profunda em andamento... Validação na virada da vela!</i>"
+                            )
+                            msg_pre_alerta_id = enviar_telegram(msg_pre_alerta)
+                            ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>⚠️ <b style='color:#f59e0b; font-size:16px;'>PRÉ-ALERTA ENVIADO!</b><br><span style='font-size:16px; font-weight:800; color:#fff;'>{ativo}</span><br>Aguardando confirmação...</div>"
+
                         pre_alerta_enviado = True
-                        
-                        ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>⚠️ <b style='color:#f59e0b; font-size:16px;'>PRÉ-ALERTA ENVIADO!</b><br><span style='font-size:16px; font-weight:800; color:#fff;'>{ativo}</span><br>Aguardando confirmação...</div>"
                         break
                     
-                    time.sleep(0.2)
+                    time.sleep(0.1)
 
-            # ---------------- 2. ETAPA DE CONFIRMAÇÃO DO SINAL (Na virada da vela) ----------------
+            # ---------------- 2. ETAPA DE CONFIRMAÇÃO DO SINAL (Virada da Vela) ----------------
             if segundos_restantes_vela <= 3 or segundos_restantes_vela >= (TIMEFRAME_OPERACAO * 60 - 2):
                 if pre_alerta_enviado and ativo_alerta:
                     ticker = MAPA_TICKERS.get(ativo_alerta, ativo_alerta)
@@ -1108,78 +1155,69 @@ def bot_loop():
                     if data:
                         sinal_confirmado = analisar_estrategia(data, estrategia_alerta)
                         
+                        # Se a Análise Profunda reconfirmar o sinal na virada da vela
                         if sinal_confirmado:
-                            # Apaga a mensagem de pré-alerta enviada previamente
-                            if msg_pre_alerta_id:
-                                deletar_mensagem_telegram(msg_pre_alerta_id)
+                            # SE O USUÁRIO AINDA NÃO CONFIRMOU O WIN/RED ANTERIOR:
+                            # O bot CONTINUA analisando o mercado em modo suspenso, mas DESPORTA o envio deste novo sinal!
+                            if not AGUARDANDO_CONFIRMACAO_RESULTADO:
+                                if msg_pre_alerta_id:
+                                    deletar_mensagem_telegram(msg_pre_alerta_id)
 
-                            # Cálculo exato de horários de Entrada e Saída
-                            horario_entrada = datetime.now()
-                            # Ajusta para o próximo minuto redondo se necessário
-                            if horario_entrada.second >= 50:
-                                horario_entrada = horario_entrada + timedelta(seconds=(60 - horario_entrada.second))
-                            
-                            horario_saida = horario_entrada + timedelta(minutes=TIMEFRAME_OPERACAO)
-                            
-                            str_entrada = horario_entrada.strftime("%H:%M")
-                            str_saida = horario_saida.strftime("%H:%M")
+                                horario_entrada = datetime.now()
+                                if horario_entrada.second >= 50:
+                                    horario_entrada = horario_entrada + timedelta(seconds=(60 - horario_entrada.second))
+                                
+                                horario_saida = horario_entrada + timedelta(minutes=TIMEFRAME_OPERACAO)
+                                str_entrada = horario_entrada.strftime("%H:%M")
+                                str_saida = horario_saida.strftime("%H:%M")
 
-                            if sinal_confirmado == "CALL":
-                                dir_texto = "COMPRA"
-                                cor_html = "#10b981"
-                                emoji_dir = "🟢 ⬆️"
-                            else:
-                                dir_texto = "VENDA"
-                                cor_html = "#ef4444"
-                                emoji_dir = "🔴 ⬇️"
+                                if sinal_confirmado == "CALL":
+                                    dir_texto = "COMPRA"
+                                    cor_html = "#10b981"
+                                    emoji_dir = "🟢 ⬆️"
+                                    msg_telegram = (
+                                        f"✅ <b>Sinal confirmado</b>\n\n"
+                                        f"<b>Ativo :</b> {ativo_alerta}\n"
+                                        f"<b>Entrada :</b> {str_entrada}\n"
+                                        f"<b>Saída :</b> {str_saida}\n"
+                                        f"<b>Estratégia :</b> {estrategia_alerta}\n"
+                                        f"<b>Direção :</b> 🟢 <b>COMPRA</b>"
+                                    )
+                                else:
+                                    dir_texto = "VENDA"
+                                    cor_html = "#ef4444"
+                                    emoji_dir = "🔴 ⬇️"
+                                    msg_telegram = (
+                                        f"✅ <b>Sinal confirmado</b>\n\n"
+                                        f"<b>Ativo :</b> {ativo_alerta}\n"
+                                        f"<b>Entrada :</b> {str_entrada}\n"
+                                        f"<b>Saída :</b> {str_saida}\n"
+                                        f"<b>Estratégia :</b> {estrategia_alerta}\n"
+                                        f"<b>Direção :</b> 🔴 <b>VENDA</b>"
+                                    )
 
-                            # Mensagem no formato solicitado
-                            msg_confirmada = (
-                                f"<b>Sinal confirmado</b>\n"
-                                f"<b>Ativo :</b> {ativo_alerta}\n"
-                                f"<b>Entrada :</b> {str_entrada}\n"
-                                f"<b>Saída :</b> {str_saida}\n"
-                                f"<b>Estratégia :</b> {estrategia_alerta}\n"
-                                f"<b>Direção :</b> <a href='#'>{emoji_dir} {dir_texto}</a>"
-                            )
-
-                            if sinal_confirmado == "CALL":
-                                msg_telegram = (
-                                    f"✅ <b>Sinal confirmado</b>\n\n"
-                                    f"<b>Ativo :</b> {ativo_alerta}\n"
-                                    f"<b>Entrada :</b> {str_entrada}\n"
-                                    f"<b>Saída :</b> {str_saida}\n"
-                                    f"<b>Estratégia :</b> {estrategia_alerta}\n"
-                                    f"<b>Direção :</b> 🟢 <b>COMPRA</b>"
+                                SINAL_DISPLAY_PERMANENTE = (
+                                    f"<div style='text-align:center; font-family: sans-serif;'>"
+                                    f"🎯 <b style='color:#00f2fe; font-size:16px;'>Sinal confirmado</b><br>"
+                                    f"<b>Ativo :</b> <span style='font-weight:800; color:#fff;'>{ativo_alerta}</span><br>"
+                                    f"<b>Entrada :</b> {str_entrada}<br>"
+                                    f"<b>Saída :</b> {str_saida}<br>"
+                                    f"<b>Estratégia :</b> {estrategia_alerta}<br>"
+                                    f"<b>Direção :</b> <b style='color:{cor_html}; font-size:16px;'>{dir_texto}</b>"
+                                    f"</div>"
                                 )
-                            else:
-                                msg_telegram = (
-                                    f"✅ <b>Sinal confirmado</b>\n\n"
-                                    f"<b>Ativo :</b> {ativo_alerta}\n"
-                                    f"<b>Entrada :</b> {str_entrada}\n"
-                                    f"<b>Saída :</b> {str_saida}\n"
-                                    f"<b>Estratégia :</b> {estrategia_alerta}\n"
-                                    f"<b>Direção :</b> 🔴 <b>VENDA</b>"
-                                )
+                                ULTIMO_SINAL_GLOBAL = SINAL_DISPLAY_PERMANENTE
 
-                            ULTIMO_SINAL_GLOBAL = (
-                                f"<div style='text-align:center; font-family: sans-serif;'>"
-                                f"🎯 <b style='color:#00f2fe; font-size:16px;'>Sinal confirmado</b><br>"
-                                f"<b>Ativo :</b> <span style='font-weight:800; color:#fff;'>{ativo_alerta}</span><br>"
-                                f"<b>Entrada :</b> {str_entrada}<br>"
-                                f"<b>Saída :</b> {str_saida}<br>"
-                                f"<b>Estratégia :</b> {estrategia_alerta}<br>"
-                                f"<b>Direção :</b> <b style='color:{cor_html}; font-size:16px;'>{dir_texto}</b>"
-                                f"</div>"
-                            )
+                                for u in list(USUARIOS_ONLINE.keys()):
+                                    registrar_sinal_bd(u, f"{ativo_alerta} (M{TIMEFRAME_OPERACAO})")
 
-                            for u in list(USUARIOS_ONLINE.keys()):
-                                registrar_sinal_bd(u, f"{ativo_alerta} (M{TIMEFRAME_OPERACAO})")
+                                enviar_telegram(msg_telegram)
+                                
+                                # ATIVA A TRAVA: Impede envio de novo sinal até que você confirme Win/G1/Red no painel
+                                AGUARDANDO_CONFIRMACAO_RESULTADO = True
+                                AG_RESULTADO = True
 
-                            enviar_telegram(msg_telegram)
-                            AG_RESULTADO = True
-
-                # Reset de variáveis após a virada de vela
+                # Reset de ciclo de alerta após a virada da vela
                 pre_alerta_enviado = False
                 msg_pre_alerta_id = None
                 ativo_alerta = None
