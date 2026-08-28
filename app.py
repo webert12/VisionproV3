@@ -285,7 +285,7 @@ HTML_INDEX = """
         .broker-iframe-inline { width: 100%; height: 100%; border: none; background: #0b1120; border-radius: 10px; }
         .btn-close-broker { background: #1e293b; border: 1px solid #334155; color: #00f2fe; padding: 6px 12px; font-size: 11px; font-weight: 700; border-radius: 6px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: center; }
 
-        .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 90px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
+        .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 100px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
         
         .system-console { font-family: 'JetBrains Mono', monospace; color: #38ef7d; font-size: 13px; text-shadow: 0 0 5px rgba(56, 239, 125, 0.5); width: 100%; }
 
@@ -324,7 +324,7 @@ HTML_INDEX = """
         .btn-toggle-hist { width: 100%; padding: 10px; background: rgba(0, 242, 254, 0.08); border: 1px dashed #00f2fe; color: #00f2fe; border-radius: 8px; font-weight: bold; font-size: 11px; cursor: pointer; margin-top: 10px; transition: 0.3s; }
         .btn-toggle-hist:hover { background: rgba(0, 242, 254, 0.2); }
 
-        .historico-box { display: none; background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; margin-top: 10px; }
+        .historico-box { display: none; background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; margin-top: 15px; }
         .historico-scroll { max-height: 140px; overflow-y: auto; }
         .historico-item { font-size: 11px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; font-family: 'JetBrains Mono', monospace; }
         .historico-item:last-child { border-bottom: none; }
@@ -485,6 +485,7 @@ HTML_INDEX = """
                 if(document.getElementById('wr-fill')) document.getElementById('wr-fill').style.width = data.winrate + "%";
                 if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
                 
+                // --- ATUALIZAÇÃO DO ATIVO EM TEMPO REAL ---
                 if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
                 if(document.getElementById('current-asset')) {
                     if(data.rodando) {
@@ -1116,9 +1117,12 @@ def bot_loop():
             else:
                 ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX"])
 
-            # VARREDURA CONTÍNUA DOS ATIVOS (Aparece no painel em tempo real)
-            for ativo in ativos:
-                if not BOT_INICIADO or BOT_PAUSADO:
+            # MODO FOCO: Se temos um pré-alerta, paramos de varrer os outros ativos e focamos nele para não perder a virada da vela.
+            lista_varredura = [ativo_alerta] if pre_alerta_enviado else ativos
+
+            # VARREDURA CONTÍNUA DOS ATIVOS
+            for ativo in lista_varredura:
+                if not BOT_INICIADO or BOT_PAUSADO or AG_RESULTADO:
                     break
 
                 ATIVO_ATUAL_GLOBAL = ativo
@@ -1127,116 +1131,125 @@ def bot_loop():
                 if not AGUARDANDO_CONFIRMACAO_RESULTADO and not pre_alerta_enviado:
                     ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
 
+                data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
+                if not data:
+                    time.sleep(0.2)
+                    continue
+
                 agora = datetime.now()
                 segundos_atuais = agora.second
                 minutos_atuais = agora.minute
-                segundos_restantes_vela = (TIMEFRAME_OPERACAO * 60) - ((minutos_atuais % TIMEFRAME_OPERACAO) * 60 + segundos_atuais)
+                # Cálculo de tempo até a próxima vela 
+                minutos_restantes = TIMEFRAME_OPERACAO - 1 - (minutos_atuais % TIMEFRAME_OPERACAO)
+                segundos_restantes_vela = (minutos_restantes * 60) + (60 - segundos_atuais)
 
-                # 1. VERIFICAÇÃO DE PRÉ-ALERTA
-                if 25 <= segundos_restantes_vela <= 35 and not pre_alerta_enviado:
-                    data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
-                    if data:
-                        sinal_encontrado = None
-                        est_nome_encontrada = ESTRATEGIA_ESCOLHIDA
+                # 1. VERIFICAÇÃO DE PRÉ-ALERTA (25s a 45s antes de acabar a vela)
+                if 25 <= segundos_restantes_vela <= 45 and not pre_alerta_enviado and not AGUARDANDO_CONFIRMACAO_RESULTADO:
+                    sinal_encontrado = None
+                    est_nome_encontrada = ESTRATEGIA_ESCOLHIDA
 
-                        if ESTRATEGIA_ESCOLHIDA == "TODAS":
-                            for est_nome in LISTA_ESTRATEGIAS:
-                                sinal_encontrado = analisar_estrategia(data, est_nome)
-                                if sinal_encontrado:
-                                    est_nome_encontrada = est_nome
-                                    break
-                        else:
-                            sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
+                    if ESTRATEGIA_ESCOLHIDA == "TODAS":
+                        for est_nome in LISTA_ESTRATEGIAS:
+                            sinal_encontrado = analisar_estrategia(data, est_nome)
+                            if sinal_encontrado:
+                                est_nome_encontrada = est_nome
+                                break
+                    else:
+                        sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
 
-                        if sinal_encontrado:
-                            ativo_alerta = ativo
-                            estrategia_alerta = est_nome_encontrada
-                            sinal_alerta = sinal_encontrado
-                            
-                            if not AGUARDANDO_CONFIRMACAO_RESULTADO:
-                                msg_pre_alerta = (
-                                    f"⚠️ <b>PRÉ-ALERTA DE ENTRADA</b> ⚠️\n\n"
-                                    f"📊 <b>Ativo:</b> {ativo}\n"
-                                    f"⏱️ <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
-                                    f"🧠 <b>Estratégia:</b> {est_nome_encontrada}\n\n"
-                                    f"⏳ <i>Análise profunda em andamento... Validação na virada da vela!</i>"
-                                )
-                                msg_pre_alerta_id = enviar_telegram(msg_pre_alerta)
-                                ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>⚠️ <b style='color:#f59e0b; font-size:16px;'>PRÉ-ALERTA ENVIADO!</b><br><span style='font-size:16px; font-weight:800; color:#fff;'>{ativo}</span><br>Aguardando confirmação...</div>"
-
-                            pre_alerta_enviado = True
+                    if sinal_encontrado:
+                        ativo_alerta = ativo
+                        estrategia_alerta = est_nome_encontrada
+                        
+                        msg_pre_alerta = (
+                            f"⚠️ <b>PRÉ-ALERTA DE ENTRADA</b> ⚠️\n\n"
+                            f"📊 <b>Ativo:</b> {ativo}\n"
+                            f"⏱️ <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
+                            f"🧠 <b>Estratégia:</b> {est_nome_encontrada}\n\n"
+                            f"⏳ <i>Análise profunda em andamento... Validação na virada da vela!</i>"
+                        )
+                        msg_pre_alerta_id = enviar_telegram(msg_pre_alerta)
+                        ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>⚠️ <b style='color:#f59e0b; font-size:16px;'>PRÉ-ALERTA ENVIADO!</b><br><span style='font-size:16px; font-weight:800; color:#fff;'>{ativo}</span><br>Aguardando virada da vela...</div>"
+                        pre_alerta_enviado = True
+                        break  # Sai do for loop e foca neste ativo
 
                 # 2. CONFIRMAÇÃO DO SINAL NA VIRADA DA VELA
-                if (segundos_restantes_vela <= 3 or segundos_restantes_vela >= (TIMEFRAME_OPERACAO * 60 - 2)) and pre_alerta_enviado and ativo_alerta == ativo:
-                    data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
-                    if data:
+                elif pre_alerta_enviado and ativo_alerta == ativo:
+                    
+                    # Chegou no tempo de validação (0 a 3 seg antes da vela virar, ou acabou de virar)
+                    if segundos_restantes_vela <= 3 or segundos_restantes_vela >= (TIMEFRAME_OPERACAO * 60 - 2):
                         sinal_confirmado = analisar_estrategia(data, estrategia_alerta)
                         
+                        if msg_pre_alerta_id:
+                            deletar_mensagem_telegram(msg_pre_alerta_id)
+
                         if sinal_confirmado:
-                            if not AGUARDANDO_CONFIRMACAO_RESULTADO:
-                                if msg_pre_alerta_id:
-                                    deletar_mensagem_telegram(msg_pre_alerta_id)
+                            horario_entrada = datetime.now()
+                            if horario_entrada.second >= 50:
+                                horario_entrada = horario_entrada + timedelta(seconds=(60 - horario_entrada.second))
+                            
+                            horario_saida = horario_entrada + timedelta(minutes=TIMEFRAME_OPERACAO)
+                            str_entrada = horario_entrada.strftime("%H:%M")
+                            str_saida = horario_saida.strftime("%H:%M")
 
-                                horario_entrada = datetime.now()
-                                if horario_entrada.second >= 50:
-                                    horario_entrada = horario_entrada + timedelta(seconds=(60 - horario_entrada.second))
-                                
-                                horario_saida = horario_entrada + timedelta(minutes=TIMEFRAME_OPERACAO)
-                                str_entrada = horario_entrada.strftime("%H:%M")
-                                str_saida = horario_saida.strftime("%H:%M")
+                            dir_texto = "COMPRA" if sinal_confirmado == "CALL" else "VENDA"
+                            cor_html = "#10b981" if sinal_confirmado == "CALL" else "#ef4444"
+                            bolinha = "🟢" if sinal_confirmado == "CALL" else "🔴"
+                            
+                            msg_telegram = (
+                                f"✅ <b>Sinal confirmado</b>\n\n"
+                                f"<b>Ativo :</b> {ativo_alerta}\n"
+                                f"<b>Entrada :</b> {str_entrada}\n"
+                                f"<b>Saída :</b> {str_saida}\n"
+                                f"<b>Estratégia :</b> {estrategia_alerta}\n"
+                                f"<b>Direção :</b> {bolinha} <b>{dir_texto}</b>"
+                            )
 
-                                if sinal_confirmado == "CALL":
-                                    dir_texto = "COMPRA"
-                                    cor_html = "#10b981"
-                                    msg_telegram = (
-                                        f"✅ <b>Sinal confirmado</b>\n\n"
-                                        f"<b>Ativo :</b> {ativo_alerta}\n"
-                                        f"<b>Entrada :</b> {str_entrada}\n"
-                                        f"<b>Saída :</b> {str_saida}\n"
-                                        f"<b>Estratégia :</b> {estrategia_alerta}\n"
-                                        f"<b>Direção :</b> 🟢 <b>COMPRA</b>"
-                                    )
-                                else:
-                                    dir_texto = "VENDA"
-                                    cor_html = "#ef4444"
-                                    msg_telegram = (
-                                        f"✅ <b>Sinal confirmado</b>\n\n"
-                                        f"<b>Ativo :</b> {ativo_alerta}\n"
-                                        f"<b>Entrada :</b> {str_entrada}\n"
-                                        f"<b>Saída :</b> {str_saida}\n"
-                                        f"<b>Estratégia :</b> {estrategia_alerta}\n"
-                                        f"<b>Direção :</b> 🔴 <b>VENDA</b>"
-                                    )
+                            SINAL_DISPLAY_PERMANENTE = (
+                                f"<div style='text-align:center; font-family: sans-serif;'>"
+                                f"🎯 <b style='color:#00f2fe; font-size:16px;'>Sinal confirmado</b><br>"
+                                f"<b>Ativo :</b> <span style='font-weight:800; color:#fff;'>{ativo_alerta}</span><br>"
+                                f"<b>Entrada :</b> {str_entrada}<br>"
+                                f"<b>Saída :</b> {str_saida}<br>"
+                                f"<b>Estratégia :</b> {estrategia_alerta}<br>"
+                                f"<b>Direção :</b> <b style='color:{cor_html}; font-size:16px;'>{dir_texto}</b>"
+                                f"</div>"
+                            )
+                            ULTIMO_SINAL_GLOBAL = SINAL_DISPLAY_PERMANENTE
 
-                                SINAL_DISPLAY_PERMANENTE = (
-                                    f"<div style='text-align:center; font-family: sans-serif;'>"
-                                    f"🎯 <b style='color:#00f2fe; font-size:16px;'>Sinal confirmado</b><br>"
-                                    f"<b>Ativo :</b> <span style='font-weight:800; color:#fff;'>{ativo_alerta}</span><br>"
-                                    f"<b>Entrada :</b> {str_entrada}<br>"
-                                    f"<b>Saída :</b> {str_saida}<br>"
-                                    f"<b>Estratégia :</b> {estrategia_alerta}<br>"
-                                    f"<b>Direção :</b> <b style='color:{cor_html}; font-size:16px;'>{dir_texto}</b>"
-                                    f"</div>"
-                                )
-                                ULTIMO_SINAL_GLOBAL = SINAL_DISPLAY_PERMANENTE
+                            for u in list(USUARIOS_ONLINE.keys()):
+                                registrar_sinal_bd(u, f"{ativo_alerta} (M{TIMEFRAME_OPERACAO})")
 
-                                for u in list(USUARIOS_ONLINE.keys()):
-                                    registrar_sinal_bd(u, f"{ativo_alerta} (M{TIMEFRAME_OPERACAO})")
+                            enviar_telegram(msg_telegram)
+                            
+                            AGUARDANDO_CONFIRMACAO_RESULTADO = True
+                            AG_RESULTADO = True
+                        else:
+                            # O sinal não se confirmou
+                            ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>❌ <b style='color:#ef4444;'>SINAL ABORTADO</b><br>O padrão sumiu na virada da vela.</div><div class='tech-scanner'></div>"
+                            time.sleep(2)
 
-                                enviar_telegram(msg_telegram)
-                                
-                                AGUARDANDO_CONFIRMACAO_RESULTADO = True
-                                AG_RESULTADO = True
+                        # Reset do foco
+                        pre_alerta_enviado = False
+                        msg_pre_alerta_id = None
+                        ativo_alerta = None
+                        estrategia_alerta = None
+                        break
+                    
+                    # 3. TIMEOUT DE SEGURANÇA (Caso perca a janela do tempo de confirmação)
+                    elif 5 <= segundos_restantes_vela <= 20:
+                        if msg_pre_alerta_id:
+                            deletar_mensagem_telegram(msg_pre_alerta_id)
+                        pre_alerta_enviado = False
+                        msg_pre_alerta_id = None
+                        ativo_alerta = None
+                        estrategia_alerta = None
+                        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>❌ <b style='color:#ef4444;'>SINAL ABORTADO (TIMEOUT)</b><br>O tempo de confirmação expirou. Retomando varredura...</div><div class='tech-scanner'></div>"
+                        time.sleep(2)
+                        break
 
-                    # Reset dos alertas após virada da vela
-                    pre_alerta_enviado = False
-                    msg_pre_alerta_id = None
-                    ativo_alerta = None
-                    estrategia_alerta = None
-                    sinal_alerta = None
-
-                time.sleep(0.1)
-
+                time.sleep(0.3)
+            time.sleep(0.5)
         except Exception as e:
             print(f"Erro Loop Bot: {e}")
             time.sleep(2)
