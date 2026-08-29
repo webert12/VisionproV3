@@ -794,20 +794,22 @@ def calcular_ema(dados, periodo):
         ema[i] = (dados[i] - ema[i-1]) * multiplicador + ema[i-1]
     return ema
 
-def validar_analise_profunda(data, direcao, i=-1):
+def validar_analise_profunda(data, direcao, i=-1, estrategia=""):
     c = data["close"]
     if len(c) < 50: return False
 
-    ema50 = calcular_ema(c, 50)
-    
-    if direcao == "CALL" and c[i] < ema50[i]:
-        return False
-    if direcao == "PUT" and c[i] > ema50[i]:
-        return False
+    # Filtro de Tendência por EMA 50 apenas para estratégias de tendência (Evita bloquear estratégias de Reversão/Retração)
+    if estrategia in ["MHI1", "LOGICA_DO_PRECO"]:
+        ema50 = calcular_ema(c, 50)
+        if direcao == "CALL" and c[i] < ema50[i]:
+            return False
+        if direcao == "PUT" and c[i] > ema50[i]:
+            return False
 
+    # Filtro de micro-velas sem volatilidade (Doji / Vela sem corpo)
     atr = np.mean(data["high"][i-14:i] - data["low"][i-14:i])
     corpo_atual = abs(c[i] - data["open"][i])
-    if corpo_atual < (atr * 0.25):
+    if corpo_atual < (atr * 0.10):  # Ajustado de 0.25 para 0.10 para evitar falsos travamentos
         return False
 
     return True
@@ -825,10 +827,11 @@ def analisar_estrategia(data, estrategia, i=-1):
         p_inf = min(o[i], c[i]) - l[i]
         media_corpo = np.mean(abs(c[i-10:i] - o[i-10:i])) if i >= 10 else 0.0001
         
-        if cor == "G" and p_inf == 0 and tamanho > (media_corpo * 1.2): sinal = "CALL"
-        elif cor == "R" and p_sup == 0 and tamanho > (media_corpo * 1.2): sinal = "PUT"
-        elif p_inf > (tamanho * 2.2): sinal = "CALL"
-        elif p_sup > (tamanho * 2.2): sinal = "PUT"
+        # Padrões de Força e Rejeição no pavio
+        if cor == "G" and p_inf == 0 and tamanho > (media_corpo * 0.9): sinal = "CALL"
+        elif cor == "R" and p_sup == 0 and tamanho > (media_corpo * 0.9): sinal = "PUT"
+        elif p_inf > (tamanho * 1.5): sinal = "CALL"
+        elif p_sup > (tamanho * 1.5): sinal = "PUT"
 
     elif estrategia == "RSI_MACD_MA":
         ma = np.mean(c[i-20:i])
@@ -846,28 +849,30 @@ def analisar_estrategia(data, estrategia, i=-1):
         macd_line = ema12 - ema26
         signal_line = calcular_ema(macd_line, 9)
         
-        macd_cruza_cima = macd_line[i] > signal_line[i] and macd_line[i-1] <= signal_line[i-1]
-        macd_cruza_baixo = macd_line[i] < signal_line[i] and macd_line[i-1] >= signal_line[i-1]
-        
-        if c[i] > ma and rsi < 48 and macd_cruza_cima: sinal = "CALL"
-        if c[i] < ma and rsi > 52 and macd_cruza_baixo: sinal = "PUT"
+        # Gatilho de confirmação MACD e RSI otimizados
+        if c[i] > ma and rsi < 55 and macd_line[i] > signal_line[i]: sinal = "CALL"
+        if c[i] < ma and rsi > 45 and macd_line[i] < signal_line[i]: sinal = "PUT"
 
     elif estrategia == "MHI1":
-        ma20 = np.mean(c[i-20:i])
-        tendencia_alta = c[i] > ma20
-        tendencia_baixa = c[i] < ma20
-        
+        # Molicidade MHI: Analisa as últimas 3 velas completas
         cores = [("G" if c[j] > o[j] else "R") for j in range(i-2, i+1)]
-        if cores.count("G") > cores.count("R") and tendencia_baixa: sinal = "PUT"
-        if cores.count("R") > cores.count("G") and tendencia_alta: sinal = "CALL"
+        qtd_g = cores.count("G")
+        qtd_r = cores.count("R")
+        
+        # Entra a favor da minoria
+        if qtd_g > qtd_r: sinal = "PUT"
+        elif qtd_r > qtd_g: sinal = "CALL"
 
     elif estrategia in ["REVERSAO", "RETRACAO"]:
         std = np.std(c[i-20:i])
         ma = np.mean(c[i-20:i])
-        if c[i] < (ma - 2.1 * std): sinal = "CALL"
-        if c[i] > (ma + 2.1 * std): sinal = "PUT"
+        banda_superior = ma + (2.0 * std)
+        banda_inferior = ma - (2.0 * std)
 
-    if sinal and validar_analise_profunda(data, sinal, i):
+        if c[i] <= banda_inferior: sinal = "CALL"
+        elif c[i] >= banda_superior: sinal = "PUT"
+
+    if sinal and validar_analise_profunda(data, sinal, i, estrategia):
         return sinal
 
     return None
@@ -1095,7 +1100,7 @@ def resultado(res):
     AG_RESULTADO = False
     return redirect('/')
 
-# ================= LOOP PRINCIPAL DO BOT (CORRIGIDO) =================
+# ================= LOOP PRINCIPAL DO BOT (OTIMIZADO) =================
 def bot_loop():
     global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE
     
@@ -1103,7 +1108,6 @@ def bot_loop():
     msg_pre_alerta_id = None
     ativo_alerta = None
     estrategia_alerta = None
-    sinal_alerta = None
 
     while BOT_RODANDO:
         try:
@@ -1117,33 +1121,33 @@ def bot_loop():
             else:
                 ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX"])
 
-            # MODO FOCO: Se temos um pré-alerta, paramos de varrer os outros ativos e focamos nele para não perder a virada da vela.
+            # MODO FOCO: Se temos um pré-alerta, paramos de varrer os outros ativos e focamos nele
             lista_varredura = [ativo_alerta] if pre_alerta_enviado else ativos
 
-            # VARREDURA CONTÍNUA DOS ATIVOS
             for ativo in lista_varredura:
                 if not BOT_INICIADO or BOT_PAUSADO or AG_RESULTADO:
                     break
 
                 ATIVO_ATUAL_GLOBAL = ativo
-                ticker = MAPA_TICKERS.get(ativo, ativo)
+                ticker = MAPA_TICKERS.get(ativo, f"{ativo}=X" if TIPO_MERCADO != "CRIPTO" else ativo.replace("USD", "-USD"))
 
                 if not AGUARDANDO_CONFIRMACAO_RESULTADO and not pre_alerta_enviado:
                     ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
 
                 data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
                 if not data:
-                    time.sleep(0.2)
+                    time.sleep(0.1)
                     continue
 
                 agora = datetime.now()
                 segundos_atuais = agora.second
                 minutos_atuais = agora.minute
-                # Cálculo de tempo até a próxima vela 
+                
+                # Cálculo exato do tempo restante para o fechamento da vela
                 minutos_restantes = TIMEFRAME_OPERACAO - 1 - (minutos_atuais % TIMEFRAME_OPERACAO)
                 segundos_restantes_vela = (minutos_restantes * 60) + (60 - segundos_atuais)
 
-                # 1. VERIFICAÇÃO DE PRÉ-ALERTA (25s a 45s antes de acabar a vela)
+                # 1. PRÉ-ALERTA (25s a 45s antes do encerramento da vela)
                 if 25 <= segundos_restantes_vela <= 45 and not pre_alerta_enviado and not AGUARDANDO_CONFIRMACAO_RESULTADO:
                     sinal_encontrado = None
                     est_nome_encontrada = ESTRATEGIA_ESCOLHIDA
@@ -1171,13 +1175,12 @@ def bot_loop():
                         msg_pre_alerta_id = enviar_telegram(msg_pre_alerta)
                         ULTIMO_SINAL_GLOBAL = f"<div style='text-align:center;'>⚠️ <b style='color:#f59e0b; font-size:16px;'>PRÉ-ALERTA ENVIADO!</b><br><span style='font-size:16px; font-weight:800; color:#fff;'>{ativo}</span><br>Aguardando virada da vela...</div>"
                         pre_alerta_enviado = True
-                        break  # Sai do for loop e foca neste ativo
+                        break
 
                 # 2. CONFIRMAÇÃO DO SINAL NA VIRADA DA VELA
                 elif pre_alerta_enviado and ativo_alerta == ativo:
                     
-                    # Chegou no tempo de validação (0 a 3 seg antes da vela virar, ou acabou de virar)
-                    if segundos_restantes_vela <= 3 or segundos_restantes_vela >= (TIMEFRAME_OPERACAO * 60 - 2):
+                    if segundos_restantes_vela <= 4 or segundos_restantes_vela >= (TIMEFRAME_OPERACAO * 60 - 2):
                         sinal_confirmado = analisar_estrategia(data, estrategia_alerta)
                         
                         if msg_pre_alerta_id:
@@ -1225,18 +1228,15 @@ def bot_loop():
                             AGUARDANDO_CONFIRMACAO_RESULTADO = True
                             AG_RESULTADO = True
                         else:
-                            # O sinal não se confirmou
                             ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>❌ <b style='color:#ef4444;'>SINAL ABORTADO</b><br>O padrão sumiu na virada da vela.</div><div class='tech-scanner'></div>"
                             time.sleep(2)
 
-                        # Reset do foco
                         pre_alerta_enviado = False
                         msg_pre_alerta_id = None
                         ativo_alerta = None
                         estrategia_alerta = None
                         break
                     
-                    # 3. TIMEOUT DE SEGURANÇA (Caso perca a janela do tempo de confirmação)
                     elif 5 <= segundos_restantes_vela <= 20:
                         if msg_pre_alerta_id:
                             deletar_mensagem_telegram(msg_pre_alerta_id)
@@ -1244,15 +1244,15 @@ def bot_loop():
                         msg_pre_alerta_id = None
                         ativo_alerta = None
                         estrategia_alerta = None
-                        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>❌ <b style='color:#ef4444;'>SINAL ABORTADO (TIMEOUT)</b><br>O tempo de confirmação expirou. Retomando varredura...</div><div class='tech-scanner'></div>"
+                        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>❌ <b style='color:#ef4444;'>SINAL ABORTADO (TIMEOUT)</b><br>Tempo expirado. Retomando varredura...</div><div class='tech-scanner'></div>"
                         time.sleep(2)
                         break
 
-                time.sleep(0.3)
-            time.sleep(0.5)
+                time.sleep(0.1)
+            time.sleep(0.2)
         except Exception as e:
             print(f"Erro Loop Bot: {e}")
-            time.sleep(2)
+            time.sleep(1)
 
 thread_iniciada = False
 lock_thread = threading.Lock()
