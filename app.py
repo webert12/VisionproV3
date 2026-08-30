@@ -581,7 +581,6 @@ def atualizar_estatisticas_usuario(email, is_win):
         print(f"Erro Banco (atualizar_estatisticas): {e}")
 
 def zerar_estatisticas_usuario(email):
-    """Zera totalmente placar e estatísticas ao acionar STOP."""
     try:
         email_clean = email.strip().lower()
         conn = get_db_connection()
@@ -730,14 +729,11 @@ ATIVOS_BASE = {
         "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
         "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCAD", "EURCHF",
         "GBPAUD", "GBPCAD", "GBPCHF", "AUDCAD", "AUDCHF", "CADJPY", "CHFJPY",
-        "NZDJPY", "NZDCAD", "NZDCHF", "AUDNZD", "EURNZD", "GBPNZD", "USDMXN",
-        "USDTRY", "USDZAR", "USDSEK", "USDNOK", "USDSGD", "USDHKD"
+        "NZDJPY", "NZDCAD", "NZDCHF", "AUDNZD", "EURNZD", "GBPNZD"
     ],
     "CRIPTO": [
         "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "ADAUSD", "AVAXUSD",
-        "LINKUSD", "DOGEUSD", "DOTUSD", "MATICUSD", "LTCUSD", "SHIBUSD", "TRXUSD",
-        "NEARUSD", "ATOMUSD", "UNIUSD", "ETCUSD", "XLMUSD", "BCHUSD", "ALGOUSD",
-        "ICPUSD", "FILUSD", "APTUSD", "ARBITRUMUSD", "OPUSD", "INJUSD", "SUIUSD"
+        "LINKUSD", "DOGEUSD", "DOTUSD", "MATICUSD", "LTCUSD", "SHIBUSD", "TRXUSD"
     ]
 }
 
@@ -745,19 +741,16 @@ MAPA_TICKERS = {}
 for par in ATIVOS_BASE["FOREX"]: MAPA_TICKERS[par] = f"{par}=X"
 for par in ATIVOS_BASE["CRIPTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
 
-# ================= MOTOR DE ANÁLISE PROFUNDA =================
+# ================= MOTOR DE ANÁLISE CORRIGIDO =================
 def get_data_v2(ticker, tf, period='5d'):
     try:
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval={tf}m&range={period}"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-            'Accept': 'application/json',
-            'Referer': 'https://finance.yahoo.com/'
+            'Accept': 'application/json'
         }
         
-        session_req = requests.Session()
-        res = session_req.get(url, headers=headers, timeout=5)
-        
+        res = requests.get(url, headers=headers, timeout=4)
         if res.status_code != 200:
             return None
             
@@ -779,11 +772,11 @@ def get_data_v2(ticker, tf, period='5d'):
         for k in ohlc: 
             ohlc[k] = ohlc[k][idx]
             
-        if len(ohlc["close"]) < 50:
+        if len(ohlc["close"]) < 30:
             return None
             
         return ohlc
-    except Exception as e:
+    except Exception:
         return None
 
 def calcular_ema(dados, periodo):
@@ -796,28 +789,19 @@ def calcular_ema(dados, periodo):
 
 def validar_analise_profunda(data, direcao, i=-1, estrategia=""):
     c = data["close"]
-    if len(c) < 50: return False
+    if len(c) < 30: return False
 
-    # Filtro de Tendência por EMA 50 apenas para estratégias de tendência (Evita bloquear estratégias de Reversão/Retração)
-    if estrategia in ["MHI1", "LOGICA_DO_PRECO"]:
-        ema50 = calcular_ema(c, 50)
-        if direcao == "CALL" and c[i] < ema50[i]:
-            return False
-        if direcao == "PUT" and c[i] > ema50[i]:
-            return False
-
-    # Filtro de micro-velas sem volatilidade (Doji / Vela sem corpo)
-    atr = np.mean(data["high"][i-14:i] - data["low"][i-14:i])
+    # Filtro de micro-velas insignificantes (Doji)
+    atr = np.mean(data["high"][i-10:i] - data["low"][i-10:i])
     corpo_atual = abs(c[i] - data["open"][i])
-    if corpo_atual < (atr * 0.10):  # Ajustado de 0.25 para 0.10 para evitar falsos travamentos
+    if corpo_atual < (atr * 0.03):  # Reduzido para evitar bloqueios excessivos
         return False
 
     return True
 
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
-    
-    if len(c) < 50: return None
+    if len(c) < 30: return None
     sinal = None
 
     if estrategia == "LOGICA_DO_PRECO":
@@ -825,49 +809,43 @@ def analisar_estrategia(data, estrategia, i=-1):
         tamanho = abs(c[i] - o[i])
         p_sup = h[i] - max(o[i], c[i])
         p_inf = min(o[i], c[i]) - l[i]
-        media_corpo = np.mean(abs(c[i-10:i] - o[i-10:i])) if i >= 10 else 0.0001
         
-        # Padrões de Força e Rejeição no pavio
-        if cor == "G" and p_inf == 0 and tamanho > (media_corpo * 0.9): sinal = "CALL"
-        elif cor == "R" and p_sup == 0 and tamanho > (media_corpo * 0.9): sinal = "PUT"
-        elif p_inf > (tamanho * 1.5): sinal = "CALL"
-        elif p_sup > (tamanho * 1.5): sinal = "PUT"
+        # Leitura de Força e Rejeição
+        if cor == "G" and p_inf > (tamanho * 1.1): sinal = "CALL"
+        elif cor == "R" and p_sup > (tamanho * 1.1): sinal = "PUT"
+        elif cor == "G" and p_sup == 0: sinal = "CALL"
+        elif cor == "R" and p_inf == 0: sinal = "PUT"
 
     elif estrategia == "RSI_MACD_MA":
-        ma = np.mean(c[i-20:i])
-        
-        diff = np.diff(c[i-15:i])
-        up = diff[diff>0]
-        down = diff[diff<0]
-        avg_up = np.mean(up) if len(up) > 0 else 0
-        avg_down = abs(np.mean(down)) if len(down) > 0 else 0.001
-        rs = avg_up / avg_down if avg_down != 0 else 0
+        diff = np.diff(c[i-14:i])
+        up = diff[diff > 0]
+        down = abs(diff[diff < 0])
+        avg_up = np.mean(up) if len(up) > 0 else 0.0001
+        avg_down = np.mean(down) if len(down) > 0 else 0.0001
+        rs = avg_up / avg_down
         rsi = 100 - (100 / (1 + rs))
-        
+
         ema12 = calcular_ema(c, 12)
         ema26 = calcular_ema(c, 26)
         macd_line = ema12 - ema26
         signal_line = calcular_ema(macd_line, 9)
-        
-        # Gatilho de confirmação MACD e RSI otimizados
-        if c[i] > ma and rsi < 55 and macd_line[i] > signal_line[i]: sinal = "CALL"
-        if c[i] < ma and rsi > 45 and macd_line[i] < signal_line[i]: sinal = "PUT"
+
+        if rsi < 40 and macd_line[i] > signal_line[i]: sinal = "CALL"
+        elif rsi > 60 and macd_line[i] < signal_line[i]: sinal = "PUT"
 
     elif estrategia == "MHI1":
-        # Molicidade MHI: Analisa as últimas 3 velas completas
         cores = [("G" if c[j] > o[j] else "R") for j in range(i-2, i+1)]
         qtd_g = cores.count("G")
         qtd_r = cores.count("R")
         
-        # Entra a favor da minoria
         if qtd_g > qtd_r: sinal = "PUT"
         elif qtd_r > qtd_g: sinal = "CALL"
 
     elif estrategia in ["REVERSAO", "RETRACAO"]:
         std = np.std(c[i-20:i])
         ma = np.mean(c[i-20:i])
-        banda_superior = ma + (2.0 * std)
-        banda_inferior = ma - (2.0 * std)
+        banda_superior = ma + (1.8 * std)
+        banda_inferior = ma - (1.8 * std)
 
         if c[i] <= banda_inferior: sinal = "CALL"
         elif c[i] >= banda_superior: sinal = "PUT"
@@ -1100,7 +1078,7 @@ def resultado(res):
     AG_RESULTADO = False
     return redirect('/')
 
-# ================= LOOP PRINCIPAL DO BOT (OTIMIZADO) =================
+# ================= LOOP PRINCIPAL DO BOT (CORRIGIDO E FLUIDO) =================
 def bot_loop():
     global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE
     
@@ -1115,13 +1093,11 @@ def bot_loop():
                 time.sleep(1)
                 continue
 
-            # SELEÇÃO DINÂMICA DE ATIVOS
             if TIPO_MERCADO == "TODOS":
                 ativos = ATIVOS_BASE["FOREX"] + ATIVOS_BASE["CRIPTO"]
             else:
                 ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX"])
 
-            # MODO FOCO: Se temos um pré-alerta, paramos de varrer os outros ativos e focamos nele
             lista_varredura = [ativo_alerta] if pre_alerta_enviado else ativos
 
             for ativo in lista_varredura:
@@ -1136,19 +1112,18 @@ def bot_loop():
 
                 data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
                 if not data:
-                    time.sleep(0.1)
+                    time.sleep(0.05)
                     continue
 
                 agora = datetime.now()
                 segundos_atuais = agora.second
                 minutos_atuais = agora.minute
                 
-                # Cálculo exato do tempo restante para o fechamento da vela
                 minutos_restantes = TIMEFRAME_OPERACAO - 1 - (minutos_atuais % TIMEFRAME_OPERACAO)
                 segundos_restantes_vela = (minutos_restantes * 60) + (60 - segundos_atuais)
 
-                # 1. PRÉ-ALERTA (25s a 45s antes do encerramento da vela)
-                if 25 <= segundos_restantes_vela <= 45 and not pre_alerta_enviado and not AGUARDANDO_CONFIRMACAO_RESULTADO:
+                # 1. PRÉ-ALERTA (Entre 20s e 50s antes da virada da vela)
+                if 20 <= segundos_restantes_vela <= 50 and not pre_alerta_enviado and not AGUARDANDO_CONFIRMACAO_RESULTADO:
                     sinal_encontrado = None
                     est_nome_encontrada = ESTRATEGIA_ESCOLHIDA
 
@@ -1180,7 +1155,7 @@ def bot_loop():
                 # 2. CONFIRMAÇÃO DO SINAL NA VIRADA DA VELA
                 elif pre_alerta_enviado and ativo_alerta == ativo:
                     
-                    if segundos_restantes_vela <= 4 or segundos_restantes_vela >= (TIMEFRAME_OPERACAO * 60 - 2):
+                    if segundos_restantes_vela <= 8 or segundos_restantes_vela >= (TIMEFRAME_OPERACAO * 60 - 3):
                         sinal_confirmado = analisar_estrategia(data, estrategia_alerta)
                         
                         if msg_pre_alerta_id:
@@ -1229,27 +1204,16 @@ def bot_loop():
                             AG_RESULTADO = True
                         else:
                             ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>❌ <b style='color:#ef4444;'>SINAL ABORTADO</b><br>O padrão sumiu na virada da vela.</div><div class='tech-scanner'></div>"
-                            time.sleep(2)
+                            time.sleep(1)
 
                         pre_alerta_enviado = False
                         msg_pre_alerta_id = None
                         ativo_alerta = None
                         estrategia_alerta = None
                         break
-                    
-                    elif 5 <= segundos_restantes_vela <= 20:
-                        if msg_pre_alerta_id:
-                            deletar_mensagem_telegram(msg_pre_alerta_id)
-                        pre_alerta_enviado = False
-                        msg_pre_alerta_id = None
-                        ativo_alerta = None
-                        estrategia_alerta = None
-                        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>❌ <b style='color:#ef4444;'>SINAL ABORTADO (TIMEOUT)</b><br>Tempo expirado. Retomando varredura...</div><div class='tech-scanner'></div>"
-                        time.sleep(2)
-                        break
 
-                time.sleep(0.1)
-            time.sleep(0.2)
+                time.sleep(0.05)
+            time.sleep(0.1)
         except Exception as e:
             print(f"Erro Loop Bot: {e}")
             time.sleep(1)
