@@ -1139,7 +1139,7 @@ def bot_loop():
                     str_entrada = prox_minuto_entrada.strftime("%H:%M")
                     str_saida = horario_saida.strftime("%H:%M")
 
-                    # 1. ENVIAR PRÉ-ALERTA / MENSAGEM DE PREPARAÇÃO
+                    # 1. ENVIAR PRÉ-ALERTA / MENSAGEM DE PREPARAÇÃO EM AMBOS SIMULTANEAMENTE
                     msg_pre_alerta = (
                         f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE</b> ⚠️\n\n"
                         f"<b>Ativo:</b> {ativo}\n"
@@ -1148,7 +1148,7 @@ def bot_loop():
                         f"👉 <i>Abra o ativo na sua corretora e prepare-se!</i>"
                     )
                     
-                    # Atualiza display web para modo de atenção
+                    # Atualiza o painel web no mesmo instante
                     ULTIMO_SINAL_GLOBAL = (
                         f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
                         f"⚠️ <b>PREPARE O ATIVO: {ativo}</b> ⚠️<br>"
@@ -1157,7 +1157,7 @@ def bot_loop():
                         f"</div>"
                     )
 
-                    # Apenas o ADM dispara mensagens no Telegram
+                    # Dispara para o Telegram (se for ADM)
                     msg_pre_id = enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
 
                     # 2. AGUARDAR ATÉ O HORÁRIO EXATO DA ENTRADA
@@ -1169,11 +1169,11 @@ def bot_loop():
                     if not BOT_INICIADO or BOT_PAUSADO:
                         break
 
-                    # Deleta a mensagem de pré-alerta se ela foi gerada
+                    # Deleta o pré-alerta do Telegram
                     if msg_pre_id:
                         deletar_mensagem_telegram(msg_pre_id)
 
-                    # 3. ENVIAR A MENSAGEM DE CONFIRMAÇÃO DEFINITIVA DO SINAL
+                    # 3. ENVIAR MENSAGEM DE CONFIRMAÇÃO EM AMBOS SIMULTANEAMENTE
                     dir_texto = "COMPRA" if sinal_encontrado == "CALL" else "VENDA"
                     cor_html = "#10b981" if sinal_encontrado == "CALL" else "#ef4444"
                     bolinha = "🟢" if sinal_encontrado == "CALL" else "🔴"
@@ -1187,6 +1187,7 @@ def bot_loop():
                         f"<b>Direção :</b> {bolinha} <b>{dir_texto}</b>"
                     )
 
+                    # Atualiza o painel web no mesmo instante
                     SINAL_DISPLAY_PERMANENTE = (
                         f"<div style='text-align:center; font-family: sans-serif;'>"
                         f"🎯 <b style='color:#00f2fe; font-size:16px;'>Sinal confirmado</b><br>"
@@ -1202,7 +1203,7 @@ def bot_loop():
                     for u in list(USUARIOS_ONLINE.keys()):
                         registrar_sinal_bd(u, f"{ativo} (M{TIMEFRAME_OPERACAO})")
 
-                    # Notifica no Telegram apenas se a sessão pertence ao ADM
+                    # Dispara para o Telegram (se for ADM)
                     enviar_telegram(msg_telegram_confirmado, user_solicitante=QUEM_INICIOU_O_BOT)
                     
                     AGUARDANDO_CONFIRMACAO_RESULTADO = True
