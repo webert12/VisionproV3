@@ -11,7 +11,7 @@ import logging
 import numpy as np
 import re
 from datetime import datetime, timedelta
-from flask import Flask, render_template_string, request, jsonify, session, redirect, abort
+from flask import Flask, render_template_string, request, jsonify, session, redirect, abort, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -91,6 +91,9 @@ app = Flask(__name__)
 app.secret_key = APP_SECRET
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
+
+# Variable de notificação para disparo no dispositivo
+NOTIFICACAO_SISTEMA = None
 
 # ================= TEMPLATES HTML =================
 HTML_ADM = """
@@ -350,6 +353,10 @@ HTML_INDEX = """
 
         .tech-scanner { width: 28px; height: 28px; margin: 10px auto 0; border: 3px solid rgba(0, 242, 254, 0.2); border-top-color: #00f2fe; border-radius: 50%; animation: spin 0.8s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* BOTAO NOTIFICACAO */
+        .btn-notify { width: 100%; padding: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; }
+        .btn-notify:hover { background: rgba(16, 185, 129, 0.3); }
     </style>
 </head>
 <body>
@@ -359,6 +366,8 @@ HTML_INDEX = """
             <a href="/logout" class="btn-logout">SAIR</a>
         </div>
 
+        <button class="btn-notify" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
+
         <div class="placar-card">
             <div class="placar-grid">
                 <div class="placar-item">
@@ -367,7 +376,7 @@ HTML_INDEX = """
                 </div>
                 <div class="placar-item">
                     <div class="title">ASSERTIVIDADE</div>
-                    <div class="val wr-color" id="wr-text">0%</div>
+                    <div class="val wr-text" id="wr-text">0%</div>
                 </div>
                 <div class="placar-item">
                     <div class="title">LOSS</div>
@@ -468,6 +477,52 @@ HTML_INDEX = """
     </div>
 
     <script>
+        let lastNotifId = null;
+
+        // Registrar o Service Worker para Notificações Nativas no Celular
+        if ('serviceWorker' in navigator && 'Notification' in window) {
+            navigator.serviceWorker.register('/sw.js').then(reg => {
+                console.log('Service Worker de Notificações registrado com sucesso.');
+            });
+        }
+
+        function solicitarPermissaoNotificacao() {
+            if (!('Notification' in window)) {
+                alert('Este navegador não suporta notificações de sistema.');
+                return;
+            }
+            Notification.requestPermission().then(permission => {
+                if (permission === 'granted') {
+                    document.getElementById('btn-enable-notify').innerText = "✅ NOTIFICAÇÕES NATIVAS ATIVADAS!";
+                    document.getElementById('btn-enable-notify').style.borderColor = "#10b981";
+                    document.getElementById('btn-enable-notify').style.color = "#10b981";
+                    
+                    // Notificação de teste
+                    dispararNotificacaoNativa("VISION PRO V3", "Alertas nativos do celular configurados!");
+                } else {
+                    alert('Permissão de Notificação Recusada.');
+                }
+            });
+        }
+
+        function dispararNotificacaoNativa(titulo, corpo) {
+            if (Notification.permission === 'granted') {
+                if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                    navigator.serviceWorker.ready.then(reg => {
+                        reg.showNotification(titulo, {
+                            body: corpo,
+                            icon: 'https://cdn-icons-png.flaticon.com/512/1828/1828884.png',
+                            vibrate: [200, 100, 200, 100, 200],
+                            tag: 'vision-signal',
+                            renotify: true
+                        });
+                    });
+                } else {
+                    new Notification(titulo, { body: corpo, vibrate: [200, 100, 200] });
+                }
+            }
+        }
+
         function openBroker(url) {
             const brokerContainer = document.getElementById('broker-view-container');
             document.getElementById('brokerIframe').src = url;
@@ -513,6 +568,12 @@ HTML_INDEX = """
                     }
                 }
 
+                // VERIFICAR SE HÁ NOVA NOTIFICAÇÃO NATIVA DE SISTEMA PARA O CELULAR
+                if(data.notificacao && data.notificacao.id !== lastNotifId) {
+                    lastNotifId = data.notificacao.id;
+                    dispararNotificacaoNativa(data.notificacao.titulo, data.notificacao.corpo);
+                }
+
                 let histHtml = "";
                 if(data.historico) {
                     data.historico.forEach(item => {
@@ -525,6 +586,15 @@ HTML_INDEX = """
                 if(document.getElementById('lista-sinais')) document.getElementById('lista-sinais').innerHTML = histHtml || "<div style='text-align:center; font-size:11px; color:#64748b;'>Nenhum sinal no histórico.</div>";
             });
         }, 1000);
+
+        // Checagem inicial da permissão das notificações ao carregar a página
+        window.addEventListener('load', () => {
+            if (window.Notification && Notification.permission === 'granted') {
+                document.getElementById('btn-enable-notify').innerText = "✅ NOTIFICAÇÕES NATIVAS ATIVADAS";
+                document.getElementById('btn-enable-notify').style.borderColor = "#10b981";
+                document.getElementById('btn-enable-notify').style.color = "#10b981";
+            }
+        });
     </script>
 </body>
 </html>
@@ -924,7 +994,26 @@ def analisar_estrategia(data, estrategia, i=-1):
 
     return None
 
-# ================= ROTAS =================
+# ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
+@app.route('/sw.js')
+def service_worker():
+    sw_code = """
+    self.addEventListener('notificationclick', function(event) {
+        event.notification.close();
+        event.waitUntil(
+            clients.matchAll({ type: 'window' }).then(function(clientList) {
+                for (var i = 0; i < clientList.length; i++) {
+                    var client = clientList[i];
+                    if (client.url === '/' && 'focus' in client) return client.focus();
+                }
+                if (clients.openWindow) return clients.openWindow('/');
+            })
+        );
+    });
+    """
+    return Response(sw_code, mimetype='application/javascript')
+
+# ================= ROTAS DE NAVEGAÇÃO =================
 @app.route('/health')
 def health():
     return jsonify({"status": "ok"}), 200
@@ -959,7 +1048,6 @@ def login():
         if e != ADMIN_EMAIL:
             ip_registrado = user_db.get('ip_bloqueado')
             if not ip_registrado:
-                # Se for o primeiro acesso pós-liberação/cadastro sem IP, vincula o IP atual
                 atualizar_ip_usuario(e, ip_cliente)
             elif ip_registrado != ip_cliente:
                 return render_template_string(
@@ -989,7 +1077,6 @@ def register():
             return render_template_string(HTML_REGISTER, erro="Preencha todos os campos.")
             
         try:
-            # Salva o usuário fixando imediatamente o IP capturado no cadastro
             salvar_usuario(e, s, ip_inicial=ip_cliente)
             session['user'] = e
             USUARIOS_ONLINE[e] = time.time()
@@ -1091,7 +1178,8 @@ def status():
         "historico": historico,
         "ativo_atual": ATIVO_ATUAL_GLOBAL,
         "mercado": TIPO_MERCADO,
-        "rodando": BOT_INICIADO and not BOT_PAUSADO
+        "rodando": BOT_INICIADO and not BOT_PAUSADO,
+        "notificacao": NOTIFICACAO_SISTEMA
     })
 
 @app.route('/command/<cmd>')
@@ -1109,7 +1197,6 @@ def command(cmd):
         ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
         ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>VARREDURA INICIADA</b><br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
         
-        # Envia mensagem profissional de início no Telegram se executado pelo Administrador
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
             f"🟢 <b>Status:</b> Operacional / Varredura Ativa\n"
@@ -1189,7 +1276,7 @@ def resultado(res):
 
 # ================= LOOP PRINCIPAL DO BOT =================
 def bot_loop():
-    global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, QUEM_INICIOU_O_BOT
+    global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, QUEM_INICIOU_O_BOT, NOTIFICACAO_SISTEMA
 
     while BOT_RODANDO:
         try:
@@ -1231,20 +1318,18 @@ def bot_loop():
                 if sinal_encontrado:
                     agora = datetime.now()
                     
-                    # Cálculos do ciclo do Timeframe (M1, M5, M15)
                     minutos_passados = agora.minute % TIMEFRAME_OPERACAO
                     segundos_passados = minutos_passados * 60 + agora.second
                     total_segundos_tf = TIMEFRAME_OPERACAO * 60
                     segundos_restantes = total_segundos_tf - segundos_passados
 
-                    # Horários oficiais de Entrada e Expiração
                     prox_minuto_entrada = agora + timedelta(seconds=segundos_restantes)
                     horario_saida = prox_minuto_entrada + timedelta(minutes=TIMEFRAME_OPERACAO)
 
                     str_entrada = prox_minuto_entrada.strftime("%H:%M")
                     str_saida = horario_saida.strftime("%H:%M")
 
-                    # 1. ENVIAR PRÉ-ALERTA / MENSAGEM DE PREPARAÇÃO EM AMBOS SIMULTANEAMENTE
+                    # 1. ENVIAR PRÉ-ALERTA E DISPARAR NOTIFICAÇÃO DIRETA NO CELULAR
                     msg_pre_alerta = (
                         f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE</b> ⚠️\n\n"
                         f"<b>Ativo:</b> {ativo}\n"
@@ -1253,7 +1338,6 @@ def bot_loop():
                         f"👉 <i>Abra o ativo na sua corretora e prepare-se!</i>"
                     )
                     
-                    # Atualiza o painel web no mesmo instante
                     ULTIMO_SINAL_GLOBAL = (
                         f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
                         f"⚠️ <b>PREPARE O ATIVO: {ativo}</b> ⚠️<br>"
@@ -1262,7 +1346,14 @@ def bot_loop():
                         f"</div>"
                     )
 
-                    # Dispara para o Telegram (se for ADM)
+                    # NOTIFICAÇÃO DE SISTEMA DISPARADA PARA OS CELULARES CONECTADOS
+                    NOTIFICACAO_SISTEMA = {
+                        "id": str(time.time()),
+                        "titulo": f"⚠️ PREPARE-SE: {ativo}",
+                        "corpo": f"Possível entrada às {str_entrada} (M{TIMEFRAME_OPERACAO}). Abra o gráfico!"
+                    }
+
+                    # Dispara Telegram
                     msg_pre_id = enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
 
                     # 2. AGUARDAR ATÉ O HORÁRIO EXATO DA ENTRADA
@@ -1274,11 +1365,10 @@ def bot_loop():
                     if not BOT_INICIADO or BOT_PAUSADO:
                         break
 
-                    # Deleta o pré-alerta do Telegram
                     if msg_pre_id:
                         deletar_mensagem_telegram(msg_pre_id)
 
-                    # 3. ENVIAR MENSAGEM DE CONFIRMAÇÃO EM AMBOS SIMULTANEAMENTE
+                    # 3. ENVIAR SINAL CONFIRMADO E DISPARAR NOTIFICAÇÃO NATIVA DE SINAL
                     dir_texto = "COMPRA" if sinal_encontrado == "CALL" else "VENDA"
                     cor_html = "#10b981" if sinal_encontrado == "CALL" else "#ef4444"
                     bolinha = "🟢" if sinal_encontrado == "CALL" else "🔴"
@@ -1292,7 +1382,6 @@ def bot_loop():
                         f"<b>Direção :</b> {bolinha} <b>{dir_texto}</b>"
                     )
 
-                    # Atualiza o painel web no mesmo instante
                     SINAL_DISPLAY_PERMANENTE = (
                         f"<div style='text-align:center; font-family: sans-serif;'>"
                         f"🎯 <b style='color:#00f2fe; font-size:16px;'>Sinal confirmado</b><br>"
@@ -1305,10 +1394,16 @@ def bot_loop():
                     )
                     ULTIMO_SINAL_GLOBAL = SINAL_DISPLAY_PERMANENTE
 
+                    # DISPARAR NOTIFICAÇÃO NATIVA DE SINAL CONFIRMADO NO CELULAR
+                    NOTIFICACAO_SISTEMA = {
+                        "id": str(time.time()),
+                        "titulo": f"🎯 SINAL CONFIRMADO: {ativo}",
+                        "corpo": f"Direção: {dir_texto} | Entrada: {str_entrada} | Saída: {str_saida}"
+                    }
+
                     for u in list(USUARIOS_ONLINE.keys()):
                         registrar_sinal_bd(u, f"{ativo} (M{TIMEFRAME_OPERACAO})")
 
-                    # Dispara para o Telegram (se for ADM)
                     enviar_telegram(msg_telegram_confirmado, user_solicitante=QUEM_INICIOU_O_BOT)
                     
                     AGUARDANDO_CONFIRMACAO_RESULTADO = True
