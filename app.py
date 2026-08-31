@@ -17,8 +17,8 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 # ================= CONFIGURAÇÕES DE AMBIENTE =================
-TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU").strip()
-CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366").strip()
+TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU")
+CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
 
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
@@ -32,26 +32,21 @@ USUARIOS_ONLINE = {}
 DADOS_USUARIOS = {}
 
 ULTIMO_MSG_ID_TELEGRAM = None
-QUEM_INICIOU_O_BOT = ADMIN_EMAIL
+QUEM_INICIOU_O_BOT = None
 
 def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
     """
-    Envia mensagens para o Telegram verificando permissão de Administrador.
+    Envia mensagens para o Telegram APENAS se o usuário que solicitou
+    ou iniciou a sessão for o Administrador do sistema.
     """
     global ULTIMO_MSG_ID_TELEGRAM, QUEM_INICIOU_O_BOT
     
+    # Validação de permissão: Apenas o ADM pode disparar para o Telegram
     usuario_ativo = user_solicitante or QUEM_INICIOU_O_BOT
-    
-    # Normalização e validação de permissão para envio
-    if usuario_ativo:
-        usuario_ativo = str(usuario_ativo).strip().lower()
-    
     if usuario_ativo != ADMIN_EMAIL:
-        print(f"[TELEGRAM BLOQUEADO] Usuário '{usuario_ativo}' não é o ADM ('{ADMIN_EMAIL}')")
         return None
 
     if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
-        print("[TELEGRAM ERRO] Token ou Chat ID ausente.")
         return None
         
     try:
@@ -65,8 +60,6 @@ def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
             if auto_delete:
                 threading.Thread(target=deletar_mensagem_atrasada, args=(msg_id, auto_delete)).start()
             return msg_id
-        else:
-            print(f"[TELEGRAM API ERRO] Retorno Telegram: {r}")
         return None
     except Exception as e:
         print(f"Erro Telegram: {e}")
@@ -298,6 +291,7 @@ HTML_INDEX = """
         .winrate-bar { height: 6px; background: #1e293b; border-radius: 10px; overflow: hidden; margin-top: 14px; }
         .winrate-fill { height: 100%; background: linear-gradient(90deg, #059669, #10b981); width: 0%; transition: width 0.5s ease-in-out; }
 
+        /* EMBED DA CORRETORA (OCULTO POR PADRÃO) */
         #broker-view-container { display: none; width: 100%; height: 350px; border-radius: 16px; overflow: hidden; flex-direction: column; margin-bottom: 16px; background: #0b1120; border: 1px solid #1e293b; padding: 8px; }
         .broker-iframe-inline { width: 100%; height: 100%; border: none; background: #0b1120; border-radius: 10px; }
         .btn-close-broker { background: #1e293b; border: 1px solid #334155; color: #00f2fe; padding: 6px 12px; font-size: 11px; font-weight: 700; border-radius: 6px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: center; }
@@ -928,8 +922,7 @@ def logout():
     global QUEM_INICIOU_O_BOT
     user = session.get('user')
     if user in USUARIOS_ONLINE: del USUARIOS_ONLINE[user]
-    if user and str(user).strip().lower() == QUEM_INICIOU_O_BOT: 
-        QUEM_INICIOU_O_BOT = ADMIN_EMAIL
+    if user == QUEM_INICIOU_O_BOT: QUEM_INICIOU_O_BOT = None
     session.clear()
     return redirect('/login')
 
@@ -939,7 +932,7 @@ def termos():
 
 @app.route('/admin_panel')
 def admin_panel():
-    if session.get('user', '').strip().lower() != ADMIN_EMAIL: return abort(403)
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
     now = time.time()
     for u in list(USUARIOS_ONLINE.keys()):
         if now - USUARIOS_ONLINE[u] > 60: del USUARIOS_ONLINE[u]
@@ -947,13 +940,13 @@ def admin_panel():
 
 @app.route('/adm/renovar/<email>')
 def adm_renovar(email):
-    if session.get('user', '').strip().lower() != ADMIN_EMAIL: return abort(403)
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
     renovar_usuario_db(email)
     return redirect('/admin_panel')
 
 @app.route('/adm/editar', methods=['POST'])
 def adm_editar():
-    if session.get('user', '').strip().lower() != ADMIN_EMAIL: return abort(403)
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
     original = request.form.get('email_original', '').strip().lower()
     novo_email = request.form.get('novo_email', '').strip().lower()
     nova_senha = request.form.get('nova_senha', '').strip()
@@ -976,14 +969,14 @@ def adm_editar():
 
 @app.route('/adm/excluir/<email>')
 def adm_excluir(email):
-    if session.get('user', '').strip().lower() != ADMIN_EMAIL: return abort(403)
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
     excluir_usuario_db(email)
     return redirect('/admin_panel')
 
 @app.route('/')
 def index():
     if 'user' not in session: return redirect('/login')
-    user = session['user'].strip().lower()
+    user = session['user']
     USUARIOS_ONLINE[user] = time.time()
     init_user_session(user)
     return render_template_string(HTML_INDEX, modo=TIPO_MERCADO, tf=TIMEFRAME_OPERACAO, estrat=ESTRATEGIA_ESCOLHIDA, user=user, admin=ADMIN_EMAIL)
@@ -992,7 +985,6 @@ def index():
 def status():
     user = session.get('user')
     if not user: return jsonify({})
-    user = user.strip().lower()
     USUARIOS_ONLINE[user] = time.time()
     
     usuarios = carregar_usuarios()
@@ -1016,10 +1008,10 @@ def status():
 @app.route('/command/<cmd>')
 def command(cmd):
     global BOT_INICIADO, BOT_PAUSADO, TIMEFRAME_OPERACAO, TIPO_MERCADO, QUEM_INICIOU_O_BOT, ULTIMO_SINAL_GLOBAL, AG_RESULTADO, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, ESTRATEGIA_ESCOLHIDA, ATIVO_ATUAL_GLOBAL
-    user = session.get('user', '').strip().lower()
+    user = session.get('user')
 
     if cmd == "start_bot":
-        QUEM_INICIOU_O_BOT = user or ADMIN_EMAIL
+        QUEM_INICIOU_O_BOT = user
         BOT_INICIADO = True
         BOT_PAUSADO = False
         AG_RESULTADO = False
@@ -1028,16 +1020,17 @@ def command(cmd):
         ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
         ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>VARREDURA INICIADA</b><br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
         
+        # Envia mensagem profissional de início no Telegram se executado pelo Administrador
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
             f"🟢 <b>Status:</b> Operacional / Varredura Ativa\n"
-            f"👤 <b>Administrador:</b> {QUEM_INICIOU_O_BOT}\n"
+            f"👤 <b>Administrador:</b> {user}\n"
             f"📊 <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
             f"🌐 <b>Mercado:</b> {TIPO_MERCADO}\n"
             f"⚙️ <b>Estratégia:</b> {ESTRATEGIA_ESCOLHIDA}\n\n"
             f"<i>O algoritmo está varrendo o mercado em busca de oportunidades de alta assertividade. Preparem suas bancas!</i>"
         )
-        enviar_telegram(msg_inicio_telegram, user_solicitante=QUEM_INICIOU_O_BOT)
+        enviar_telegram(msg_inicio_telegram, user_solicitante=user)
         return jsonify({"ok": True})
 
     elif cmd == "pause_bot":
@@ -1081,7 +1074,6 @@ def resultado(res):
     global AG_RESULTADO, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, ULTIMO_SINAL_GLOBAL
     user = session.get('user')
     if user:
-        user = user.strip().lower()
         if res == 'win':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "Win")
@@ -1150,18 +1142,20 @@ def bot_loop():
                 if sinal_encontrado:
                     agora = datetime.now()
                     
+                    # Cálculos do ciclo do Timeframe (M1, M5, M15)
                     minutos_passados = agora.minute % TIMEFRAME_OPERACAO
                     segundos_passados = minutos_passados * 60 + agora.second
                     total_segundos_tf = TIMEFRAME_OPERACAO * 60
                     segundos_restantes = total_segundos_tf - segundos_passados
 
+                    # Horários oficiais de Entrada e Expiração
                     prox_minuto_entrada = agora + timedelta(seconds=segundos_restantes)
                     horario_saida = prox_minuto_entrada + timedelta(minutes=TIMEFRAME_OPERACAO)
 
                     str_entrada = prox_minuto_entrada.strftime("%H:%M")
                     str_saida = horario_saida.strftime("%H:%M")
 
-                    # 1. PRÉ-ALERTA
+                    # 1. ENVIAR PRÉ-ALERTA / MENSAGEM DE PREPARAÇÃO EM AMBOS SIMULTANEAMENTE
                     msg_pre_alerta = (
                         f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE</b> ⚠️\n\n"
                         f"<b>Ativo:</b> {ativo}\n"
@@ -1170,6 +1164,7 @@ def bot_loop():
                         f"👉 <i>Abra o ativo na sua corretora e prepare-se!</i>"
                     )
                     
+                    # Atualiza o painel web no mesmo instante
                     ULTIMO_SINAL_GLOBAL = (
                         f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
                         f"⚠️ <b>PREPARE O ATIVO: {ativo}</b> ⚠️<br>"
@@ -1178,9 +1173,10 @@ def bot_loop():
                         f"</div>"
                     )
 
+                    # Dispara para o Telegram (se for ADM)
                     msg_pre_id = enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
 
-                    # 2. AGUARDAR ENTRADA
+                    # 2. AGUARDAR ATÉ O HORÁRIO EXATO DA ENTRADA
                     while datetime.now() < prox_minuto_entrada:
                         if not BOT_INICIADO or BOT_PAUSADO:
                             break
@@ -1189,10 +1185,11 @@ def bot_loop():
                     if not BOT_INICIADO or BOT_PAUSADO:
                         break
 
+                    # Deleta o pré-alerta do Telegram
                     if msg_pre_id:
                         deletar_mensagem_telegram(msg_pre_id)
 
-                    # 3. MENSAGEM CONFIRMADA
+                    # 3. ENVIAR MENSAGEM DE CONFIRMAÇÃO EM AMBOS SIMULTANEAMENTE
                     dir_texto = "COMPRA" if sinal_encontrado == "CALL" else "VENDA"
                     cor_html = "#10b981" if sinal_encontrado == "CALL" else "#ef4444"
                     bolinha = "🟢" if sinal_encontrado == "CALL" else "🔴"
@@ -1206,6 +1203,7 @@ def bot_loop():
                         f"<b>Direção :</b> {bolinha} <b>{dir_texto}</b>"
                     )
 
+                    # Atualiza o painel web no mesmo instante
                     SINAL_DISPLAY_PERMANENTE = (
                         f"<div style='text-align:center; font-family: sans-serif;'>"
                         f"🎯 <b style='color:#00f2fe; font-size:16px;'>Sinal confirmado</b><br>"
@@ -1221,6 +1219,7 @@ def bot_loop():
                     for u in list(USUARIOS_ONLINE.keys()):
                         registrar_sinal_bd(u, f"{ativo} (M{TIMEFRAME_OPERACAO})")
 
+                    # Dispara para o Telegram (se for ADM)
                     enviar_telegram(msg_telegram_confirmado, user_solicitante=QUEM_INICIOU_O_BOT)
                     
                     AGUARDANDO_CONFIRMACAO_RESULTADO = True
@@ -1233,12 +1232,17 @@ def bot_loop():
             print(f"Erro Loop Bot: {e}")
             time.sleep(1)
 
-# Inicialização ininterrupta da Thread do Bot
-def iniciar_thread_bot():
-    t = threading.Thread(target=bot_loop, daemon=True)
-    t.start()
+thread_iniciada = False
+lock_thread = threading.Lock()
 
-iniciar_thread_bot()
+@app.before_request
+def start_background_loop():
+    global thread_iniciada
+    if not thread_iniciada:
+        with lock_thread:
+            if not thread_iniciada:
+                threading.Thread(target=bot_loop, daemon=True).start()
+                thread_iniciada = True
 
 if __name__ == "__main__":
     app.run()
