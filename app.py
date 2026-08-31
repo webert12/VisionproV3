@@ -55,7 +55,7 @@ def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
         r = requests.post(url, json=payload, timeout=5).json()
         if r.get("ok"):
             msg_id = r["result"]["message_id"]
-            if "SINAL CONFIRMADO" in mensagem or "🔥" in mensagem or "🎯" in mensagem or "Sinal confirmado" in mensagem:
+            if any(term in mensagem for term in ["SINAL CONFIRMADO", "🔥", "🎯", "Sinal confirmado"]):
                 ULTIMO_MSG_ID_TELEGRAM = msg_id
             if auto_delete:
                 threading.Thread(target=deletar_mensagem_atrasada, args=(msg_id, auto_delete)).start()
@@ -1020,13 +1020,26 @@ def command(cmd):
         ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
         ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>VARREDURA INICIADA</b><br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
         
-        # Só manda no Telegram se quem apertou START for o ADM
-        enviar_telegram(f"🚀 <b>SISTEMA VISION PRO V3 CONECTADO</b>\nSessão iniciada por {user}", user_solicitante=user)
+        # Envia mensagem profissional de início no Telegram se executado pelo Administrador
+        msg_inicio_telegram = (
+            f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
+            f"🟢 <b>Status:</b> Operacional / Varredura Ativa\n"
+            f"👤 <b>Administrador:</b> {user}\n"
+            f"📊 <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
+            f"🌐 <b>Mercado:</b> {TIPO_MERCADO}\n"
+            f"⚙️ <b>Estratégia:</b> {ESTRATEGIA_ESCOLHIDA}\n\n"
+            f"<i>O algoritmo está varrendo o mercado em busca de oportunidades de alta assertividade. Preparem suas bancas!</i>"
+        )
+        enviar_telegram(msg_inicio_telegram, user_solicitante=user)
         return jsonify({"ok": True})
 
     elif cmd == "pause_bot":
         BOT_PAUSADO = not BOT_PAUSADO
-        ULTIMO_SINAL_GLOBAL = "<div class='system-console' style='color:#f59e0b;'>[PAUSADO] VARREDURA EM PAUSA...</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+        status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if BOT_PAUSADO else f"🔍 ANALISANDO: {ATIVO_ATUAL_GLOBAL} (M{TIMEFRAME_OPERACAO})"
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+        
+        msg_pause = "⏸ <b>O SISTEMA FOI PAUSADO PELO ADMINISTRADOR</b>" if BOT_PAUSADO else "▶️ <b>O SISTEMA RETOMOU A VARREDURA DE MERCADO!</b>"
+        enviar_telegram(msg_pause, user_solicitante=user)
         return jsonify({"ok": True})
 
     elif cmd == "stop_bot":
@@ -1041,16 +1054,18 @@ def command(cmd):
         if user:
             zerar_estatisticas_usuario(user)
 
-        # Só manda no Telegram se quem encerrou for o ADM
         enviar_telegram("🔴 <b>ROBÔ ENCERRADO E SISTEMA LIMPO COM SUCESSO!</b>", user_solicitante=user)
         return jsonify({"ok": True})
 
     elif cmd.startswith("tf_"): 
         TIMEFRAME_OPERACAO = int(cmd.split('_')[1])
+        enviar_telegram(f"⚙️ <b>Configuração Alterada:</b> Timeframe atualizado para <b>M{TIMEFRAME_OPERACAO}</b>", user_solicitante=user)
     elif cmd.startswith("mkt_"): 
         TIPO_MERCADO = cmd.split('_')[1]
+        enviar_telegram(f"⚙️ <b>Configuração Alterada:</b> Mercado atualizado para <b>{TIPO_MERCADO}</b>", user_solicitante=user)
     elif cmd.startswith("set_est_"): 
         ESTRATEGIA_ESCOLHIDA = cmd.replace("set_est_", "")
+        enviar_telegram(f"⚙️ <b>Configuração Alterada:</b> Estratégia atualizada para <b>{ESTRATEGIA_ESCOLHIDA}</b>", user_solicitante=user)
     
     return jsonify({"ok": True})
 
@@ -1062,17 +1077,18 @@ def resultado(res):
         if res == 'win':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "Win")
-            enviar_telegram("💎 <b>WIN DIRETO!</b>", user_solicitante=user)
+            enviar_telegram("💎 <b>RESULTADO: WIN DIRETO!</b> ✅", user_solicitante=user)
         elif res == 'g1':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "WinG1")
-            enviar_telegram("🔄 <b>WIN NO GALE 1!</b>", user_solicitante=user)
+            enviar_telegram("🔄 <b>RESULTADO: WIN NO GALE 1!</b> ✅", user_solicitante=user)
         elif res == 'red':
             atualizar_estatisticas_usuario(user, False)
             atualizar_ultimo_sinal_bd(user, "Red")
-            enviar_telegram("📉 <b>STOP LOSS / RED</b>", user_solicitante=user)
+            enviar_telegram("📉 <b>RESULTADO: STOP LOSS / RED</b> ❌", user_solicitante=user)
         elif res == 'pular':
             atualizar_ultimo_sinal_bd(user, "Ignorado")
+            enviar_telegram("⚠️ <b>SINAL IGNORADO / PULADO</b>", user_solicitante=user)
 
         AGUARDANDO_CONFIRMACAO_RESULTADO = False
         SINAL_DISPLAY_PERMANENTE = None
