@@ -16,6 +16,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+# ================= AJUSTE DE FUSO HORÁRIO (SÃO PAULO / BRASÍLIA) =================
+FUSO_SP = pytz.timezone('America/Sao_Paulo')
+
+def agora_brasilia():
+    return datetime.now(FUSO_SP)
+
 # ================= CONFIGURAÇÕES DE AMBIENTE =================
 TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU")
 CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
@@ -47,7 +53,6 @@ def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
     """
     global ULTIMO_MSG_ID_TELEGRAM, QUEM_INICIOU_O_BOT
     
-    # Validação de permissão: Apenas o ADM pode disparar para o Telegram
     usuario_ativo = user_solicitante or QUEM_INICIOU_O_BOT
     if usuario_ativo != ADMIN_EMAIL:
         return None
@@ -92,7 +97,6 @@ app.secret_key = APP_SECRET
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# Variable de notificação para disparo no dispositivo
 NOTIFICACAO_SISTEMA = None
 
 # ================= TEMPLATES HTML =================
@@ -151,7 +155,7 @@ HTML_ADM = """
             <div style="margin-bottom:10px;">
                 <span style="color:#00f2fe;">Assertividade: <b>{{ info.winrate if info.winrate else 0 }}%</b></span><br>
                 <span style="color:#94a3b8;">Wins: {{ info.wins }} | Reds: {{ info.reds }}</span><br>
-                <span style="color:#f59e0b;">IP Registrado: <b>{{ info.ip_bloqueado if info.ip_bloqueado else 'NENHUM (LIVRE)' }}</b></span>
+                <span style="color:#f59e0b;">IPs Cadastrados (Máx 2): <b>{{ info.ips_Formatados }}</b></span>
             </div>
             <form action="/adm/editar" method="POST">
                 <input type="hidden" name="email_original" value="{{ email }}">
@@ -160,7 +164,7 @@ HTML_ADM = """
                 <b>Expira em:</b> {{ info.criado_em }}<br><br>
                 <button type="submit" class="btn-adm blue">SALVAR ALTERAÇÕES</button>
                 <a href="/adm/renovar/{{ email }}" class="btn-adm green">RENOVAR +30 DIAS</a>
-                <a href="/adm/liberar_ip/{{ email }}" class="btn-adm orange">LIBERAR TROCA DE IP</a>
+                <a href="/adm/liberar_ip/{{ email }}" class="btn-adm orange">LIBERAR DISPOSITIVOS / IPS</a>
                 {% if email != admin %}
                 <a href="/adm/excluir/{{ email }}" class="btn-adm red" onclick="return confirm('Excluir?')">EXCLUIR</a>
                 {% endif %}
@@ -213,7 +217,6 @@ HTML_LOGIN = """
         a { color: #00f2fe; text-decoration: none; margin: 0 8px; font-weight: 500; }
         a:hover { text-decoration: underline; }
 
-        /* Botão Flutuante do WhatsApp */
         .whatsapp-float {
             position: fixed;
             width: 55px;
@@ -252,7 +255,6 @@ HTML_LOGIN = """
         </div>
     </div>
 
-    <!-- Suporte WhatsApp Flutuante -->
     <a href="https://wa.me/5537991598179?text=Olá,%20preciso%20de%20suporte%20no%20Vision%20Pro!" class="whatsapp-float" target="_blank" title="Suporte via WhatsApp">
         <svg style="width:32px;height:32px;fill:white;" viewBox="0 0 24 24">
             <path d="M12.012 2c-5.506 0-9.989 4.478-9.99 9.984 0 1.761.459 3.479 1.332 5.001l-1.416 5.166 5.292-1.387c1.462.798 3.111 1.218 4.78 1.219h.004c5.507 0 9.991-4.479 9.992-9.985 0-2.666-1.037-5.172-2.923-7.058-1.887-1.887-4.393-2.925-7.061-2.925zm5.834 14.17c-.247.693-1.439 1.326-1.986 1.391-.51.061-1.168.087-1.885-.143-.435-.139-1.002-.323-1.731-.639-3.053-1.321-5.048-4.385-5.201-4.589-.153-.204-1.246-1.657-1.246-3.16 0-1.503.788-2.242 1.068-2.528.28-.286.611-.357.814-.357.204 0 .408.002.586.011.189.01.442-.072.693.531.255.613.867 2.118.943 2.272.077.153.128.332.026.536-.102.204-.153.332-.306.51-.153.179-.323.401-.46.538-.153.153-.313.32-.134.626.179.306.793 1.31 1.702 2.119 1.168 1.04 2.155 1.363 2.461 1.516.306.153.485.128.664-.077.179-.204.766-.893.97-1.199.204-.306.408-.255.689-.153.281.102 1.786.842 2.092.995.306.153.51.23.586.357.077.128.077.74-.17 1.433z"/>
@@ -333,7 +335,6 @@ HTML_INDEX = """
         .winrate-bar { height: 6px; background: #1e293b; border-radius: 10px; overflow: hidden; margin-top: 14px; }
         .winrate-fill { height: 100%; background: linear-gradient(90deg, #059669, #10b981); width: 0%; transition: width 0.5s ease-in-out; }
 
-        /* EMBED DA CORRETORA (OCULTO POR PADRÃO) */
         #broker-view-container { display: none; width: 100%; height: 350px; border-radius: 16px; overflow: hidden; flex-direction: column; margin-bottom: 16px; background: #0b1120; border: 1px solid #1e293b; padding: 8px; }
         .broker-iframe-inline { width: 100%; height: 100%; border: none; background: #0b1120; border-radius: 10px; }
         .btn-close-broker { background: #1e293b; border: 1px solid #334155; color: #00f2fe; padding: 6px 12px; font-size: 11px; font-weight: 700; border-radius: 6px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: center; }
@@ -385,11 +386,9 @@ HTML_INDEX = """
         .tech-scanner { width: 28px; height: 28px; margin: 10px auto 0; border: 3px solid rgba(0, 242, 254, 0.2); border-top-color: #00f2fe; border-radius: 50%; animation: spin 0.8s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* BOTAO NOTIFICACAO */
         .btn-notify { width: 100%; padding: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; }
         .btn-notify:hover { background: rgba(16, 185, 129, 0.3); }
 
-        /* Botão Flutuante do WhatsApp */
         .whatsapp-float {
             position: fixed;
             width: 55px;
@@ -531,7 +530,6 @@ HTML_INDEX = """
 
     </div>
 
-    <!-- Suporte WhatsApp Flutuante -->
     <a href="https://wa.me/5537991598179?text=Olá,%20preciso%20de%20suporte%20no%20Vision%20Pro!" class="whatsapp-float" target="_blank" title="Suporte via WhatsApp">
         <svg style="width:32px;height:32px;fill:white;" viewBox="0 0 24 24">
             <path d="M12.012 2c-5.506 0-9.989 4.478-9.99 9.984 0 1.761.459 3.479 1.332 5.001l-1.416 5.166 5.292-1.387c1.462.798 3.111 1.218 4.78 1.219h.004c5.507 0 9.991-4.479 9.992-9.985 0-2.666-1.037-5.172-2.923-7.058-1.887-1.887-4.393-2.925-7.061-2.925zm5.834 14.17c-.247.693-1.439 1.326-1.986 1.391-.51.061-1.168.087-1.885-.143-.435-.139-1.002-.323-1.731-.639-3.053-1.321-5.048-4.385-5.201-4.589-.153-.204-1.246-1.657-1.246-3.16 0-1.503.788-2.242 1.068-2.528.28-.286.611-.357.814-.357.204 0 .408.002.586.011.189.01.442-.072.693.531.255.613.867 2.118.943 2.272.077.153.128.332.026.536-.102.204-.153.332-.306.51-.153.179-.323.401-.46.538-.153.153-.313.32-.134.626.179.306.793 1.31 1.702 2.119 1.168 1.04 2.155 1.363 2.461 1.516.306.153.485.128.664-.077.179-.204.766-.893.97-1.199.204-.306.408-.255.689-.153.281.102 1.786.842 2.092.995.306.153.51.23.586.357.077.128.077.74-.17 1.433z"/>
@@ -541,7 +539,6 @@ HTML_INDEX = """
     <script>
         let lastNotifId = null;
 
-        // Registrar o Service Worker para Notificações Nativas no Celular
         if ('serviceWorker' in navigator && 'Notification' in window) {
             navigator.serviceWorker.register('/sw.js').then(reg => {
                 console.log('Service Worker de Notificações registrado com sucesso.');
@@ -559,7 +556,6 @@ HTML_INDEX = """
                     document.getElementById('btn-enable-notify').style.borderColor = "#10b981";
                     document.getElementById('btn-enable-notify').style.color = "#10b981";
                     
-                    // Notificação de teste
                     dispararNotificacaoNativa("VISION PRO V3", "Alertas nativos do celular configurados!");
                 } else {
                     alert('Permissão de Notificação Recusada.');
@@ -630,7 +626,6 @@ HTML_INDEX = """
                     }
                 }
 
-                // VERIFICAR SE HÁ NOVA NOTIFICAÇÃO NATIVA DE SISTEMA PARA O CELULAR
                 if(data.notificacao && data.notificacao.id !== lastNotifId) {
                     lastNotifId = data.notificacao.id;
                     dispararNotificacaoNativa(data.notificacao.titulo, data.notificacao.corpo);
@@ -649,7 +644,6 @@ HTML_INDEX = """
             });
         }, 1000);
 
-        // Checagem inicial da permissão das notificações ao carregar a página
         window.addEventListener('load', () => {
             if (window.Notification && Notification.permission === 'granted') {
                 document.getElementById('btn-enable-notify').innerText = "✅ NOTIFICAÇÕES NATIVAS ATIVADAS";
@@ -675,10 +669,10 @@ def init_db():
                 wins INT DEFAULT 0,
                 reds INT DEFAULT 0,
                 winrate FLOAT DEFAULT 0.0,
-                ip_bloqueado VARCHAR(100)
+                ips_autorizados VARCHAR(255) DEFAULT '[]'
             );
             
-            ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ip_bloqueado VARCHAR(100);
+            ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ips_autorizados VARCHAR(255) DEFAULT '[]';
 
             CREATE TABLE IF NOT EXISTS historico_sinais (
                 id SERIAL PRIMARY KEY,
@@ -693,11 +687,17 @@ def init_db():
     except Exception as e:
         print(f"Erro ao inicializar tabelas do Banco: {e}")
 
-# Executa migração/inicialização automática das tabelas
 try:
     init_db()
 except Exception as e:
     print(f"Aviso de Inicialização DB: {e}")
+
+def parse_ips(ips_raw):
+    try:
+        if not ips_raw: return []
+        return json.loads(ips_raw)
+    except Exception:
+        return []
 
 def carregar_usuarios():
     try:
@@ -712,7 +712,11 @@ def carregar_usuarios():
         for u in raw_data:
             email = u.get("email", "").strip().lower()
             if email:
-                dict_usuarios[email] = dict(u)
+                u_dict = dict(u)
+                ips_list = parse_ips(u_dict.get("ips_autorizados", "[]"))
+                u_dict["ips_list"] = ips_list
+                u_dict["ips_Formatados"] = ", ".join(ips_list) if ips_list else "Nenhum (Livre)"
+                dict_usuarios[email] = u_dict
         return dict_usuarios
     except Exception as e:
         print(f"Erro Banco (carregar_usuarios): {e}")
@@ -721,18 +725,20 @@ def carregar_usuarios():
 def salvar_usuario(email, senha, data=None, ip_inicial=None):
     try:
         email_clean = email.strip().lower()
-        data_criacao = data if data else datetime.now().strftime("%Y-%m-%d")
+        data_criacao = data if data else agora_brasilia().strftime("%Y-%m-%d")
         senha_hash = senha if senha.startswith("scrypt:") or senha.startswith("pbkdf2:") else generate_password_hash(senha)
+        
+        ips = json.dumps([ip_inicial]) if ip_inicial else "[]"
 
         conn = get_db_connection()
         cur = conn.cursor()
         query = """
-            INSERT INTO usuarios (email, senha, criado_em, wins, reds, winrate, ip_bloqueado)
+            INSERT INTO usuarios (email, senha, criado_em, wins, reds, winrate, ips_autorizados)
             VALUES (%s, %s, %s, 0, 0, 0.0, %s)
             ON CONFLICT (email) DO UPDATE 
             SET senha = EXCLUDED.senha;
         """
-        cur.execute(query, (email_clean, senha_hash, data_criacao, ip_inicial))
+        cur.execute(query, (email_clean, senha_hash, data_criacao, ips))
         conn.commit()
         cur.close()
         conn.close()
@@ -740,24 +746,31 @@ def salvar_usuario(email, senha, data=None, ip_inicial=None):
         print(f"Erro Banco (salvar_usuario): {e}")
         raise e
 
-def atualizar_ip_usuario(email, ip_cliente):
+def adicionar_ip_usuario(email, ip_cliente):
     try:
         email_clean = email.strip().lower()
         conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("UPDATE usuarios SET ip_bloqueado = %s WHERE email = %s;", (ip_cliente, email_clean))
-        conn.commit()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT ips_autorizados FROM usuarios WHERE email = %s;", (email_clean,))
+        res = cur.fetchone()
+        
+        ips_list = parse_ips(res.get("ips_autorizados", "[]")) if res else []
+        if ip_cliente not in ips_list and len(ips_list) < 2:
+            ips_list.append(ip_cliente)
+            cur.execute("UPDATE usuarios SET ips_autorizados = %s WHERE email = %s;", (json.dumps(ips_list), email_clean))
+            conn.commit()
+            
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro Banco (atualizar_ip_usuario): {e}")
+        print(f"Erro Banco (adicionar_ip_usuario): {e}")
 
 def liberar_ip_usuario_db(email):
     try:
         email_clean = email.strip().lower()
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("UPDATE usuarios SET ip_bloqueado = NULL WHERE email = %s;", (email_clean,))
+        cur.execute("UPDATE usuarios SET ips_autorizados = %s WHERE email = %s;", ("[]", email_clean))
         conn.commit()
         cur.close()
         conn.close()
@@ -808,7 +821,7 @@ def zerar_estatisticas_usuario(email):
 
 def renovar_usuario_db(email):
     try:
-        hoje = datetime.now().strftime("%Y-%m-%d")
+        hoje = agora_brasilia().strftime("%Y-%m-%d")
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("UPDATE usuarios SET criado_em = %s WHERE email = %s;", (hoje, email.strip().lower()))
@@ -846,7 +859,7 @@ def verificar_assinatura(email):
         
         criado_str = str(res["criado_em"]).split("T")[0]
         data_criacao = datetime.strptime(criado_str, "%Y-%m-%d")
-        dias_restantes = 30 - (datetime.now() - data_criacao).days
+        dias_restantes = 30 - (agora_brasilia().replace(tzinfo=None) - data_criacao).days
         return (True, dias_restantes) if dias_restantes > 0 else (False, 0)
     except Exception as e:
         print(f"Erro Assinatura: {e}")
@@ -1092,7 +1105,7 @@ def login():
 
         if e == ADMIN_EMAIL:
             try:
-                salvar_usuario(e, s, datetime.now().strftime("%Y-%m-%d"), ip_inicial=None)
+                salvar_usuario(e, s, agora_brasilia().strftime("%Y-%m-%d"), ip_inicial=None)
             except Exception as err:
                 return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM: {err}")
 
@@ -1106,15 +1119,20 @@ def login():
         if not check_password_hash(user_db['senha'], s):
             return render_template_string(HTML_LOGIN, erro="Senha Incorreta.")
 
-        # ================= SISTEMA DE VALIDAÇÃO DE IP =================
+        # ================= SISTEMA DE VALIDAÇÃO DE ATÉ 2 IPS =================
         if e != ADMIN_EMAIL:
-            ip_registrado = user_db.get('ip_bloqueado')
-            if not ip_registrado:
-                atualizar_ip_usuario(e, ip_cliente)
-            elif ip_registrado != ip_cliente:
+            ips_cadastrados = user_db.get('ips_list', [])
+            
+            if ip_cliente in ips_cadastrados:
+                pass  # IP já reconhecido e cadastrado
+            elif len(ips_cadastrados) < 2:
+                # Registra o novo IP (seja o 1º ou o 2º)
+                adicionar_ip_usuario(e, ip_cliente)
+            else:
+                # Já possui 2 IPs cadastrados e este é um 3º IP não reconhecido
                 return render_template_string(
                     HTML_LOGIN, 
-                    erro="🚫 ACESSO BLOQUEADO: Você está tentando logar em um dispositivo/rede diferente do seu cadastro. Solicite a liberação de IP ao Administrador."
+                    erro="🚫 ACESSO BLOQUEADO: Limite de 2 IPs/dispositivos atingido para este usuário. Solicite a liberação no painel de suporte/ADM."
                 )
 
         ativo, dias = verificar_assinatura(e)
@@ -1376,9 +1394,8 @@ def bot_loop():
                 else:
                     sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
 
-                # SE ENCONTRAR O PADRÃO TÉCNICO
                 if sinal_encontrado:
-                    agora = datetime.now()
+                    agora = agora_brasilia()
                     
                     minutos_passados = agora.minute % TIMEFRAME_OPERACAO
                     segundos_passados = minutos_passados * 60 + agora.second
@@ -1391,7 +1408,6 @@ def bot_loop():
                     str_entrada = prox_minuto_entrada.strftime("%H:%M")
                     str_saida = horario_saida.strftime("%H:%M")
 
-                    # 1. ENVIAR PRÉ-ALERTA E DISPARAR NOTIFICAÇÃO DIRETA NO CELULAR
                     msg_pre_alerta = (
                         f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE</b> ⚠️\n\n"
                         f"<b>Ativo:</b> {ativo}\n"
@@ -1408,18 +1424,15 @@ def bot_loop():
                         f"</div>"
                     )
 
-                    # NOTIFICAÇÃO DE SISTEMA DISPARADA PARA OS CELULARES CONECTADOS
                     NOTIFICACAO_SISTEMA = {
                         "id": str(time.time()),
                         "titulo": f"⚠️ PREPARE-SE: {ativo}",
                         "corpo": f"Possível entrada às {str_entrada} (M{TIMEFRAME_OPERACAO}). Abra o gráfico!"
                     }
 
-                    # Dispara Telegram
                     msg_pre_id = enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
 
-                    # 2. AGUARDAR ATÉ O HORÁRIO EXATO DA ENTRADA
-                    while datetime.now() < prox_minuto_entrada:
+                    while agora_brasilia() < prox_minuto_entrada:
                         if not BOT_INICIADO or BOT_PAUSADO:
                             break
                         time.sleep(0.5)
@@ -1430,7 +1443,6 @@ def bot_loop():
                     if msg_pre_id:
                         deletar_mensagem_telegram(msg_pre_id)
 
-                    # 3. ENVIAR SINAL CONFIRMADO E DISPARAR NOTIFICAÇÃO NATIVA DE SINAL
                     dir_texto = "COMPRA" if sinal_encontrado == "CALL" else "VENDA"
                     cor_html = "#10b981" if sinal_encontrado == "CALL" else "#ef4444"
                     bolinha = "🟢" if sinal_encontrado == "CALL" else "🔴"
@@ -1456,7 +1468,6 @@ def bot_loop():
                     )
                     ULTIMO_SINAL_GLOBAL = SINAL_DISPLAY_PERMANENTE
 
-                    # DISPARAR NOTIFICAÇÃO NATIVA DE SINAL CONFIRMADO NO CELULAR
                     NOTIFICACAO_SISTEMA = {
                         "id": str(time.time()),
                         "titulo": f"🎯 SINAL CONFIRMADO: {ativo}",
