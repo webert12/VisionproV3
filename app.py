@@ -34,6 +34,12 @@ DADOS_USUARIOS = {}
 ULTIMO_MSG_ID_TELEGRAM = None
 QUEM_INICIOU_O_BOT = None
 
+def get_client_ip():
+    """ Captura o IP real do cliente, mesmo através de proxies/load balancers """
+    if request.headers.get('X-Forwarded-For'):
+        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    return request.remote_addr
+
 def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
     """
     Envia mensagens para o Telegram APENAS se o usuário que solicitou
@@ -100,7 +106,7 @@ HTML_ADM = """
         .user-header:hover { color: #00f2fe; }
         .user-details { display: none; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 15px; }
         .btn-adm { padding: 10px 14px; border-radius: 6px; text-decoration: none; color: white; font-weight: bold; font-size: 11px; display: inline-block; margin: 5px 2px; border:none; cursor:pointer; text-transform: uppercase; letter-spacing: 0.5px; }
-        .green { background: #10b981; } .red { background: #ef4444; } .blue { background: #3b82f6; }
+        .green { background: #10b981; } .red { background: #ef4444; } .blue { background: #3b82f6; } .orange { background: #f59e0b; }
         h2 { color: #00f2fe; text-align: center; text-transform: uppercase; letter-spacing: 1px; }
         input { background: #1e293b; color: white; border: 1px solid #334155; padding: 8px; border-radius: 6px; margin-bottom: 5px; width: 100%; box-sizing: border-box; }
         .status-badge { padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: bold; margin-left: 5px; }
@@ -141,7 +147,8 @@ HTML_ADM = """
         <div id="details-{{ loop.index }}" class="user-details">
             <div style="margin-bottom:10px;">
                 <span style="color:#00f2fe;">Assertividade: <b>{{ info.winrate if info.winrate else 0 }}%</b></span><br>
-                <span style="color:#94a3b8;">Wins: {{ info.wins }} | Reds: {{ info.reds }}</span>
+                <span style="color:#94a3b8;">Wins: {{ info.wins }} | Reds: {{ info.reds }}</span><br>
+                <span style="color:#f59e0b;">IP Registrado: <b>{{ info.ip_bloqueado if info.ip_bloqueado else 'NENHUM (LIVRE)' }}</b></span>
             </div>
             <form action="/adm/editar" method="POST">
                 <input type="hidden" name="email_original" value="{{ email }}">
@@ -150,6 +157,7 @@ HTML_ADM = """
                 <b>Expira em:</b> {{ info.criado_em }}<br><br>
                 <button type="submit" class="btn-adm blue">SALVAR ALTERAÇÕES</button>
                 <a href="/adm/renovar/{{ email }}" class="btn-adm green">RENOVAR +30 DIAS</a>
+                <a href="/adm/liberar_ip/{{ email }}" class="btn-adm orange">LIBERAR TROCA DE IP</a>
                 {% if email != admin %}
                 <a href="/adm/excluir/{{ email }}" class="btn-adm red" onclick="return confirm('Excluir?')">EXCLUIR</a>
                 {% endif %}
@@ -523,6 +531,42 @@ HTML_INDEX = """
 """
 
 # ================= BANCO DE DADOS =================
+def init_db():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                email VARCHAR(255) PRIMARY KEY,
+                senha VARCHAR(255) NOT NULL,
+                criado_em VARCHAR(50) NOT NULL,
+                wins INT DEFAULT 0,
+                reds INT DEFAULT 0,
+                winrate FLOAT DEFAULT 0.0,
+                ip_bloqueado VARCHAR(100)
+            );
+            
+            ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ip_bloqueado VARCHAR(100);
+
+            CREATE TABLE IF NOT EXISTS historico_sinais (
+                id SERIAL PRIMARY KEY,
+                user_email VARCHAR(255) NOT NULL,
+                sinal VARCHAR(255) NOT NULL,
+                resultado VARCHAR(50) NOT NULL
+            );
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Erro ao inicializar tabelas do Banco: {e}")
+
+# Executa migração/inicialização automática das tabelas
+try:
+    init_db()
+except Exception as e:
+    print(f"Aviso de Inicialização DB: {e}")
+
 def carregar_usuarios():
     try:
         conn = get_db_connection()
@@ -542,7 +586,7 @@ def carregar_usuarios():
         print(f"Erro Banco (carregar_usuarios): {e}")
         return {}
 
-def salvar_usuario(email, senha, data=None):
+def salvar_usuario(email, senha, data=None, ip_inicial=None):
     try:
         email_clean = email.strip().lower()
         data_criacao = data if data else datetime.now().strftime("%Y-%m-%d")
@@ -551,18 +595,42 @@ def salvar_usuario(email, senha, data=None):
         conn = get_db_connection()
         cur = conn.cursor()
         query = """
-            INSERT INTO usuarios (email, senha, criado_em, wins, reds, winrate)
-            VALUES (%s, %s, %s, 0, 0, 0.0)
+            INSERT INTO usuarios (email, senha, criado_em, wins, reds, winrate, ip_bloqueado)
+            VALUES (%s, %s, %s, 0, 0, 0.0, %s)
             ON CONFLICT (email) DO UPDATE 
             SET senha = EXCLUDED.senha;
         """
-        cur.execute(query, (email_clean, senha_hash, data_criacao))
+        cur.execute(query, (email_clean, senha_hash, data_criacao, ip_inicial))
         conn.commit()
         cur.close()
         conn.close()
     except Exception as e:
         print(f"Erro Banco (salvar_usuario): {e}")
         raise e
+
+def atualizar_ip_usuario(email, ip_cliente):
+    try:
+        email_clean = email.strip().lower()
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE usuarios SET ip_bloqueado = %s WHERE email = %s;", (ip_cliente, email_clean))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Erro Banco (atualizar_ip_usuario): {e}")
+
+def liberar_ip_usuario_db(email):
+    try:
+        email_clean = email.strip().lower()
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE usuarios SET ip_bloqueado = NULL WHERE email = %s;", (email_clean,))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Erro Banco (liberar_ip_usuario_db): {e}")
 
 def atualizar_estatisticas_usuario(email, is_win):
     try:
@@ -866,13 +934,14 @@ def login():
     if request.method == 'POST':
         e = request.form.get('email', '').strip().lower()
         s = request.form.get('password', '').strip()
+        ip_cliente = get_client_ip()
 
         if not e or not s:
             return render_template_string(HTML_LOGIN, erro="Preencha todos os campos.")
 
         if e == ADMIN_EMAIL:
             try:
-                salvar_usuario(e, s, datetime.now().strftime("%Y-%m-%d"))
+                salvar_usuario(e, s, datetime.now().strftime("%Y-%m-%d"), ip_inicial=None)
             except Exception as err:
                 return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM: {err}")
 
@@ -885,6 +954,18 @@ def login():
 
         if not check_password_hash(user_db['senha'], s):
             return render_template_string(HTML_LOGIN, erro="Senha Incorreta.")
+
+        # ================= SISTEMA DE VALIDAÇÃO DE IP =================
+        if e != ADMIN_EMAIL:
+            ip_registrado = user_db.get('ip_bloqueado')
+            if not ip_registrado:
+                # Se for o primeiro acesso pós-liberação/cadastro sem IP, vincula o IP atual
+                atualizar_ip_usuario(e, ip_cliente)
+            elif ip_registrado != ip_cliente:
+                return render_template_string(
+                    HTML_LOGIN, 
+                    erro="🚫 ACESSO BLOQUEADO: Você está tentando logar em um dispositivo/rede diferente do seu cadastro. Solicite a liberação de IP ao Administrador."
+                )
 
         ativo, dias = verificar_assinatura(e)
         if not ativo:
@@ -902,12 +983,14 @@ def register():
     if request.method == 'POST':
         e = request.form.get('email', '').strip().lower()
         s = request.form.get('password', '').strip()
+        ip_cliente = get_client_ip()
         
         if not e or not s:
             return render_template_string(HTML_REGISTER, erro="Preencha todos os campos.")
             
         try:
-            salvar_usuario(e, s)
+            # Salva o usuário fixando imediatamente o IP capturado no cadastro
+            salvar_usuario(e, s, ip_inicial=ip_cliente)
             session['user'] = e
             USUARIOS_ONLINE[e] = time.time()
             init_user_session(e)
@@ -942,6 +1025,12 @@ def admin_panel():
 def adm_renovar(email):
     if session.get('user') != ADMIN_EMAIL: return abort(403)
     renovar_usuario_db(email)
+    return redirect('/admin_panel')
+
+@app.route('/adm/liberar_ip/<email>')
+def adm_liberar_ip(email):
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
+    liberar_ip_usuario_db(email)
     return redirect('/admin_panel')
 
 @app.route('/adm/editar', methods=['POST'])
