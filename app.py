@@ -212,6 +212,30 @@ HTML_LOGIN = """
         .links { margin-top: 25px; font-size: 13px; }
         a { color: #00f2fe; text-decoration: none; margin: 0 8px; font-weight: 500; }
         a:hover { text-decoration: underline; }
+
+        /* Botão Flutuante do WhatsApp */
+        .whatsapp-float {
+            position: fixed;
+            width: 55px;
+            height: 55px;
+            bottom: 20px;
+            right: 20px;
+            background-color: #25d366;
+            color: #FFF;
+            border-radius: 50px;
+            text-align: center;
+            font-size: 30px;
+            box-shadow: 0px 4px 10px rgba(0,0,0,0.3);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            transition: transform 0.3s ease;
+        }
+        .whatsapp-float:hover {
+            transform: scale(1.1);
+        }
     </style>
 </head>
 <body>
@@ -227,6 +251,13 @@ HTML_LOGIN = """
             <a href="/register">Criar Conta</a> | <a href="/termos" style="color:#94a3b8">Termos de Uso</a>
         </div>
     </div>
+
+    <!-- Suporte WhatsApp Flutuante -->
+    <a href="https://wa.me/5537991598179?text=Olá,%20preciso%20de%20suporte%20no%20Vision%20Pro!" class="whatsapp-float" target="_blank" title="Suporte via WhatsApp">
+        <svg style="width:32px;height:32px;fill:white;" viewBox="0 0 24 24">
+            <path d="M12.012 2c-5.506 0-9.989 4.478-9.99 9.984 0 1.761.459 3.479 1.332 5.001l-1.416 5.166 5.292-1.387c1.462.798 3.111 1.218 4.78 1.219h.004c5.507 0 9.991-4.479 9.992-9.985 0-2.666-1.037-5.172-2.923-7.058-1.887-1.887-4.393-2.925-7.061-2.925zm5.834 14.17c-.247.693-1.439 1.326-1.986 1.391-.51.061-1.168.087-1.885-.143-.435-.139-1.002-.323-1.731-.639-3.053-1.321-5.048-4.385-5.201-4.589-.153-.204-1.246-1.657-1.246-3.16 0-1.503.788-2.242 1.068-2.528.28-.286.611-.357.814-.357.204 0 .408.002.586.011.189.01.442-.072.693.531.255.613.867 2.118.943 2.272.077.153.128.332.026.536-.102.204-.153.332-.306.51-.153.179-.323.401-.46.538-.153.153-.313.32-.134.626.179.306.793 1.31 1.702 2.119 1.168 1.04 2.155 1.363 2.461 1.516.306.153.485.128.664-.077.179-.204.766-.893.97-1.199.204-.306.408-.255.689-.153.281.102 1.786.842 2.092.995.306.153.51.23.586.357.077.128.077.74-.17 1.433z"/>
+        </svg>
+    </a>
 </body>
 </html>
 """
@@ -357,6 +388,30 @@ HTML_INDEX = """
         /* BOTAO NOTIFICACAO */
         .btn-notify { width: 100%; padding: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; }
         .btn-notify:hover { background: rgba(16, 185, 129, 0.3); }
+
+        /* Botão Flutuante do WhatsApp */
+        .whatsapp-float {
+            position: fixed;
+            width: 55px;
+            height: 55px;
+            bottom: 20px;
+            right: 20px;
+            background-color: #25d366;
+            color: #FFF;
+            border-radius: 50px;
+            text-align: center;
+            font-size: 30px;
+            box-shadow: 0px 4px 10px rgba(0,0,0,0.3);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            transition: transform 0.3s ease;
+        }
+        .whatsapp-float:hover {
+            transform: scale(1.1);
+        }
     </style>
 </head>
 <body>
@@ -475,6 +530,13 @@ HTML_INDEX = """
         </div>
 
     </div>
+
+    <!-- Suporte WhatsApp Flutuante -->
+    <a href="https://wa.me/5537991598179?text=Olá,%20preciso%20de%20suporte%20no%20Vision%20Pro!" class="whatsapp-float" target="_blank" title="Suporte via WhatsApp">
+        <svg style="width:32px;height:32px;fill:white;" viewBox="0 0 24 24">
+            <path d="M12.012 2c-5.506 0-9.989 4.478-9.99 9.984 0 1.761.459 3.479 1.332 5.001l-1.416 5.166 5.292-1.387c1.462.798 3.111 1.218 4.78 1.219h.004c5.507 0 9.991-4.479 9.992-9.985 0-2.666-1.037-5.172-2.923-7.058-1.887-1.887-4.393-2.925-7.061-2.925zm5.834 14.17c-.247.693-1.439 1.326-1.986 1.391-.51.061-1.168.087-1.885-.143-.435-.139-1.002-.323-1.731-.639-3.053-1.321-5.048-4.385-5.201-4.589-.153-.204-1.246-1.657-1.246-3.16 0-1.503.788-2.242 1.068-2.528.28-.286.611-.357.814-.357.204 0 .408.002.586.011.189.01.442-.072.693.531.255.613.867 2.118.943 2.272.077.153.128.332.026.536-.102.204-.153.332-.306.51-.153.179-.323.401-.46.538-.153.153-.313.32-.134.626.179.306.793 1.31 1.702 2.119 1.168 1.04 2.155 1.363 2.461 1.516.306.153.485.128.664-.077.179-.204.766-.893.97-1.199.204-.306.408-.255.689-.153.281.102 1.786.842 2.092.995.306.153.51.23.586.357.077.128.077.74-.17 1.433z"/>
+        </svg>
+    </a>
 
     <script>
         let lastNotifId = null;
