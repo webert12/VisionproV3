@@ -485,7 +485,6 @@ HTML_INDEX = """
                 if(document.getElementById('wr-fill')) document.getElementById('wr-fill').style.width = data.winrate + "%";
                 if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
                 
-                // --- ATUALIZAÇÃO DO ATIVO EM TEMPO REAL ---
                 if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
                 if(document.getElementById('current-asset')) {
                     if(data.rodando) {
@@ -750,7 +749,6 @@ def get_data_v2(ticker, tf, period='5d'):
             'Accept': 'application/json'
         }
         
-        # Reduzido timeout para acelerar o loop de busca dos ativos
         res = requests.get(url, headers=headers, timeout=1.5)
         if res.status_code != 200:
             return None
@@ -1070,7 +1068,7 @@ def resultado(res):
     AG_RESULTADO = False
     return redirect('/')
 
-# ================= LOOP PRINCIPAL DO BOT (TOTALMENTE FLUIDO) =================
+# ================= LOOP PRINCIPAL DO BOT (COM PRÉ-ALERTA CORRIGIDO) =================
 def bot_loop():
     global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE
 
@@ -1110,18 +1108,63 @@ def bot_loop():
                 else:
                     sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
 
+                # SE ENCONTRAR O PADRÃO TÉCNICO
                 if sinal_encontrado:
-                    horario_entrada = datetime.now()
-                    horario_saida = horario_entrada + timedelta(minutes=TIMEFRAME_OPERACAO)
-                    str_entrada = horario_entrada.strftime("%H:%M")
+                    agora = datetime.now()
+                    
+                    # Cálculos do ciclo do Timeframe (M1, M5, M15)
+                    minutos_passados = agora.minute % TIMEFRAME_OPERACAO
+                    segundos_passados = minutos_passados * 60 + agora.second
+                    total_segundos_tf = TIMEFRAME_OPERACAO * 60
+                    segundos_restantes = total_segundos_tf - segundos_passados
+
+                    # Horários oficiais de Entrada e Expiração
+                    prox_minuto_entrada = agora + timedelta(seconds=segundos_restantes)
+                    horario_saida = prox_minuto_entrada + timedelta(minutes=TIMEFRAME_OPERACAO)
+
+                    str_entrada = prox_minuto_entrada.strftime("%H:%M")
                     str_saida = horario_saida.strftime("%H:%M")
 
+                    # 1. ENVIAR PRÉ-ALERTA / MENSAGEM DE PREPARAÇÃO
+                    msg_pre_alerta = (
+                        f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE</b> ⚠️\n\n"
+                        f"<b>Ativo:</b> {ativo}\n"
+                        f"<b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
+                        f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
+                        f"👉 <i>Abra o ativo na sua corretora e prepare-se!</i>"
+                    )
+                    
+                    # Atualiza display web para modo de atenção
+                    ULTIMO_SINAL_GLOBAL = (
+                        f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
+                        f"⚠️ <b>PREPARE O ATIVO: {ativo}</b> ⚠️<br>"
+                        f"<span style='color:#fff;'>Entrada às <b>{str_entrada}</b> (M{TIMEFRAME_OPERACAO})</span><br>"
+                        f"<span style='font-size:12px; color:#94a3b8;'>Aguardando fechamento da vela para confirmar...</span>"
+                        f"</div>"
+                    )
+
+                    msg_pre_id = enviar_telegram(msg_pre_alerta)
+
+                    # 2. AGUARDAR ATÉ O HORÁRIO EXATO DA ENTRADA
+                    while datetime.now() < prox_minuto_entrada:
+                        if not BOT_INICIADO or BOT_PAUSADO:
+                            break
+                        time.sleep(0.5)
+
+                    if not BOT_INICIADO or BOT_PAUSADO:
+                        break
+
+                    # Deleta a mensagem de pré-alerta para manter a sala limpa
+                    if msg_pre_id:
+                        deletar_mensagem_telegram(msg_pre_id)
+
+                    # 3. ENVIAR A MENSAGEM DE CONFIRMAÇÃO DEFINITIVA DO SINAL
                     dir_texto = "COMPRA" if sinal_encontrado == "CALL" else "VENDA"
                     cor_html = "#10b981" if sinal_encontrado == "CALL" else "#ef4444"
                     bolinha = "🟢" if sinal_encontrado == "CALL" else "🔴"
-                    
-                    msg_telegram = (
-                        f"✅ <b>Sinal confirmado</b>\n\n"
+
+                    msg_telegram_confirmado = (
+                        f"✅ <b>SINAL CONFIRMADO</b>\n\n"
                         f"<b>Ativo :</b> {ativo}\n"
                         f"<b>Entrada :</b> {str_entrada}\n"
                         f"<b>Saída :</b> {str_saida}\n"
@@ -1144,7 +1187,7 @@ def bot_loop():
                     for u in list(USUARIOS_ONLINE.keys()):
                         registrar_sinal_bd(u, f"{ativo} (M{TIMEFRAME_OPERACAO})")
 
-                    enviar_telegram(msg_telegram)
+                    enviar_telegram(msg_telegram_confirmado)
                     
                     AGUARDANDO_CONFIRMACAO_RESULTADO = True
                     AG_RESULTADO = True
