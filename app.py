@@ -34,10 +34,21 @@ DADOS_USUARIOS = {}
 ULTIMO_MSG_ID_TELEGRAM = None
 QUEM_INICIOU_O_BOT = None
 
-def enviar_telegram(mensagem, auto_delete=None):
-    global ULTIMO_MSG_ID_TELEGRAM
+def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
+    """
+    Envia mensagens para o Telegram APENAS se o usuário que solicitou
+    ou iniciou a sessão for o Administrador do sistema.
+    """
+    global ULTIMO_MSG_ID_TELEGRAM, QUEM_INICIOU_O_BOT
+    
+    # Validação de permissão: Apenas o ADM pode disparar para o Telegram
+    usuario_ativo = user_solicitante or QUEM_INICIOU_O_BOT
+    if usuario_ativo != ADMIN_EMAIL:
+        return None
+
     if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
         return None
+        
     try:
         url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
         payload = {"chat_id": CHAT_ID_TELEGRAM, "text": mensagem, "parse_mode": "HTML"}
@@ -1008,7 +1019,9 @@ def command(cmd):
         SINAL_DISPLAY_PERMANENTE = None
         ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
         ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>VARREDURA INICIADA</b><br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
-        enviar_telegram(f"🚀 <b>SISTEMA VISION PRO V3 CONECTADO</b>\nSessão iniciada por {user}")
+        
+        # Só manda no Telegram se quem apertou START for o ADM
+        enviar_telegram(f"🚀 <b>SISTEMA VISION PRO V3 CONECTADO</b>\nSessão iniciada por {user}", user_solicitante=user)
         return jsonify({"ok": True})
 
     elif cmd == "pause_bot":
@@ -1028,7 +1041,8 @@ def command(cmd):
         if user:
             zerar_estatisticas_usuario(user)
 
-        enviar_telegram("🔴 <b>ROBÔ ENCERRADO E SISTEMA LIMPO COM SUCESSO!</b>")
+        # Só manda no Telegram se quem encerrou for o ADM
+        enviar_telegram("🔴 <b>ROBÔ ENCERRADO E SISTEMA LIMPO COM SUCESSO!</b>", user_solicitante=user)
         return jsonify({"ok": True})
 
     elif cmd.startswith("tf_"): 
@@ -1048,15 +1062,15 @@ def resultado(res):
         if res == 'win':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "Win")
-            enviar_telegram("💎 <b>WIN DIRETO!</b>")
+            enviar_telegram("💎 <b>WIN DIRETO!</b>", user_solicitante=user)
         elif res == 'g1':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "WinG1")
-            enviar_telegram("🔄 <b>WIN NO GALE 1!</b>")
+            enviar_telegram("🔄 <b>WIN NO GALE 1!</b>", user_solicitante=user)
         elif res == 'red':
             atualizar_estatisticas_usuario(user, False)
             atualizar_ultimo_sinal_bd(user, "Red")
-            enviar_telegram("📉 <b>STOP LOSS / RED</b>")
+            enviar_telegram("📉 <b>STOP LOSS / RED</b>", user_solicitante=user)
         elif res == 'pular':
             atualizar_ultimo_sinal_bd(user, "Ignorado")
 
@@ -1068,9 +1082,9 @@ def resultado(res):
     AG_RESULTADO = False
     return redirect('/')
 
-# ================= LOOP PRINCIPAL DO BOT (COM PRÉ-ALERTA CORRIGIDO) =================
+# ================= LOOP PRINCIPAL DO BOT =================
 def bot_loop():
-    global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE
+    global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, QUEM_INICIOU_O_BOT
 
     while BOT_RODANDO:
         try:
@@ -1143,7 +1157,8 @@ def bot_loop():
                         f"</div>"
                     )
 
-                    msg_pre_id = enviar_telegram(msg_pre_alerta)
+                    # Apenas o ADM dispara mensagens no Telegram
+                    msg_pre_id = enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
 
                     # 2. AGUARDAR ATÉ O HORÁRIO EXATO DA ENTRADA
                     while datetime.now() < prox_minuto_entrada:
@@ -1154,7 +1169,7 @@ def bot_loop():
                     if not BOT_INICIADO or BOT_PAUSADO:
                         break
 
-                    # Deleta a mensagem de pré-alerta para manter a sala limpa
+                    # Deleta a mensagem de pré-alerta se ela foi gerada
                     if msg_pre_id:
                         deletar_mensagem_telegram(msg_pre_id)
 
@@ -1187,7 +1202,8 @@ def bot_loop():
                     for u in list(USUARIOS_ONLINE.keys()):
                         registrar_sinal_bd(u, f"{ativo} (M{TIMEFRAME_OPERACAO})")
 
-                    enviar_telegram(msg_telegram_confirmado)
+                    # Notifica no Telegram apenas se a sessão pertence ao ADM
+                    enviar_telegram(msg_telegram_confirmado, user_solicitante=QUEM_INICIOU_O_BOT)
                     
                     AGUARDANDO_CONFIRMACAO_RESULTADO = True
                     AG_RESULTADO = True
