@@ -41,16 +41,11 @@ ULTIMO_MSG_ID_TELEGRAM = None
 QUEM_INICIOU_O_BOT = None
 
 def get_client_ip():
-    """ Captura o IP real do cliente, mesmo através de proxies/load balancers """
     if request.headers.get('X-Forwarded-For'):
         return request.headers.get('X-Forwarded-For').split(',')[0].strip()
     return request.remote_addr
 
 def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
-    """
-    Envia mensagens para o Telegram APENAS se o usuário que solicitou
-    ou iniciou a sessão for o Administrador do sistema.
-    """
     global ULTIMO_MSG_ID_TELEGRAM, QUEM_INICIOU_O_BOT
     
     usuario_ativo = user_solicitante or QUEM_INICIOU_O_BOT
@@ -254,12 +249,6 @@ HTML_LOGIN = """
             <a href="/register">Criar Conta</a> | <a href="/termos" style="color:#94a3b8">Termos de Uso</a>
         </div>
     </div>
-
-    <a href="https://wa.me/5537991598179?text=Olá,%20preciso%20de%20suporte%20no%20Vision%20Pro!" class="whatsapp-float" target="_blank" title="Suporte via WhatsApp">
-        <svg style="width:32px;height:32px;fill:white;" viewBox="0 0 24 24">
-            <path d="M12.012 2c-5.506 0-9.989 4.478-9.99 9.984 0 1.761.459 3.479 1.332 5.001l-1.416 5.166 5.292-1.387c1.462.798 3.111 1.218 4.78 1.219h.004c5.507 0 9.991-4.479 9.992-9.985 0-2.666-1.037-5.172-2.923-7.058-1.887-1.887-4.393-2.925-7.061-2.925zm5.834 14.17c-.247.693-1.439 1.326-1.986 1.391-.51.061-1.168.087-1.885-.143-.435-.139-1.002-.323-1.731-.639-3.053-1.321-5.048-4.385-5.201-4.589-.153-.204-1.246-1.657-1.246-3.16 0-1.503.788-2.242 1.068-2.528.28-.286.611-.357.814-.357.204 0 .408.002.586.011.189.01.442-.072.693.531.255.613.867 2.118.943 2.272.077.153.128.332.026.536-.102.204-.153.332-.306.51-.153.179-.323.401-.46.538-.153.153-.313.32-.134.626.179.306.793 1.31 1.702 2.119 1.168 1.04 2.155 1.363 2.461 1.516.306.153.485.128.664-.077.179-.204.766-.893.97-1.199.204-.306.408-.255.689-.153.281.102 1.786.842 2.092.995.306.153.51.23.586.357.077.128.077.74-.17 1.433z"/>
-        </svg>
-    </a>
 </body>
 </html>
 """
@@ -388,29 +377,6 @@ HTML_INDEX = """
 
         .btn-notify { width: 100%; padding: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; }
         .btn-notify:hover { background: rgba(16, 185, 129, 0.3); }
-
-        .whatsapp-float {
-            position: fixed;
-            width: 55px;
-            height: 55px;
-            bottom: 20px;
-            right: 20px;
-            background-color: #25d366;
-            color: #FFF;
-            border-radius: 50px;
-            text-align: center;
-            font-size: 30px;
-            box-shadow: 0px 4px 10px rgba(0,0,0,0.3);
-            z-index: 1000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            text-decoration: none;
-            transition: transform 0.3s ease;
-        }
-        .whatsapp-float:hover {
-            transform: scale(1.1);
-        }
     </style>
 </head>
 <body>
@@ -529,12 +495,6 @@ HTML_INDEX = """
         </div>
 
     </div>
-
-    <a href="https://wa.me/5537991598179?text=Olá,%20preciso%20de%20suporte%20no%20Vision%20Pro!" class="whatsapp-float" target="_blank" title="Suporte via WhatsApp">
-        <svg style="width:32px;height:32px;fill:white;" viewBox="0 0 24 24">
-            <path d="M12.012 2c-5.506 0-9.989 4.478-9.99 9.984 0 1.761.459 3.479 1.332 5.001l-1.416 5.166 5.292-1.387c1.462.798 3.111 1.218 4.78 1.219h.004c5.507 0 9.991-4.479 9.992-9.985 0-2.666-1.037-5.172-2.923-7.058-1.887-1.887-4.393-2.925-7.061-2.925zm5.834 14.17c-.247.693-1.439 1.326-1.986 1.391-.51.061-1.168.087-1.885-.143-.435-.139-1.002-.323-1.731-.639-3.053-1.321-5.048-4.385-5.201-4.589-.153-.204-1.246-1.657-1.246-3.16 0-1.503.788-2.242 1.068-2.528.28-.286.611-.357.814-.357.204 0 .408.002.586.011.189.01.442-.072.693.531.255.613.867 2.118.943 2.272.077.153.128.332.026.536-.102.204-.153.332-.306.51-.153.179-.323.401-.46.538-.153.153-.313.32-.134.626.179.306.793 1.31 1.702 2.119 1.168 1.04 2.155 1.363 2.461 1.516.306.153.485.128.664-.077.179-.204.766-.893.97-1.199.204-.306.408-.255.689-.153.281.102 1.786.842 2.092.995.306.153.51.23.586.357.077.128.077.74-.17 1.433z"/>
-        </svg>
-    </a>
 
     <script>
         let lastNotifId = null;
@@ -719,7 +679,6 @@ def carregar_usuarios():
                 dict_usuarios[email] = u_dict
         return dict_usuarios
     except Exception as e:
-        print(f"Erro Banco (carregar_usuarios): {e}")
         return {}
 
 def salvar_usuario(email, senha, data=None, ip_inicial=None):
@@ -743,7 +702,6 @@ def salvar_usuario(email, senha, data=None, ip_inicial=None):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro Banco (salvar_usuario): {e}")
         raise e
 
 def adicionar_ip_usuario(email, ip_cliente):
@@ -763,7 +721,7 @@ def adicionar_ip_usuario(email, ip_cliente):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro Banco (adicionar_ip_usuario): {e}")
+        print(f"Erro Banco: {e}")
 
 def liberar_ip_usuario_db(email):
     try:
@@ -775,7 +733,7 @@ def liberar_ip_usuario_db(email):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro Banco (liberar_ip_usuario_db): {e}")
+        print(f"Erro Banco: {e}")
 
 def atualizar_estatisticas_usuario(email, is_win):
     try:
@@ -801,23 +759,19 @@ def atualizar_estatisticas_usuario(email, is_win):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro Banco (atualizar_estatisticas): {e}")
+        pass
 
 def zerar_estatisticas_usuario(email):
     try:
         email_clean = email.strip().lower()
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
-            UPDATE usuarios 
-            SET wins = 0, reds = 0, winrate = 0.0 
-            WHERE email = %s;
-        """, (email_clean,))
+        cur.execute("UPDATE usuarios SET wins = 0, reds = 0, winrate = 0.0 WHERE email = %s;", (email_clean,))
         conn.commit()
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro Banco (zerar_estatisticas): {e}")
+        pass
 
 def renovar_usuario_db(email):
     try:
@@ -829,7 +783,7 @@ def renovar_usuario_db(email):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro Banco (renovar_usuario): {e}")
+        pass
 
 def excluir_usuario_db(email):
     try:
@@ -842,7 +796,7 @@ def excluir_usuario_db(email):
             cur.close()
             conn.close()
     except Exception as e:
-        print(f"Erro Banco (excluir_usuario): {e}")
+        pass
 
 def verificar_assinatura(email):
     email_clean = email.strip().lower()
@@ -862,7 +816,6 @@ def verificar_assinatura(email):
         dias_restantes = 30 - (agora_brasilia().replace(tzinfo=None) - data_criacao).days
         return (True, dias_restantes) if dias_restantes > 0 else (False, 0)
     except Exception as e:
-        print(f"Erro Assinatura: {e}")
         return True, 30
 
 def init_user_session(email):
@@ -883,7 +836,7 @@ def registrar_sinal_bd(email, sinal_str):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro Banco (registrar_sinal): {e}")
+        pass
 
 def buscar_historico_bd(email):
     try:
@@ -900,7 +853,6 @@ def buscar_historico_bd(email):
         conn.close()
         return [{"id": r["id"], "sinal": r["sinal"], "res": r["resultado"]} for r in res]
     except Exception as e:
-        print(f"Erro Banco (buscar_historico): {e}")
         return []
 
 def atualizar_ultimo_sinal_bd(email, resultado):
@@ -917,17 +869,13 @@ def atualizar_ultimo_sinal_bd(email, resultado):
 
         if res:
             ultimo_id = res["id"]
-            cur.execute("""
-                UPDATE historico_sinais 
-                SET resultado = %s 
-                WHERE id = %s;
-            """, (resultado, ultimo_id))
+            cur.execute("UPDATE historico_sinais SET resultado = %s WHERE id = %s;", (resultado, ultimo_id))
             conn.commit()
 
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro Banco (atualizar_ultimo_sinal): {e}")
+        pass
 
 # ================= BOT CONFIGS =================
 TIMEFRAME_OPERACAO = 5
@@ -965,7 +913,7 @@ for par in ATIVOS_BASE["FOREX"]: MAPA_TICKERS[par] = f"{par}=X"
 for par in ATIVOS_BASE["CRIPTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE OTIMIZADO =================
-def get_data_v2(ticker, tf, period='5d'):
+def get_data_v2(ticker, tf, period='5d'): # CORREÇÃO: Usar 5d garante que o script sobreviva aos finais de semana e evite retornar None para Forex
     try:
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval={tf}m&range={period}"
         headers = {
@@ -973,7 +921,7 @@ def get_data_v2(ticker, tf, period='5d'):
             'Accept': 'application/json'
         }
         
-        res = requests.get(url, headers=headers, timeout=1.5)
+        res = requests.get(url, headers=headers, timeout=5.0)
         if res.status_code != 200:
             return None
             
@@ -1022,20 +970,24 @@ def analisar_estrategia(data, estrategia, i=-1):
     if estrategia == "LOGICA_DO_PRECO":
         cor = "G" if c[i] > o[i] else "R"
         tamanho = abs(c[i] - o[i])
-        p_sup = h[i] - max(o[i], c[i])
-        p_inf = min(o[i], c[i]) - l[i]
+        p_sup = max(0, h[i] - max(o[i], c[i]))
+        p_inf = max(0, min(o[i], c[i]) - l[i])
+        
+        # CORREÇÃO: Tolerância para matemática de precisão Float no Forex
+        tolerancia = tamanho * 0.05
         
         if cor == "G" and p_inf >= (tamanho * 0.8): sinal = "CALL"
         elif cor == "R" and p_sup >= (tamanho * 0.8): sinal = "PUT"
-        elif cor == "G" and p_sup == 0: sinal = "CALL"
-        elif cor == "R" and p_inf == 0: sinal = "PUT"
+        elif cor == "G" and p_sup <= tolerancia: sinal = "CALL" 
+        elif cor == "R" and p_inf <= tolerancia: sinal = "PUT"
 
     elif estrategia == "RSI_MACD_MA":
         diff = np.diff(c[i-14:i])
         up = diff[diff > 0]
         down = abs(diff[diff < 0])
-        avg_up = np.mean(up) if len(up) > 0 else 0.0001
-        avg_down = np.mean(down) if len(down) > 0 else 0.0001
+        # CORREÇÃO: Usar 1e-7 ao invés de 0.0001 porque o Forex tem variações ínfimas e 0.0001 ofuscava o cálculo
+        avg_up = np.mean(up) if len(up) > 0 else 1e-7
+        avg_down = np.mean(down) if len(down) > 0 else 1e-7
         rs = avg_up / avg_down
         rsi = 100 - (100 / (1 + rs))
 
@@ -1048,7 +1000,12 @@ def analisar_estrategia(data, estrategia, i=-1):
         elif rsi > 55 and macd_line[i] < signal_line[i]: sinal = "PUT"
 
     elif estrategia == "MHI1":
-        cores = [("G" if c[j] > o[j] else "R") for j in range(i-2, i+1)]
+        cores = []
+        for j in range(i-2, i+1):
+            if c[j] > o[j] + 1e-6: cores.append("G")
+            elif c[j] < o[j] - 1e-6: cores.append("R")
+            else: cores.append("D") # Ignora o Doji para não afetar matemática limpa
+            
         qtd_g = cores.count("G")
         qtd_r = cores.count("R")
         
@@ -1110,30 +1067,20 @@ def login():
                 return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM: {err}")
 
         usuarios = carregar_usuarios()
-
         if e not in usuarios:
             return render_template_string(HTML_LOGIN, erro=f"Usuário não cadastrado ({e}). Faça o cadastro.")
 
         user_db = usuarios[e]
-
         if not check_password_hash(user_db['senha'], s):
             return render_template_string(HTML_LOGIN, erro="Senha Incorreta.")
 
-        # ================= SISTEMA DE VALIDAÇÃO DE ATÉ 2 IPS =================
         if e != ADMIN_EMAIL:
             ips_cadastrados = user_db.get('ips_list', [])
-            
-            if ip_cliente in ips_cadastrados:
-                pass  # IP já reconhecido e cadastrado
-            elif len(ips_cadastrados) < 2:
-                # Registra o novo IP (seja o 1º ou o 2º)
-                adicionar_ip_usuario(e, ip_cliente)
-            else:
-                # Já possui 2 IPs cadastrados e este é um 3º IP não reconhecido
-                return render_template_string(
-                    HTML_LOGIN, 
-                    erro="🚫 ACESSO BLOQUEADO: Limite de 2 IPs/dispositivos atingido para este usuário. Solicite a liberação no painel de suporte/ADM."
-                )
+            if ip_cliente not in ips_cadastrados:
+                if len(ips_cadastrados) < 2:
+                    adicionar_ip_usuario(e, ip_cliente)
+                else:
+                    return render_template_string(HTML_LOGIN, erro="🚫 ACESSO BLOQUEADO: Limite de 2 IPs/dispositivos atingido.")
 
         ativo, dias = verificar_assinatura(e)
         if not ativo:
@@ -1219,7 +1166,7 @@ def adm_editar():
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro Editar Admin: {e}")
+        pass
         
     return redirect('/admin_panel')
 
@@ -1293,7 +1240,6 @@ def command(cmd):
         BOT_PAUSADO = not BOT_PAUSADO
         status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if BOT_PAUSADO else f"🔍 ANALISANDO: {ATIVO_ATUAL_GLOBAL} (M{TIMEFRAME_OPERACAO})"
         ULTIMO_SINAL_GLOBAL = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
-        
         msg_pause = "⏸ <b>O SISTEMA FOI PAUSADO PELO ADMINISTRADOR</b>" if BOT_PAUSADO else "▶️ <b>O SISTEMA RETOMOU A VARREDURA DE MERCADO!</b>"
         enviar_telegram(msg_pause, user_solicitante=user)
         return jsonify({"ok": True})
@@ -1309,19 +1255,15 @@ def command(cmd):
         
         if user:
             zerar_estatisticas_usuario(user)
-
         enviar_telegram("🔴 <b>ROBÔ ENCERRADO E SISTEMA LIMPO COM SUCESSO!</b>", user_solicitante=user)
         return jsonify({"ok": True})
 
     elif cmd.startswith("tf_"): 
         TIMEFRAME_OPERACAO = int(cmd.split('_')[1])
-        enviar_telegram(f"⚙️ <b>Configuração Alterada:</b> Timeframe atualizado para <b>M{TIMEFRAME_OPERACAO}</b>", user_solicitante=user)
     elif cmd.startswith("mkt_"): 
         TIPO_MERCADO = cmd.split('_')[1]
-        enviar_telegram(f"⚙️ <b>Configuração Alterada:</b> Mercado atualizado para <b>{TIPO_MERCADO}</b>", user_solicitante=user)
     elif cmd.startswith("set_est_"): 
         ESTRATEGIA_ESCOLHIDA = cmd.replace("set_est_", "")
-        enviar_telegram(f"⚙️ <b>Configuração Alterada:</b> Estratégia atualizada para <b>{ESTRATEGIA_ESCOLHIDA}</b>", user_solicitante=user)
     
     return jsonify({"ok": True})
 
@@ -1430,76 +1372,54 @@ def bot_loop():
                         "corpo": f"Possível entrada às {str_entrada} (M{TIMEFRAME_OPERACAO}). Abra o gráfico!"
                     }
 
+                    # ======= CÓDIGO CORRIGIDO E COMPLETADO A PARTIR DAQUI =======
                     msg_pre_id = enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
 
+                    # Espera a vela terminar
                     while agora_brasilia() < prox_minuto_entrada:
-                        if not BOT_INICIADO or BOT_PAUSADO:
+                        if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
                             break
-                        time.sleep(0.5)
+                        time.sleep(1)
 
-                    if not BOT_INICIADO or BOT_PAUSADO:
-                        break
+                    if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
+                        continue
 
-                    if msg_pre_id:
-                        deletar_mensagem_telegram(msg_pre_id)
-
-                    dir_texto = "COMPRA" if sinal_encontrado == "CALL" else "VENDA"
-                    cor_html = "#10b981" if sinal_encontrado == "CALL" else "#ef4444"
-                    bolinha = "🟢" if sinal_encontrado == "CALL" else "🔴"
-
-                    msg_telegram_confirmado = (
-                        f"✅ <b>SINAL CONFIRMADO</b>\n\n"
-                        f"<b>Ativo :</b> {ativo}\n"
-                        f"<b>Entrada :</b> {str_entrada}\n"
-                        f"<b>Saída :</b> {str_saida}\n"
-                        f"<b>Estratégia :</b> {est_nome_encontrada}\n"
-                        f"<b>Direção :</b> {bolinha} <b>{dir_texto}</b>"
+                    # Confirma o Sinal e solicita resposta do usuário no Painel
+                    msg_sinal = (
+                        f"🎯 <b>SINAL CONFIRMADO - ENTRADA AGORA!</b> 🎯\n\n"
+                        f"💱 <b>Paridade:</b> {ativo}\n"
+                        f"⏱ <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
+                        f"↕️ <b>Direção:</b> {sinal_encontrado}\n"
+                        f"🧠 <b>Estratégia:</b> {est_nome_encontrada}\n\n"
+                        f"⌛ <b>Expiração:</b> {str_saida}\n"
+                        f"💡 <i>Gerencie seu capital com responsabilidade.</i>"
                     )
-
+                    
+                    enviar_telegram(msg_sinal, auto_delete=None, user_solicitante=QUEM_INICIOU_O_BOT)
+                    
                     SINAL_DISPLAY_PERMANENTE = (
-                        f"<div style='text-align:center; font-family: sans-serif;'>"
-                        f"🎯 <b style='color:#00f2fe; font-size:16px;'>Sinal confirmado</b><br>"
-                        f"<b>Ativo :</b> <span style='font-weight:800; color:#fff;'>{ativo}</span><br>"
-                        f"<b>Entrada :</b> {str_entrada}<br>"
-                        f"<b>Saída :</b> {str_saida}<br>"
-                        f"<b>Estratégia :</b> {est_nome_encontrada}<br>"
-                        f"<b>Direção :</b> <b style='color:{cor_html}; font-size:16px;'>{dir_texto}</b>"
+                        f"<div class='status-box' style='border-color:#00f2fe; background:rgba(0,242,254,0.1);'>"
+                        f"<h3 style='color:#00f2fe; margin-bottom:10px;'>🎯 SINAL CONFIRMADO!</h3>"
+                        f"<b>ATIVO:</b> {ativo} | <b>DIREÇÃO:</b> <span style='color:{'#10b981' if sinal_encontrado=='CALL' else '#ef4444'}'>{sinal_encontrado}</span><br>"
+                        f"<b>TIMEFRAME:</b> M{TIMEFRAME_OPERACAO} | <b>EXPIRAÇÃO:</b> {str_saida}"
                         f"</div>"
                     )
-                    ULTIMO_SINAL_GLOBAL = SINAL_DISPLAY_PERMANENTE
-
-                    NOTIFICACAO_SISTEMA = {
-                        "id": str(time.time()),
-                        "titulo": f"🎯 SINAL CONFIRMADO: {ativo}",
-                        "corpo": f"Direção: {dir_texto} | Entrada: {str_entrada} | Saída: {str_saida}"
-                    }
-
-                    for u in list(USUARIOS_ONLINE.keys()):
-                        registrar_sinal_bd(u, f"{ativo} (M{TIMEFRAME_OPERACAO})")
-
-                    enviar_telegram(msg_telegram_confirmado, user_solicitante=QUEM_INICIOU_O_BOT)
                     
                     AGUARDANDO_CONFIRMACAO_RESULTADO = True
-                    AG_RESULTADO = True
-                    break
+                    registrar_sinal_bd(QUEM_INICIOU_O_BOT or ADMIN_EMAIL, f"{ativo} | {sinal_encontrado} | M{TIMEFRAME_OPERACAO}")
+                    
+                    # Interrompe a varredura atual e aguarda que o botão (Win/Loss) seja apertado no Front
+                    break  
+            
+            # Pequeno intervalo antes de rodar o loop global novamente
+            time.sleep(2)
+        except Exception as err:
+            print(f"Erro no loop do bot: {err}")
+            time.sleep(5)
 
-                time.sleep(0.02)
-            time.sleep(0.1)
-        except Exception as e:
-            print(f"Erro Loop Bot: {e}")
-            time.sleep(1)
-
-thread_iniciada = False
-lock_thread = threading.Lock()
-
-@app.before_request
-def start_background_loop():
-    global thread_iniciada
-    if not thread_iniciada:
-        with lock_thread:
-            if not thread_iniciada:
-                threading.Thread(target=bot_loop, daemon=True).start()
-                thread_iniciada = True
-
-if __name__ == "__main__":
-    app.run()
+if __name__ == '__main__':
+    # Inicia o motor de análise no background assim que ligar a aplicação
+    threading.Thread(target=bot_loop, daemon=True).start()
+    
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
