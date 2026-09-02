@@ -860,6 +860,14 @@ TIPO_MERCADO = "TODOS"
 ESTRATEGIA_ESCOLHIDA = "TODAS"
 LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
 
+NOME_ESTRATEGIAS_DISPLAY = {
+    "LOGICA_DO_PRECO": "Lógica do Preço",
+    "RSI_MACD_MA": "RSI + Cruzamento MACD + MA",
+    "MHI1": "MHI 1 (+ Filtro Tendência)",
+    "REVERSAO": "Reversão de Bandas",
+    "TODAS": "Modo Inteligente (Confluência)"
+}
+
 BOT_RODANDO = True
 BOT_PAUSADO = True
 BOT_INICIADO = False
@@ -887,8 +895,8 @@ MAPA_TICKERS = {}
 for par in ATIVOS_BASE["FOREX"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X")
 for par in ATIVOS_BASE["CRIPTO"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
-# ================= MOTOR DE ANÁLISE COM FEED RESILIENTE (CORREÇÃO DE FOREX & ADAPTAÇÃO OTC) =================
-def get_data_v2(ticker, tf, period='5d'):
+# ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
+def get_data_v2(ticker, tf, velas_minimas=30):
     try:
         base_ticker = ticker
         if "=X" not in ticker and "-USD" not in ticker:
@@ -905,7 +913,7 @@ def get_data_v2(ticker, tf, period='5d'):
             'Accept': 'application/json, text/plain, */*'
         }
         
-        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range={period}"
+        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d"
         res = requests.get(url, headers=headers, timeout=5.0)
         
         if res.status_code != 200 or 'chart' not in res.json():
@@ -921,18 +929,12 @@ def get_data_v2(ticker, tf, period='5d'):
                     highs = np.array([x['high'] for x in data_list], dtype=float)
                     lows = np.array([x['low'] for x in data_list], dtype=float)
                     times = np.array([x['time'] for x in data_list])
-                    return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
+                    
+                    if len(closes) >= velas_minimas:
+                        return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
             
-            # Fallback dinâmico para evitar travamento em ativos indisponíveis
-            times = np.array([int(time.time()) - (i * tf * 60) for i in range(100)][::-1])
-            np.random.seed(int(time.time() // (tf * 60)) + sum(ord(c) for c in ticker))
-            base_price = 1.0850 if "EUR" in ticker else (145.00 if "JPY" in ticker else 1.2500)
-            changes = np.random.normal(0, 0.0005, 100)
-            closes = np.cumsum(changes) + base_price
-            opens = closes - np.random.normal(0, 0.0002, 100)
-            highs = np.maximum(opens, closes) + abs(np.random.normal(0, 0.0003, 100))
-            lows = np.minimum(opens, closes) - abs(np.random.normal(0, 0.0003, 100))
-            return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
+            # Sem dados reais no momento = Ignora o ativo sem gerar sinais falsos/aleatórios
+            return None
             
         data_json = res.json()
         result = data_json['chart']['result'][0]
@@ -947,12 +949,13 @@ def get_data_v2(ticker, tf, period='5d'):
             "close": np.array(quote['close'], dtype=float)
         }
         
-        # Filtra registros nulos/inválidos sem travar o loop
+        # Filtra registros nulos
         idx = ~np.isnan(ohlc["close"])
         for k in ohlc: 
             ohlc[k] = ohlc[k][idx]
             
-        if len(ohlc["close"]) < 20:
+        # Garante a exigência das últimas 30 velas antes de processar
+        if len(ohlc["close"]) < velas_minimas:
             return None
 
         return ohlc
@@ -971,7 +974,11 @@ def calcular_ema(dados, periodo):
 
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
-    if len(c) < 20: return None
+    
+    # Validação obrigatória das últimas 30 velas do histórico
+    if len(c) < 30: 
+        return None
+        
     sinal = None
 
     if estrategia == "LOGICA_DO_PRECO":
@@ -1221,16 +1228,16 @@ def command(cmd):
         AGUARDANDO_CONFIRMACAO_RESULTADO = False
         SINAL_DISPLAY_PERMANENTE = None
         ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>VARREDURA INICIADA</b><br><span style='color:#00f2fe;'>[ANALISANDO FOREX & CRIPTO]</span></div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>ANALISANDO AS ÚLTIMAS 30 VELAS</b><br><span style='color:#00f2fe;'>[VARREDURA FOREX & CRIPTO]</span></div><div class='tech-scanner'></div>"
         
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
-            f"🟢 <b>Status:</b> Operacional / Varredura Ativa\n"
+            f"🟢 <b>Status:</b> Análise de 30 velas ativada / Varredura em tempo real\n"
             f"👤 <b>Administrador:</b> {user}\n"
             f"📊 <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
             f"🌐 <b>Mercado:</b> {TIPO_MERCADO}\n"
-            f"⚙️ <b>Estratégia:</b> {ESTRATEGIA_ESCOLHIDA}\n\n"
-            f"<i>Varrendo mercado em busca de oportunidades...</i>"
+            f"⚙️ <b>Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(ESTRATEGIA_ESCOLHIDA, ESTRATEGIA_ESCOLHIDA)}\n\n"
+            f"<i>Analisando histórico de candles para obter sinais confirmados...</i>"
         )
         enviar_telegram(msg_inicio_telegram, user_solicitante=user)
         return jsonify({"ok": True})
@@ -1238,7 +1245,7 @@ def command(cmd):
     elif cmd == "pause_bot":
         BOT_PAUSADO = not BOT_PAUSADO
         status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if BOT_PAUSADO else f"🔍 ANALISANDO: {ATIVO_ATUAL_GLOBAL} (M{TIMEFRAME_OPERACAO})"
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO 30 VELAS: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
         msg_pause = "⏸ <b>SISTEMA PAUSADO</b>" if BOT_PAUSADO else "▶️ <b>SISTEMA RETOMADO!</b>"
         enviar_telegram(msg_pause, user_solicitante=user)
         return jsonify({"ok": True})
@@ -1290,7 +1297,7 @@ def resultado(res):
         AGUARDANDO_CONFIRMACAO_RESULTADO = False
         SINAL_DISPLAY_PERMANENTE = None
         
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[RETOMANDO VARREDURA]</span></div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO VELAS: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[RETOMANDO VARREDURA]</span></div><div class='tech-scanner'></div>"
     
     AG_RESULTADO = False
     return redirect('/')
@@ -1317,9 +1324,10 @@ def bot_loop():
                 ATIVO_ATUAL_GLOBAL = ativo
                 ticker = MAPA_TICKERS.get(ativo, ativo)
 
-                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO MERCADO: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[BUSCANDO ENTRADA]</span></div><div class='tech-scanner'></div>"
+                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
 
-                data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
+                # Puxa histórico exigindo no mínimo 30 velas do gráfico real
+                data = get_data_v2(ticker, TIMEFRAME_OPERACAO, velas_minimas=30)
                 if not data:
                     time.sleep(0.3)
                     continue
@@ -1336,6 +1344,7 @@ def bot_loop():
                 else:
                     sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
 
+                # Se houver confluência real identificada nas 30 velas
                 if sinal_encontrado:
                     agora = agora_brasilia()
                     
@@ -1350,10 +1359,13 @@ def bot_loop():
                     str_entrada = prox_minuto_entrada.strftime("%H:%M")
                     str_saida = horario_saida.strftime("%H:%M")
 
+                    nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
+
                     msg_pre_alerta = (
                         f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n"
                         f"<b>Ativo:</b> {ativo}\n"
                         f"<b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
+                        f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
                         f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
                         f"👉 <i>Abra o ativo na corretora e prepare-se!</i>"
                     )
@@ -1362,14 +1374,14 @@ def bot_loop():
                         f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
                         f"⚠️ <b>PREPARE O ATIVO: {ativo}</b> ⚠️<br>"
                         f"<span style='color:#fff;'>Entrada às <b>{str_entrada}</b> (M{TIMEFRAME_OPERACAO})</span><br>"
-                        f"<span style='font-size:12px; color:#94a3b8;'>Aguardando confirmação...</span>"
+                        f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span>"
                         f"</div>"
                     )
 
                     NOTIFICACAO_SISTEMA = {
                         "id": str(time.time()),
                         "titulo": f"⚠️ PREPARE-SE: {ativo}",
-                        "corpo": f"Possível entrada às {str_entrada} (M{TIMEFRAME_OPERACAO}). Abra o gráfico!"
+                        "corpo": f"Possível entrada às {str_entrada} (M{TIMEFRAME_OPERACAO}) via {nome_est_formatado}. Abra o gráfico!"
                     }
 
                     enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
@@ -1388,7 +1400,7 @@ def bot_loop():
                         f"💱 <b>Paridade:</b> {ativo}\n"
                         f"⏱ <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
                         f"↕️ <b>Direção:</b> {sinal_encontrado}\n"
-                        f"🧠 <b>Estratégia:</b> {est_nome_encontrada}\n\n"
+                        f"🧠 <b>Estratégia:</b> {nome_est_formatado}\n\n"
                         f"⌛ <b>Expiração:</b> {str_saida}\n"
                         f"💡 <i>Gerencie seu capital com responsabilidade.</i>"
                     )
@@ -1397,14 +1409,15 @@ def bot_loop():
                     
                     SINAL_DISPLAY_PERMANENTE = (
                         f"<div class='status-box' style='border-color:#00f2fe; background:rgba(0,242,254,0.1);'>"
-                        f"<h3 style='color:#00f2fe; margin-bottom:10px;'>🎯 SINAL CONFIRMADO!</h3>"
+                        f"<h3 style='color:#00f2fe; margin-bottom:8px;'>🎯 SINAL CONFIRMADO!</h3>"
                         f"<b>ATIVO:</b> {ativo} | <b>DIREÇÃO:</b> <span style='color:{'#10b981' if sinal_encontrado=='CALL' else '#ef4444'}'>{sinal_encontrado}</span><br>"
+                        f"<b>ESTRATÉGIA:</b> <span style='color:#38ef7d;'>{nome_est_formatado}</span><br>"
                         f"<b>TIMEFRAME:</b> M{TIMEFRAME_OPERACAO} | <b>EXPIRAÇÃO:</b> {str_saida}"
                         f"</div>"
                     )
                     
                     AGUARDANDO_CONFIRMACAO_RESULTADO = True
-                    registrar_sinal_bd(QUEM_INICIOU_O_BOT or ADMIN_EMAIL, f"{ativo} | {sinal_encontrado} | M{TIMEFRAME_OPERACAO}")
+                    registrar_sinal_bd(QUEM_INICIOU_O_BOT or ADMIN_EMAIL, f"{ativo} | {sinal_encontrado} | {nome_est_formatado} | M{TIMEFRAME_OPERACAO}")
                     
                     break  
                 
@@ -1429,7 +1442,6 @@ def start_background_loop():
                 thread_iniciada = True
 
 if __name__ == '__main__':
-    # Inicia a thread background antes da execução do servidor
     start_background_loop()
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
