@@ -1429,5 +1429,7 @@ def start_background_loop():
                 thread_iniciada = True
 
 if __name__ == '__main__':
+    # Inicia a thread background antes da execução do servidor
+    start_background_loop()
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
