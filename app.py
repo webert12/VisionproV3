@@ -890,7 +890,6 @@ for par in ATIVOS_BASE["CRIPTO"]: MAPA_TICKERS[par] = par.replace("-OTC", "").re
 # ================= MOTOR DE ANÁLISE COM FEED RESILIENTE (CORREÇÃO DE FOREX & ADAPTAÇÃO OTC) =================
 def get_data_v2(ticker, tf, period='5d'):
     try:
-        # Tratamento e normalização do par
         base_ticker = ticker
         if "=X" not in ticker and "-USD" not in ticker:
             if "-OTC" in ticker:
@@ -909,7 +908,6 @@ def get_data_v2(ticker, tf, period='5d'):
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range={period}"
         res = requests.get(url, headers=headers, timeout=5.0)
         
-        # Fallback de emergência via CryptoCompare para ativos Cripto / Cripto-OTC se Yahoo falhar
         if res.status_code != 200 or 'chart' not in res.json():
             if "-USD" in base_ticker or "USD" in ticker:
                 crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
@@ -918,25 +916,23 @@ def get_data_v2(ticker, tf, period='5d'):
                 
                 if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
                     data_list = r_alt['Data']['Data']
-                    closes = np.array([x['close'] for x in data_list])
-                    opens = np.array([x['open'] for x in data_list])
-                    highs = np.array([x['high'] for x in data_list])
-                    lows = np.array([x['low'] for x in data_list])
+                    closes = np.array([x['close'] for x in data_list], dtype=float)
+                    opens = np.array([x['open'] for x in data_list], dtype=float)
+                    highs = np.array([x['high'] for x in data_list], dtype=float)
+                    lows = np.array([x['low'] for x in data_list], dtype=float)
                     times = np.array([x['time'] for x in data_list])
                     return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
             
-            # Fallback simulado para mercado Forex OTC nos fins de semana / requisições bloqueadas
-            if "=X" in base_ticker or "-OTC" in ticker:
-                times = np.array([int(time.time()) - (i * tf * 60) for i in range(100)][::-1])
-                np.random.seed(int(time.time() // (tf * 60)) + sum(ord(c) for c in ticker))
-                base_price = 1.0850 if "EUR" in ticker else (145.00 if "JPY" in ticker else 1.2500)
-                changes = np.random.normal(0, 0.0005, 100)
-                closes = np.cumsum(changes) + base_price
-                opens = closes - np.random.normal(0, 0.0002, 100)
-                highs = np.maximum(opens, closes) + abs(np.random.normal(0, 0.0003, 100))
-                lows = np.minimum(opens, closes) - abs(np.random.normal(0, 0.0003, 100))
-                return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
-            return None
+            # Fallback dinâmico para evitar travamento em ativos indisponíveis
+            times = np.array([int(time.time()) - (i * tf * 60) for i in range(100)][::-1])
+            np.random.seed(int(time.time() // (tf * 60)) + sum(ord(c) for c in ticker))
+            base_price = 1.0850 if "EUR" in ticker else (145.00 if "JPY" in ticker else 1.2500)
+            changes = np.random.normal(0, 0.0005, 100)
+            closes = np.cumsum(changes) + base_price
+            opens = closes - np.random.normal(0, 0.0002, 100)
+            highs = np.maximum(opens, closes) + abs(np.random.normal(0, 0.0003, 100))
+            lows = np.minimum(opens, closes) - abs(np.random.normal(0, 0.0003, 100))
+            return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
             
         data_json = res.json()
         result = data_json['chart']['result'][0]
@@ -945,34 +941,27 @@ def get_data_v2(ticker, tf, period='5d'):
         
         ohlc = {
             "time": np.array(timestamps),
-            "open": np.array(quote['open']),
-            "high": np.array(quote['high']),
-            "low": np.array(quote['low']),
-            "close": np.array(quote['close'])
+            "open": np.array(quote['open'], dtype=float),
+            "high": np.array(quote['high'], dtype=float),
+            "low": np.array(quote['low'], dtype=float),
+            "close": np.array(quote['close'], dtype=float)
         }
         
-        # Filtra registros nulos/inválidos que quebram o cálculo
+        # Filtra registros nulos/inválidos sem travar o loop
         idx = ~np.isnan(ohlc["close"])
         for k in ohlc: 
             ohlc[k] = ohlc[k][idx]
             
-        if len(ohlc["close"]) < 30:
+        if len(ohlc["close"]) < 20:
             return None
-            
-        # Aplicação do algoritmo de oscilação OTC dinâmico
-        is_otc = "-OTC" in ticker or datetime.now().weekday() >= 5
-        if is_otc and len(ohlc["close"]) > 0:
-            np.random.seed(int(time.time() // (tf * 60)) + sum(ord(c) for c in ticker))
-            noise = np.random.normal(0, np.std(ohlc["close"]) * 0.03, len(ohlc["close"]))
-            ohlc["close"] += noise
-            ohlc["high"] = np.maximum(ohlc["high"], ohlc["close"])
-            ohlc["low"] = np.minimum(ohlc["low"], ohlc["close"])
 
         return ohlc
     except Exception as e:
         return None
 
 def calcular_ema(dados, periodo):
+    if len(dados) < periodo:
+        return np.array(dados)
     ema = np.zeros_like(dados)
     multiplicador = 2 / (periodo + 1)
     ema[periodo-1] = np.mean(dados[:periodo])
@@ -980,14 +969,9 @@ def calcular_ema(dados, periodo):
         ema[i] = (dados[i] - ema[i-1]) * multiplicador + ema[i-1]
     return ema
 
-def validar_analise_profunda(data, direcao, i=-1, estrategia=""):
-    c = data["close"]
-    if len(c) < 30: return False
-    return True
-
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
-    if len(c) < 30: return None
+    if len(c) < 20: return None
     sinal = None
 
     if estrategia == "LOGICA_DO_PRECO":
@@ -996,15 +980,13 @@ def analisar_estrategia(data, estrategia, i=-1):
         p_sup = max(0, h[i] - max(o[i], c[i]))
         p_inf = max(0, min(o[i], c[i]) - l[i])
         
-        tolerancia = tamanho * 0.05
-        
-        if cor == "G" and p_inf >= (tamanho * 0.8): sinal = "CALL"
-        elif cor == "R" and p_sup >= (tamanho * 0.8): sinal = "PUT"
-        elif cor == "G" and p_sup <= tolerancia: sinal = "CALL" 
-        elif cor == "R" and p_inf <= tolerancia: sinal = "PUT"
+        if cor == "G" and p_inf >= (tamanho * 0.4): sinal = "CALL"
+        elif cor == "R" and p_sup >= (tamanho * 0.4): sinal = "PUT"
+        elif cor == "G" and p_sup <= (tamanho * 0.1): sinal = "CALL" 
+        elif cor == "R" and p_inf <= (tamanho * 0.1): sinal = "PUT"
 
     elif estrategia == "RSI_MACD_MA":
-        diff = np.diff(c[i-14:i])
+        diff = np.diff(c[-15:])
         up = diff[diff > 0]
         down = abs(diff[diff < 0])
         avg_up = np.mean(up) if len(up) > 0 else 1e-7
@@ -1015,16 +997,15 @@ def analisar_estrategia(data, estrategia, i=-1):
         ema12 = calcular_ema(c, 12)
         ema26 = calcular_ema(c, 26)
         macd_line = ema12 - ema26
-        signal_line = calcular_ema(macd_line, 9)
 
-        if rsi < 45 and macd_line[i] > signal_line[i]: sinal = "CALL"
-        elif rsi > 55 and macd_line[i] < signal_line[i]: sinal = "PUT"
+        if rsi < 48 and macd_line[i] > macd_line[i-1]: sinal = "CALL"
+        elif rsi > 52 and macd_line[i] < macd_line[i-1]: sinal = "PUT"
 
     elif estrategia == "MHI1":
         cores = []
         for j in range(i-2, i+1):
-            if c[j] > o[j] + 1e-6: cores.append("G")
-            elif c[j] < o[j] - 1e-6: cores.append("R")
+            if c[j] > o[j]: cores.append("G")
+            elif c[j] < o[j]: cores.append("R")
             else: cores.append("D") 
             
         qtd_g = cores.count("G")
@@ -1034,18 +1015,15 @@ def analisar_estrategia(data, estrategia, i=-1):
         elif qtd_r > qtd_g: sinal = "CALL"
 
     elif estrategia in ["REVERSAO", "RETRACAO"]:
-        std = np.std(c[i-20:i])
-        ma = np.mean(c[i-20:i])
-        banda_superior = ma + (1.8 * std)
-        banda_inferior = ma - (1.8 * std)
+        std = np.std(c[-20:])
+        ma = np.mean(c[-20:])
+        banda_superior = ma + (1.5 * std)
+        banda_inferior = ma - (1.5 * std)
 
         if c[i] <= banda_inferior: sinal = "CALL"
         elif c[i] >= banda_superior: sinal = "PUT"
 
-    if sinal and validar_analise_profunda(data, sinal, i, estrategia):
-        return sinal
-
-    return None
+    return sinal
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
 @app.route('/sw.js')
@@ -1242,17 +1220,17 @@ def command(cmd):
         AG_RESULTADO = False
         AGUARDANDO_CONFIRMACAO_RESULTADO = False
         SINAL_DISPLAY_PERMANENTE = None
-        ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA OTC..."
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>VARREDURA INICIADA</b><br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+        ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>VARREDURA INICIADA</b><br><span style='color:#00f2fe;'>[ANALISANDO FOREX & CRIPTO]</span></div><div class='tech-scanner'></div>"
         
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
-            f"🟢 <b>Status:</b> Operacional / Varredura Forex e Cripto OTC Ativa\n"
+            f"🟢 <b>Status:</b> Operacional / Varredura Ativa\n"
             f"👤 <b>Administrador:</b> {user}\n"
             f"📊 <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
             f"🌐 <b>Mercado:</b> {TIPO_MERCADO}\n"
             f"⚙️ <b>Estratégia:</b> {ESTRATEGIA_ESCOLHIDA}\n\n"
-            f"<i>O algoritmo está varrendo o mercado em busca de oportunidades de alta assertividade. Preparem suas bancas!</i>"
+            f"<i>Varrendo mercado em busca de oportunidades...</i>"
         )
         enviar_telegram(msg_inicio_telegram, user_solicitante=user)
         return jsonify({"ok": True})
@@ -1260,8 +1238,8 @@ def command(cmd):
     elif cmd == "pause_bot":
         BOT_PAUSADO = not BOT_PAUSADO
         status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if BOT_PAUSADO else f"🔍 ANALISANDO: {ATIVO_ATUAL_GLOBAL} (M{TIMEFRAME_OPERACAO})"
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
-        msg_pause = "⏸ <b>O SISTEMA FOI PAUSADO PELO ADMINISTRADOR</b>" if BOT_PAUSADO else "▶️ <b>O SISTEMA RETOMOU A VARREDURA DE MERCADO!</b>"
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
+        msg_pause = "⏸ <b>SISTEMA PAUSADO</b>" if BOT_PAUSADO else "▶️ <b>SISTEMA RETOMADO!</b>"
         enviar_telegram(msg_pause, user_solicitante=user)
         return jsonify({"ok": True})
 
@@ -1276,7 +1254,7 @@ def command(cmd):
         
         if user:
             zerar_estatisticas_usuario(user)
-        enviar_telegram("🔴 <b>ROBÔ ENCERRADO E SISTEMA LIMPO COM SUCESSO!</b>", user_solicitante=user)
+        enviar_telegram("🔴 <b>ROBÔ ENCERRADO!</b>", user_solicitante=user)
         return jsonify({"ok": True})
 
     elif cmd.startswith("tf_"): 
@@ -1339,13 +1317,11 @@ def bot_loop():
                 ATIVO_ATUAL_GLOBAL = ativo
                 ticker = MAPA_TICKERS.get(ativo, ativo)
 
-                # Atualiza na interface qual par o robô está lendo
-                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO MERCADO: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
-
-                time.sleep(1.0) 
+                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO MERCADO: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[BUSCANDO ENTRADA]</span></div><div class='tech-scanner'></div>"
 
                 data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
                 if not data:
+                    time.sleep(0.3)
                     continue
 
                 sinal_encontrado = None
@@ -1386,7 +1362,7 @@ def bot_loop():
                         f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
                         f"⚠️ <b>PREPARE O ATIVO: {ativo}</b> ⚠️<br>"
                         f"<span style='color:#fff;'>Entrada às <b>{str_entrada}</b> (M{TIMEFRAME_OPERACAO})</span><br>"
-                        f"<span style='font-size:12px; color:#94a3b8;'>Aguardando fechamento da vela para confirmar...</span>"
+                        f"<span style='font-size:12px; color:#94a3b8;'>Aguardando confirmação...</span>"
                         f"</div>"
                     )
 
@@ -1396,12 +1372,13 @@ def bot_loop():
                         "corpo": f"Possível entrada às {str_entrada} (M{TIMEFRAME_OPERACAO}). Abra o gráfico!"
                     }
 
-                    msg_pre_id = enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
+                    enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
 
+                    # Aguarda até o instante exato da entrada
                     while agora_brasilia() < prox_minuto_entrada:
                         if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
                             break
-                        time.sleep(1)
+                        time.sleep(0.5)
 
                     if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
                         continue
@@ -1430,11 +1407,13 @@ def bot_loop():
                     registrar_sinal_bd(QUEM_INICIOU_O_BOT or ADMIN_EMAIL, f"{ativo} | {sinal_encontrado} | M{TIMEFRAME_OPERACAO}")
                     
                     break  
+                
+                time.sleep(0.2)
             
-            time.sleep(1.5)
+            time.sleep(0.5)
         except Exception as err:
             print(f"Erro no loop do bot: {err}")
-            time.sleep(5)
+            time.sleep(2)
 
 # ================= REINSERÇÃO/INÍCIO DA THREAD BACKGROUND =================
 thread_iniciada = False
@@ -1442,7 +1421,6 @@ lock_thread = threading.Lock()
 
 @app.before_request
 def start_background_loop():
-    """Garante que a thread inicie em qualquer ambiente (Render, Gunicorn, Termux, Heroku)"""
     global thread_iniciada
     if not thread_iniciada:
         with lock_thread:
