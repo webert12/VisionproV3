@@ -868,7 +868,6 @@ NOME_ESTRATEGIAS_DISPLAY = {
     "TODAS": "Modo Inteligente (Confluência)"
 }
 
-# CORREÇÃO CRÍTICA: Inicialização Desativada por Padrão
 BOT_RODANDO = True
 BOT_PAUSADO = True
 BOT_INICIADO = False
@@ -879,6 +878,10 @@ AGUARDANDO_CONFIRMACAO_RESULTADO = False
 ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
 SINAL_DISPLAY_PERMANENTE = None
 ATIVO_ATUAL_GLOBAL = "AGUARDANDO..."
+
+# NOVAS VARIÁVEIS PARA CONTROLE DE DELAY E DUPLICIDADE
+INICIO_VARREDURA_TIME = 0
+ULTIMO_HORARIO_ENTRADA = None
 
 # ================= ATIVOS EXPANSAO TOTAL (FOREX OTC + CRIPTO OTC / REAL TIME) =================
 ATIVOS_BASE = {
@@ -934,7 +937,6 @@ def get_data_v2(ticker, tf, velas_minimas=30):
                     if len(closes) >= velas_minimas:
                         return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
             
-            # Sem dados reais no momento = Ignora o ativo sem gerar sinais falsos/aleatórios
             return None
             
         data_json = res.json()
@@ -950,12 +952,10 @@ def get_data_v2(ticker, tf, velas_minimas=30):
             "close": np.array(quote['close'], dtype=float)
         }
         
-        # Filtra registros nulos
         idx = ~np.isnan(ohlc["close"])
         for k in ohlc: 
             ohlc[k] = ohlc[k][idx]
             
-        # Garante a exigência das últimas 30 velas antes de processar
         if len(ohlc["close"]) < velas_minimas:
             return None
 
@@ -976,7 +976,6 @@ def calcular_ema(dados, periodo):
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
     
-    # Validação obrigatória das últimas 30 velas do histórico
     if len(c) < 30: 
         return None
         
@@ -1218,7 +1217,7 @@ def status():
 
 @app.route('/command/<cmd>')
 def command(cmd):
-    global BOT_INICIADO, BOT_PAUSADO, TIMEFRAME_OPERACAO, TIPO_MERCADO, QUEM_INICIOU_O_BOT, ULTIMO_SINAL_GLOBAL, AG_RESULTADO, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, ESTRATEGIA_ESCOLHIDA, ATIVO_ATUAL_GLOBAL
+    global BOT_INICIADO, BOT_PAUSADO, TIMEFRAME_OPERACAO, TIPO_MERCADO, QUEM_INICIOU_O_BOT, ULTIMO_SINAL_GLOBAL, AG_RESULTADO, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, ESTRATEGIA_ESCOLHIDA, ATIVO_ATUAL_GLOBAL, INICIO_VARREDURA_TIME, ULTIMO_HORARIO_ENTRADA
     user = session.get('user')
 
     if cmd == "start_bot":
@@ -1228,8 +1227,11 @@ def command(cmd):
         AG_RESULTADO = False
         AGUARDANDO_CONFIRMACAO_RESULTADO = False
         SINAL_DISPLAY_PERMANENTE = None
+        INICIO_VARREDURA_TIME = time.time() + 4 # Impede a varredura instantânea ao clicar no botão
+        ULTIMO_HORARIO_ENTRADA = None # Reseta o bloqueio de duplicidade
+        
         ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>ANALISANDO AS ÚLTIMAS 30 VELAS</b><br><span style='color:#00f2fe;'>[VARREDURA FOREX & CRIPTO]</span></div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE</b><br><span style='color:#00f2fe;'>[AGUARDANDO CICLO DO MERCADO...]</span></div><div class='tech-scanner'></div>"
         
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
@@ -1305,17 +1307,33 @@ def resultado(res):
 
 # ================= LOOP PRINCIPAL DO BOT =================
 def bot_loop():
-    global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, QUEM_INICIOU_O_BOT, NOTIFICACAO_SISTEMA
+    global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, QUEM_INICIOU_O_BOT, NOTIFICACAO_SISTEMA, ULTIMO_HORARIO_ENTRADA
 
     while BOT_RODANDO:
         try:
-            # Trava total de execução se o bot não foi ativado via START
             if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
                 time.sleep(1)
                 continue
 
-            # Pequeno delay de sincronização após o start para carregar o histórico de velas com precisão
-            time.sleep(1.5)
+            if time.time() < INICIO_VARREDURA_TIME:
+                time.sleep(1)
+                continue
+
+            agora_scan = agora_brasilia()
+            minutos_passados = agora_scan.minute % TIMEFRAME_OPERACAO
+            segundos_passados = minutos_passados * 60 + agora_scan.second
+            segundos_restantes = (TIMEFRAME_OPERACAO * 60) - segundos_passados
+
+            # O pulo do gato: Só escaneia e toma decisão no final da vela 
+            # (Ex: últimos 30 segs p/ M1, últimos 45 segs p/ M5 e M15).
+            # Impede alertas instantâneos ao dar start ou logo após confirmar operação.
+            tempo_limite = 30 if TIMEFRAME_OPERACAO == 1 else 45
+            
+            if segundos_restantes > tempo_limite:
+                ATIVO_ATUAL_GLOBAL = "AGUARDANDO FECHAMENTO..."
+                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⏳ ANALISANDO HISTÓRICO...<br><span style='color:#00f2fe;'>[PRÓXIMA VARREDURA EM {segundos_restantes - tempo_limite}s]</span></div><div class='tech-scanner'></div>"
+                time.sleep(2)
+                continue
 
             if TIPO_MERCADO == "TODOS":
                 ativos = ATIVOS_BASE["FOREX"] + ATIVOS_BASE["CRIPTO"]
@@ -1329,9 +1347,8 @@ def bot_loop():
                 ATIVO_ATUAL_GLOBAL = ativo
                 ticker = MAPA_TICKERS.get(ativo, ativo)
 
-                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
+                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
 
-                # Puxa histórico exigindo no mínimo 30 velas do gráfico real
                 data = get_data_v2(ticker, TIMEFRAME_OPERACAO, velas_minimas=30)
                 if not data:
                     time.sleep(0.3)
@@ -1349,7 +1366,6 @@ def bot_loop():
                 else:
                     sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
 
-                # Se houver confluência real identificada nas 30 velas
                 if sinal_encontrado:
                     agora = agora_brasilia()
                     
@@ -1364,6 +1380,11 @@ def bot_loop():
                     str_entrada = prox_minuto_entrada.strftime("%H:%M")
                     str_saida = horario_saida.strftime("%H:%M")
 
+                    # Bloqueia disparo múltiplo/aleatório dentro do mesmo minuto de expiração
+                    if ULTIMO_HORARIO_ENTRADA == f"{ativo}_{str_entrada}":
+                        continue
+
+                    ULTIMO_HORARIO_ENTRADA = f"{ativo}_{str_entrada}"
                     nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
 
                     msg_pre_alerta = (
@@ -1391,7 +1412,6 @@ def bot_loop():
 
                     enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
 
-                    # Aguarda até o instante exato da entrada
                     while agora_brasilia() < prox_minuto_entrada:
                         if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
                             break
