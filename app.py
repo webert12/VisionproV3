@@ -1314,6 +1314,9 @@ def bot_loop():
                 time.sleep(1)
                 continue
 
+            # Pequeno delay de sincronização após o start para carregar o histórico de velas com precisão
+            time.sleep(1.5)
+
             if TIPO_MERCADO == "TODOS":
                 ativos = ATIVOS_BASE["FOREX"] + ATIVOS_BASE["CRIPTO"]
             else:
