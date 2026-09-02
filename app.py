@@ -868,6 +868,7 @@ NOME_ESTRATEGIAS_DISPLAY = {
     "TODAS": "Modo Inteligente (Confluência)"
 }
 
+# CORREÇÃO CRÍTICA: Inicialização Desativada por Padrão
 BOT_RODANDO = True
 BOT_PAUSADO = True
 BOT_INICIADO = False
@@ -1308,6 +1309,7 @@ def bot_loop():
 
     while BOT_RODANDO:
         try:
+            # Trava total de execução se o bot não foi ativado via START
             if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
                 time.sleep(1)
                 continue
