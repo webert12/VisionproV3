@@ -1,4609 +1,1410 @@
-import os
-import json
+import requests
 import time
-import logging
+import math
+import pytz
 import threading
-import secrets
+import json
+import sys
+import random
+import os
+import logging
+import numpy as np
 import re
 from datetime import datetime, timedelta
-
-import requests
-import pytz
-import numpy as np
+from flask import Flask, render_template_string, request, jsonify, session, redirect, abort, Response
+from werkzeug.security import generate_password_hash, check_password_hash
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from flask import (
-    Flask,
-    render_template_string,
-    request,
-    jsonify,
-    session,
-    redirect,
-    abort,
-)
-from werkzeug.security import generate_password_hash, check_password_hash
-
-
-# ============================================================
-# CONFIGURAÇÃO GERAL
-# ============================================================
-
-FUSO_SP = pytz.timezone("America/Sao_Paulo")
+# ================= AJUSTE DE FUSO HORÁRIO (SÃO PAULO / BRASÍLIA) =================
+FUSO_SP = pytz.timezone('America/Sao_Paulo')
 
 def agora_brasilia():
     return datetime.now(FUSO_SP)
 
+# ================= CONFIGURAÇÕES DE AMBIENTE =================
+TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU")
+CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
 
-# ============================================================
-# VARIÁVEIS DE AMBIENTE
-# ============================================================
-
-TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "").strip()
-CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "").strip()
-
-ADMIN_EMAIL = os.getenv(
-    "ADMIN_EMAIL",
-    "admin@vision.com"
-).strip().lower()
-
-# OBRIGATÓRIO EM PRODUÇÃO
-APP_SECRET = os.getenv("FLASK_SECRET", "").strip()
-
-if not APP_SECRET:
-    raise RuntimeError(
-        "ERRO DE SEGURANÇA: configure FLASK_SECRET no ambiente."
-    )
-
-if len(APP_SECRET) < 32:
-    raise RuntimeError(
-        "ERRO DE SEGURANÇA: FLASK_SECRET deve possuir pelo menos 32 caracteres."
-    )
-
-
-DB_URL = (
-    os.getenv("DB_URL")
-    or os.getenv("DATABASE_URL")
-    or ""
-).strip()
-
-if not DB_URL:
-    raise RuntimeError(
-        "ERRO: configure DB_URL ou DATABASE_URL."
-    )
-
-DB_SSLMODE = os.getenv("DB_SSLMODE", "require").strip()
-
-
-# ============================================================
-# FLASK
-# ============================================================
-
-app = Flask(__name__)
-
-app.secret_key = APP_SECRET
-
-app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "1") == "1",
-    PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
-    MAX_CONTENT_LENGTH=1024 * 1024,
-)
-
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("vision_pro")
-
-
-# ============================================================
-# SEGURANÇA / RATE LIMIT
-# ============================================================
-
-RATE_LIMIT = {}
-RATE_LIMIT_LOCK = threading.Lock()
-
-LOGIN_MAX_ATTEMPTS = 8
-LOGIN_WINDOW_SECONDS = 300
-
-
-def get_client_ip():
-    """
-    Em produção, prefira configurar o proxy/reverse proxy corretamente.
-    Não confie cegamente em X-Forwarded-For.
-    """
-    return request.remote_addr or "unknown"
-
-
-def rate_limit_login(ip):
-    now = time.time()
-
-    with RATE_LIMIT_LOCK:
-        data = RATE_LIMIT.get(ip)
-
-        if not data:
-            RATE_LIMIT[ip] = {
-                "count": 1,
-                "first": now,
-            }
-            return True
-
-        if now - data["first"] > LOGIN_WINDOW_SECONDS:
-            RATE_LIMIT[ip] = {
-                "count": 1,
-                "first": now,
-            }
-            return True
-
-        if data["count"] >= LOGIN_MAX_ATTEMPTS:
-            return False
-
-        data["count"] += 1
-        return True
-
-
-def limpar_rate_limit_periodicamente():
-    while True:
-        time.sleep(600)
-
-        now = time.time()
-
-        with RATE_LIMIT_LOCK:
-            remover = [
-                ip
-                for ip, data in RATE_LIMIT.items()
-                if now - data["first"] > LOGIN_WINDOW_SECONDS
-            ]
-
-            for ip in remover:
-                RATE_LIMIT.pop(ip, None)
-
-
-threading.Thread(
-    target=limpar_rate_limit_periodicamente,
-    daemon=True
-).start()
-
-
-# ============================================================
-# CSRF
-# ============================================================
-
-def csrf_token():
-    token = session.get("_csrf_token")
-
-    if not token:
-        token = secrets.token_urlsafe(32)
-        session["_csrf_token"] = token
-
-    return token
-
-
-app.jinja_env.globals["csrf_token"] = csrf_token
-
-
-def validar_csrf():
-    token_session = session.get("_csrf_token")
-    token_form = request.form.get("_csrf_token", "")
-
-    if (
-        not token_session
-        or not token_form
-        or not secrets.compare_digest(token_session, token_form)
-    ):
-        abort(400, description="Token CSRF inválido.")
-
-
-# ============================================================
-# HEADERS DE SEGURANÇA
-# ============================================================
-
-@app.after_request
-def security_headers(response):
-
-    response.headers["X-Content-Type-Options"] = "nosniff"
-
-    response.headers["X-Frame-Options"] = "SAMEORIGIN"
-
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-
-    response.headers[
-        "Permissions-Policy"
-    ] = "camera=(), microphone=(), geolocation=()"
-
-    response.headers[
-        "Content-Security-Policy"
-    ] = (
-        "default-src 'self'; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src 'self' https://fonts.gstatic.com; "
-        "script-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; "
-        "connect-src 'self'; "
-        "frame-src https://qxbroker.com https://*.qxbroker.com "
-        "https://iqoption.com https://*.iqoption.com; "
-        "frame-ancestors 'self'; "
-        "base-uri 'self'; "
-        "form-action 'self';"
-    )
-
-    if request.is_secure:
-        response.headers[
-            "Strict-Transport-Security"
-        ] = "max-age=31536000; includeSubDomains"
-
-    return response
-
-
-# ============================================================
-# BANCO
-# ============================================================
+DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
 
 def get_db_connection():
-    return psycopg2.connect(
-        DB_URL,
-        sslmode=DB_SSLMODE,
-        connect_timeout=10,
-        application_name="vision_pro_v3"
-    )
+    if not DB_URL:
+        raise ValueError("A variável de ambiente DB_URL (ou DATABASE_URL) precisa estar configurada.")
+    return psycopg2.connect(DB_URL)
 
+USUARIOS_ONLINE = {}
+DADOS_USUARIOS = {}
 
+ULTIMO_MSG_ID_TELEGRAM = None
+QUEM_INICIOU_O_BOT = None
+
+def get_client_ip():
+    if request.headers.get('X-Forwarded-For'):
+        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    return request.remote_addr
+
+def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
+    global ULTIMO_MSG_ID_TELEGRAM, QUEM_INICIOU_O_BOT
+    
+    usuario_ativo = user_solicitante or QUEM_INICIOU_O_BOT
+    if usuario_ativo != ADMIN_EMAIL:
+        return None
+
+    if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
+        return None
+        
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
+        payload = {"chat_id": CHAT_ID_TELEGRAM, "text": mensagem, "parse_mode": "HTML"}
+        r = requests.post(url, json=payload, timeout=5).json()
+        if r.get("ok"):
+            msg_id = r["result"]["message_id"]
+            if any(term in mensagem for term in ["SINAL CONFIRMADO", "🔥", "🎯", "Sinal confirmado"]):
+                ULTIMO_MSG_ID_TELEGRAM = msg_id
+            if auto_delete:
+                threading.Thread(target=deletar_mensagem_atrasada, args=(msg_id, auto_delete)).start()
+            return msg_id
+        return None
+    except Exception as e:
+        print(f"Erro Telegram: {e}")
+        return None
+
+def deletar_mensagem_telegram(msg_id):
+    if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM or not msg_id:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/deleteMessage"
+        payload = {"chat_id": CHAT_ID_TELEGRAM, "message_id": msg_id}
+        requests.post(url, json=payload, timeout=5)
+    except Exception as e:
+        print(f"Erro ao deletar mensagem: {e}")
+
+def deletar_mensagem_atrasada(msg_id, delay):
+    if delay > 0: time.sleep(delay)
+    deletar_mensagem_telegram(msg_id)
+
+# ================= SERVIDOR FLASK =================
+APP_SECRET = os.getenv("FLASK_SECRET", "chave_secreta_vision_pro_ultra_premium_v3_security")
+app = Flask(__name__)
+app.secret_key = APP_SECRET
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+
+NOTIFICACAO_SISTEMA = None
+
+# ================= TEMPLATES HTML =================
+HTML_ADM = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GESTOR DE CLIENTES</title>
+    <style>
+        body { background: #0a0f1d; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 10px; }
+        .card { background: rgba(15, 23, 42, 0.9); padding: 15px; border-radius: 12px; border: 1px solid #00f2fe; margin-bottom: 10px; font-size: 13px; box-shadow: 0 4px 15px rgba(0, 242, 254, 0.1); }
+        .user-header { cursor: pointer; display: flex; justify-content: space-between; align-items: center; padding: 5px 0; }
+        .user-header:hover { color: #00f2fe; }
+        .user-details { display: none; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 15px; }
+        .btn-adm { padding: 10px 14px; border-radius: 6px; text-decoration: none; color: white; font-weight: bold; font-size: 11px; display: inline-block; margin: 5px 2px; border:none; cursor:pointer; text-transform: uppercase; letter-spacing: 0.5px; }
+        .green { background: #10b981; } .red { background: #ef4444; } .blue { background: #3b82f6; } .orange { background: #f59e0b; }
+        h2 { color: #00f2fe; text-align: center; text-transform: uppercase; letter-spacing: 1px; }
+        input { background: #1e293b; color: white; border: 1px solid #334155; padding: 8px; border-radius: 6px; margin-bottom: 5px; width: 100%; box-sizing: border-box; }
+        .status-badge { padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: bold; margin-left: 5px; }
+        .online { background: #10b981; color: white; box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
+        .offline { background: #475569; color: #cbd5e1; }
+    </style>
+    <script>
+        function toggleUser(id) {
+            const el = document.getElementById(id);
+            if (el.style.display === "block") {
+                el.style.display = "none";
+            } else {
+                document.querySelectorAll('.user-details').forEach(d => d.style.display = 'none');
+                el.style.display = "block";
+            }
+        }
+    </script>
+</head>
+<body>
+    <h2>👥 GESTÃO DE USUÁRIOS</h2>
+    <p style="text-align:center; color:#94a3b8;">Total Online: {{ online_count }}</p>
+    <a href="/" style="color: #00f2fe; text-decoration:none; display:block; margin-bottom: 20px; text-align: center; font-weight: bold;">⬅ Voltar ao Painel Principal</a>
+
+    {% for email, info in lista.items() %}
+    <div class="card">
+        <div class="user-header" onclick="toggleUser('details-{{ loop.index }}')">
+            <span>
+                <b>{{ email }}</b>
+                {% if email in online_list %}
+                    <span class="status-badge online">ONLINE</span>
+                {% else %}
+                    <span class="status-badge offline">OFFLINE</span>
+                {% endif %}
+            </span>
+            <span style="color:#00f2fe; font-size: 10px;">Exibir Dados ▾</span>
+        </div>
+
+        <div id="details-{{ loop.index }}" class="user-details">
+            <div style="margin-bottom:10px;">
+                <span style="color:#00f2fe;">Assertividade: <b>{{ info.winrate if info.winrate else 0 }}%</b></span><br>
+                <span style="color:#94a3b8;">Wins: {{ info.wins }} | Reds: {{ info.reds }}</span><br>
+                <span style="color:#f59e0b;">IPs Cadastrados (Máx 2): <b>{{ info.ips_Formatados }}</b></span>
+            </div>
+            <form action="/adm/editar" method="POST">
+                <input type="hidden" name="email_original" value="{{ email }}">
+                <b>E-mail:</b> <input type="text" name="novo_email" value="{{ email }}">
+                <b>Nova Senha (deixe em branco para manter):</b> <input type="password" name="nova_senha" placeholder="Alterar senha...">
+                <b>Expira em:</b> {{ info.criado_em }}<br><br>
+                <button type="submit" class="btn-adm blue">SALVAR ALTERAÇÕES</button>
+                <a href="/adm/renovar/{{ email }}" class="btn-adm green">RENOVAR +30 DIAS</a>
+                <a href="/adm/liberar_ip/{{ email }}" class="btn-adm orange">LIBERAR DISPOSITIVOS / IPS</a>
+                {% if email != admin %}
+                <a href="/adm/excluir/{{ email }}" class="btn-adm red" onclick="return confirm('Excluir?')">EXCLUIR</a>
+                {% endif %}
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</body>
+</html>
+"""
+
+HTML_TERMOS = """
+<!DOCTYPE html>
+<html>
+<head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TERMOS DE USO</title><style>
+    body { background: #0a0f1d; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; line-height: 1.6; }
+    .card { background: #0f172a; padding: 25px; border-radius: 15px; max-width: 600px; margin: auto; border: 1px solid #00f2fe; box-shadow: 0 0 20px rgba(0,242,254,0.15); }
+    h2 { color: #00f2fe; border-bottom: 1px solid #1e293b; padding-bottom: 10px; text-transform: uppercase; }
+    p { font-size: 14px; color: #94a3b8; }
+    .btn { display: block; text-align: center; background: linear-gradient(135deg, #00c6ff, #0072ff); color: white; padding: 14px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 20px; box-shadow: 0 4px 15px rgba(0,198,255,0.4); }
+</style></head>
+<body>
+    <div class="card">
+        <h2>⚖️ TERMOS DE USO E RESPONSABILIDADE</h2>
+        <p>1. <b>NATUREZA DO SERVIÇO:</b> O Vision Pro V3 é uma ferramenta de análise estatística baseada em algoritmos de inteligência artificial e indicadores técnicos. Não garantimos lucros.</p>
+        <p>2. <b>RISCO DE MERCADO:</b> O mercado financeiro (Forex e Cripto) envolve riscos elevados. Você pode perder parte ou todo o seu capital.</p>
+        <p>3. <b>RESPONSABILIDADE:</b> O usuário é o único responsável por suas operações. O software apenas emite alertas baseados em padrões históricos.</p>
+        <p>4. <b>LIMITAÇÃO:</b> Não somos uma corretora ou casa de análise financeira regulamentada. Use este bot para fins de auxílio educacional e operacional próprio.</p>
+        <a href="/login" class="btn">LI E CONCORDO</a>
+    </div>
+</body>
+</html>
+"""
+
+HTML_LOGIN = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LOGIN - VISION PRO ULTRA</title>
+    <style>
+        body { background: #060913; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .login-card { background: rgba(15, 23, 42, 0.95); padding: 35px 30px; border-radius: 20px; width: 90%; max-width: 360px; text-align: center; border: 1px solid rgba(0, 242, 254, 0.3); box-shadow: 0 10px 30px rgba(0, 242, 254, 0.15); backdrop-filter: blur(10px); }
+        h2 { color: #00f2fe; margin-bottom: 25px; letter-spacing: 1.5px; text-transform: uppercase; font-size: 22px; text-shadow: 0 0 10px rgba(0,242,254,0.5); }
+        input { width: 100%; box-sizing: border-box; padding: 14px; margin: 10px 0; border-radius: 10px; border: 1px solid #1e293b; background: #0f172a; color: white; font-size: 15px; outline: none; transition: 0.3s; }
+        input:focus { border-color: #00f2fe; box-shadow: 0 0 10px rgba(0,242,254,0.3); }
+        button { width: 100%; padding: 14px; background: linear-gradient(135deg, #00c6ff, #0072ff); border: none; color: white; border-radius: 10px; cursor: pointer; font-weight: bold; font-size: 15px; margin-top: 15px; letter-spacing: 1px; box-shadow: 0 4px 15px rgba(0,198,255,0.4); transition: 0.3s; }
+        button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,198,255,0.6); }
+        .links { margin-top: 25px; font-size: 13px; }
+        a { color: #00f2fe; text-decoration: none; margin: 0 8px; font-weight: 500; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h2>VISION PRO V3</h2>
+        {% if erro %}<div style="color:#ef4444; margin-bottom:15px; font-size:13px; background:rgba(239,68,68,0.1); padding:10px; border-radius:8px; border:1px solid rgba(239,68,68,0.3);">{{erro}}</div>{% endif %}
+        <form method="POST" action="/login">
+            <input type="email" name="email" placeholder="Seu E-mail" required>
+            <input type="password" name="password" placeholder="Sua Senha" required>
+            <button type="submit">ACESSAR O TERMINAL</button>
+        </form>
+        <div class="links">
+            <a href="/register">Criar Conta</a> | <a href="/termos" style="color:#94a3b8">Termos de Uso</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+HTML_REGISTER = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CADASTRO - VISION PRO ULTRA</title>
+    <style>
+        body { background: #060913; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .login-card { background: rgba(15, 23, 42, 0.95); padding: 35px 30px; border-radius: 20px; width: 90%; max-width: 360px; text-align: center; border: 1px solid rgba(16, 185, 129, 0.3); box-shadow: 0 10px 30px rgba(16, 185, 129, 0.15); backdrop-filter: blur(10px); }
+        h2 { color: #10b981; margin-bottom: 25px; letter-spacing: 1.5px; text-transform: uppercase; font-size: 22px; text-shadow: 0 0 10px rgba(16,185,129,0.5); }
+        input { width: 100%; box-sizing: border-box; padding: 14px; margin: 10px 0; border-radius: 10px; border: 1px solid #1e293b; background: #0f172a; color: white; font-size: 15px; outline: none; transition: 0.3s; }
+        input:focus { border-color: #10b981; box-shadow: 0 0 10px rgba(16,185,129,0.3); }
+        button { width: 100%; padding: 14px; background: linear-gradient(135deg, #10b981, #059669); border: none; color: white; border-radius: 10px; cursor: pointer; font-weight: bold; font-size: 15px; margin-top: 15px; letter-spacing: 1px; box-shadow: 0 4px 15px rgba(16,185,129,0.4); transition: 0.3s; }
+        button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(16,185,129,0.6); }
+        a { color: #00f2fe; text-decoration: none; font-size: 13px; display: block; margin-top: 20px; font-weight: 500; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h2>CRIAR CONTA NOVA</h2>
+        {% if erro %}<div style="color:#ef4444; margin-bottom:15px; font-size:13px; background:rgba(239,68,68,0.1); padding:10px; border-radius:8px; border:1px solid rgba(239,68,68,0.3);">{{erro}}</div>{% endif %}
+        <form method="POST" action="/register">
+            <input type="email" name="email" placeholder="Novo E-mail" required>
+            <input type="password" name="password" placeholder="Nova Senha" required>
+            <button type="submit">CONCLUIR CADASTRO</button>
+        </form>
+        <a href="/login">Já possui uma conta? Faça Login</a>
+    </div>
+</body>
+</html>
+"""
+
+HTML_INDEX = """
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VISION PRO V3 - HIGH FREQUENCY BOT ANALYTICS</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+        body { background-color: #060913; color: #f1f5f9; display: flex; justify-content: center; min-height: 100vh; padding: 15px 10px; }
+        
+        .container {
+            width: 100%;
+            max-width: 520px;
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(0, 242, 254, 0.2);
+            border-radius: 24px;
+            padding: 20px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 242, 254, 0.05);
+            backdrop-filter: blur(12px);
+        }
+
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+        .brand { font-size: 17px; font-weight: 900; letter-spacing: 1px; color: #00f2fe; display: flex; align-items: center; gap: 8px; text-shadow: 0 0 10px rgba(0,242,254,0.4); }
+        .brand span { background: rgba(0, 242, 254, 0.15); color: #38ef7d; font-size: 10px; padding: 3px 8px; border-radius: 12px; border: 1px solid rgba(56, 239, 125, 0.4); font-weight: 700; }
+        .btn-logout { font-size: 12px; color: #ef4444; text-decoration: none; font-weight: 700; padding: 6px 14px; border-radius: 10px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); transition: 0.2s; }
+        .btn-logout:hover { background: rgba(239, 68, 68, 0.2); }
+
+        .placar-card { background: #0b1120; border: 1px solid #1e293b; border-radius: 16px; padding: 16px; margin-bottom: 16px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); }
+        .placar-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; text-align: center; }
+        .placar-item .title { font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 700; margin-bottom: 4px; letter-spacing: 0.5px; }
+        .placar-item .val { font-size: 20px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+        .win-color { color: #10b981; text-shadow: 0 0 10px rgba(16,185,129,0.3); }
+        .loss-color { color: #ef4444; text-shadow: 0 0 10px rgba(239,68,68,0.3); }
+        .wr-color { color: #3b82f6; text-shadow: 0 0 10px rgba(59,130,246,0.3); }
+        .winrate-bar { height: 6px; background: #1e293b; border-radius: 10px; overflow: hidden; margin-top: 14px; }
+        .winrate-fill { height: 100%; background: linear-gradient(90deg, #059669, #10b981); width: 0%; transition: width 0.5s ease-in-out; }
+
+        #broker-view-container { display: none; width: 100%; height: 350px; border-radius: 16px; overflow: hidden; flex-direction: column; margin-bottom: 16px; background: #0b1120; border: 1px solid #1e293b; padding: 8px; }
+        .broker-iframe-inline { width: 100%; height: 100%; border: none; background: #0b1120; border-radius: 10px; }
+        .btn-close-broker { background: #1e293b; border: 1px solid #334155; color: #00f2fe; padding: 6px 12px; font-size: 11px; font-weight: 700; border-radius: 6px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: center; }
+
+        .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 100px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
+        
+        .system-console { font-family: 'JetBrains Mono', monospace; color: #38ef7d; font-size: 13px; text-shadow: 0 0 5px rgba(56, 239, 125, 0.5); width: 100%; }
+
+        .result-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
+        .btn-res { border: none; padding: 12px; border-radius: 10px; font-weight: 800; font-size: 12px; cursor: pointer; color: white; transition: transform 0.1s, box-shadow 0.2s; text-transform: uppercase; }
+        .btn-res:active { transform: scale(0.95); }
+        .btn-res-win { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
+        .btn-res-g1 { background: linear-gradient(135deg, #f59e0b, #d97706); color: #000; box-shadow: 0 4px 12px rgba(245,158,11,0.3); }
+        .btn-res-red { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 12px rgba(239,68,68,0.3); }
+        .btn-res-skip { background: #334155; box-shadow: 0 4px 12px rgba(51,65,85,0.3); }
+
+        .control-panel { background: #0b1120; border: 1px solid #1e293b; border-radius: 16px; padding: 15px; margin-bottom: 16px; }
+        .section-label { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 10px; letter-spacing: 1px; display: block; border-bottom: 1px solid #1e293b; padding-bottom: 5px;}
+        
+        .action-flex { display: flex; gap: 8px; margin-bottom: 15px; }
+        .btn-action { flex: 1; padding: 12px 5px; border: none; border-radius: 10px; font-weight: 800; font-size: 12px; color: white; cursor: pointer; transition: 0.2s; text-transform: uppercase; }
+        .btn-action:active { transform: scale(0.95); }
+        .btn-start { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 12px rgba(16,185,129,0.2); }
+        .btn-pause { background: linear-gradient(135deg, #f59e0b, #d97706); box-shadow: 0 4px 12px rgba(245,158,11,0.2); }
+        .btn-stop { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 12px rgba(239,68,68,0.2); }
+
+        .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        .settings-grid.full { grid-template-columns: 1fr; margin-bottom: 15px; }
+        .setting-group label { font-size: 10px; font-weight: 700; color: #94a3b8; margin-bottom: 4px; display: block; }
+        
+        .select-wrapper { position: relative; width: 100%; }
+        .select-wrapper::after { content: "▼"; position: absolute; right: 12px; top: 12px; color: #00f2fe; font-size: 10px; pointer-events: none; }
+        .modern-select { background: #0f172a; color: #f1f5f9; border: 1px solid #1e293b; padding: 10px 12px; border-radius: 8px; font-weight: 600; font-size: 12px; width: 100%; outline: none; appearance: none; cursor: pointer; transition: 0.2s; }
+        .modern-select:hover, .modern-select:focus { border-color: #00f2fe; box-shadow: 0 0 8px rgba(0,242,254,0.2); }
+
+        .broker-flex { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 5px; scrollbar-width: none; }
+        .broker-flex::-webkit-scrollbar { display: none; }
+        .btn-broker { min-width: 100px; flex: 1; border: 1px solid #1e293b; background: #0f172a; color: #cbd5e1; padding: 10px; border-radius: 8px; font-weight: 700; font-size: 11px; cursor: pointer; transition: 0.3s; text-align: center; white-space: nowrap;}
+        .btn-broker:hover { color: #fff; border-color: #00f2fe; background: #1e293b; }
+
+        .btn-toggle-hist { width: 100%; padding: 10px; background: rgba(0, 242, 254, 0.08); border: 1px dashed #00f2fe; color: #00f2fe; border-radius: 8px; font-weight: bold; font-size: 11px; cursor: pointer; margin-top: 10px; transition: 0.3s; }
+        .btn-toggle-hist:hover { background: rgba(0, 242, 254, 0.2); }
+
+        .historico-box { display: none; background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; margin-top: 15px; }
+        .historico-scroll { max-height: 140px; overflow-y: auto; }
+        .historico-item { font-size: 11px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; font-family: 'JetBrains Mono', monospace; }
+        .historico-item:last-child { border-bottom: none; }
+
+        .tech-scanner { width: 28px; height: 28px; margin: 10px auto 0; border: 3px solid rgba(0, 242, 254, 0.2); border-top-color: #00f2fe; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .btn-notify { width: 100%; padding: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; }
+        .btn-notify:hover { background: rgba(16, 185, 129, 0.3); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="brand">VISION PRO <span>V3 ULTRA</span></div>
+            <a href="/logout" class="btn-logout">SAIR</a>
+        </div>
+
+        <button class="btn-notify" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
+
+        <div class="placar-card">
+            <div class="placar-grid">
+                <div class="placar-item">
+                    <div class="title">WINS</div>
+                    <div class="val win-color" id="win-count">0</div>
+                </div>
+                <div class="placar-item">
+                    <div class="title">ASSERTIVIDADE</div>
+                    <div class="val wr-text" id="wr-text">0%</div>
+                </div>
+                <div class="placar-item">
+                    <div class="title">LOSS</div>
+                    <div class="val loss-color" id="loss-count">0</div>
+                </div>
+            </div>
+            <div class="winrate-bar"><div id="wr-fill" class="winrate-fill"></div></div>
+        </div>
+
+        <div id="broker-view-container">
+            <button class="btn-close-broker" onclick="closeBrokerView()">❌ FECHAR CORRETORA</button>
+            <iframe id="brokerIframe" class="broker-iframe-inline" src=""></iframe>
+        </div>
+
+        <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
+            MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">TODOS</b> | 
+            ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
+        </div>
+
+        <div class="status-box" id="panel-text">Aguardando Comando...</div>
+
+        <div id="result-area" class="result-grid" style="display:none;">
+            <button class="btn-res btn-res-win" onclick="fetch('/resultado/win')">WIN</button>
+            <button class="btn-res btn-res-g1" onclick="fetch('/resultado/g1')">G1</button>
+            <button class="btn-res btn-res-red" onclick="fetch('/resultado/red')">RED</button>
+            <button class="btn-res btn-res-skip" onclick="fetch('/resultado/pular')">PULAR</button>
+        </div>
+
+        <div class="control-panel">
+            <span class="section-label">Controles do Robô</span>
+            
+            <div class="action-flex">
+                <button class="btn-action btn-start" onclick="sendCommand('start_bot')">▶ START</button>
+                <button class="btn-action btn-pause" onclick="sendCommand('pause_bot')">⏸ PAUSE</button>
+                <button class="btn-action btn-stop" onclick="sendCommand('stop_bot')">⏹ STOP</button>
+            </div>
+
+            <span class="section-label">Configurações de Análise</span>
+            
+            <div class="settings-grid">
+                <div class="setting-group">
+                    <label>TIPO DE MERCADO</label>
+                    <div class="select-wrapper">
+                        <select class="modern-select" onchange="sendCommand('mkt_' + this.value)">
+                            <option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>Todos os Ativos</option>
+                            <option value="FOREX" {% if modo == 'FOREX' %}selected{% endif %}>Apenas Forex</option>
+                            <option value="CRIPTO" {% if modo == 'CRIPTO' %}selected{% endif %}>Apenas Cripto</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="setting-group">
+                    <label>TIMEFRAME</label>
+                    <div class="select-wrapper">
+                        <select class="modern-select" onchange="sendCommand('tf_' + this.value)">
+                            <option value="1" {% if tf == 1 %}selected{% endif %}>M1 (1 Minuto)</option>
+                            <option value="5" {% if tf == 5 %}selected{% endif %}>M5 (5 Minutos)</option>
+                            <option value="15" {% if tf == 15 %}selected{% endif %}>M15 (15 Minutos)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="settings-grid full">
+                <div class="setting-group">
+                    <label>ESTRATÉGIA OPERACIONAL</label>
+                    <div class="select-wrapper">
+                        <select class="modern-select" onchange="sendCommand('set_est_' + this.value)">
+                            <option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS (Modo Inteligente)</option>
+                            <option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + Cruzamento MACD + MA</option>
+                            <option value="LOGICA_DO_PRECO" {% if estrat == 'LOGICA_DO_PRECO' %}selected{% endif %}>Lógica do Preço</option>
+                            <option value="MHI1" {% if estrat == 'MHI1' %}selected{% endif %}>MHI 1 (+ Filtro Tendência)</option>
+                            <option value="REVERSAO" {% if estrat == 'REVERSAO' %}selected{% endif %}>Reversão de Bandas</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <span class="section-label" style="margin-top: 5px;">Plataformas de Operação</span>
+            <div class="broker-flex">
+                <button class="btn-broker" onclick="openBroker('https://qxbroker.com')">🌐 Quotex</button>
+                <button class="btn-broker" onclick="openBroker('https://iqoption.com')">📈 IQ Option</button>
+                <button class="btn-broker" onclick="openBroker('https://binomo.com')">🟡 Binomo</button>
+                <button class="btn-broker" onclick="openBroker('https://pocketoption.com')">🟦 Pocket Opt.</button>
+            </div>
+
+            {% if user == admin %}
+            <button onclick="location.href='/admin_panel'" style="width:100%; margin-top:15px; padding:12px; background:rgba(0,242,254,0.1); border:1px solid #00f2fe; color:#00f2fe; font-weight:bold; border-radius:10px; cursor:pointer;">🛡️ ABRIR PAINEL ADMINISTRATIVO</button>
+            {% endif %}
+
+            <button class="btn-toggle-hist" onclick="toggleHistorico()">👁️ EXIBIR HISTÓRICO PASSADO</button>
+
+            <div class="historico-box" id="box-historico">
+                <span class="section-label">Histórico de Sinais Salvo</span>
+                <div class="historico-scroll" id="lista-sinais"></div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        let lastNotifId = null;
+
+        if ('serviceWorker' in navigator && 'Notification' in window) {
+            navigator.serviceWorker.register('/sw.js').then(reg => {
+                console.log('Service Worker de Notificações registrado com sucesso.');
+            });
+        }
+
+        function solicitarPermissaoNotificacao() {
+            if (!('Notification' in window)) {
+                alert('Este navegador não suporta notificações de sistema.');
+                return;
+            }
+            Notification.requestPermission().then(permission => {
+                if (permission === 'granted') {
+                    document.getElementById('btn-enable-notify').innerText = "✅ NOTIFICAÇÕES NATIVAS ATIVADAS!";
+                    document.getElementById('btn-enable-notify').style.borderColor = "#10b981";
+                    document.getElementById('btn-enable-notify').style.color = "#10b981";
+                    
+                    dispararNotificacaoNativa("VISION PRO V3", "Alertas nativos do celular configurados!");
+                } else {
+                    alert('Permissão de Notificação Recusada.');
+                }
+            });
+        }
+
+        function dispararNotificacaoNativa(titulo, corpo) {
+            if (Notification.permission === 'granted') {
+                if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                    navigator.serviceWorker.ready.then(reg => {
+                        reg.showNotification(titulo, {
+                            body: corpo,
+                            icon: 'https://cdn-icons-png.flaticon.com/512/1828/1828884.png',
+                            vibrate: [200, 100, 200, 100, 200],
+                            tag: 'vision-signal',
+                            renotify: true
+                        });
+                    });
+                } else {
+                    new Notification(titulo, { body: corpo, vibrate: [200, 100, 200] });
+                }
+            }
+        }
+
+        function openBroker(url) {
+            const brokerContainer = document.getElementById('broker-view-container');
+            document.getElementById('brokerIframe').src = url;
+            brokerContainer.style.display = 'flex';
+        }
+
+        function closeBrokerView() {
+            document.getElementById('broker-view-container').style.display = 'none';
+            document.getElementById('brokerIframe').src = '';
+        }
+
+        function toggleHistorico() {
+            const box = document.getElementById('box-historico');
+            if (box.style.display === 'block') {
+                box.style.display = 'none';
+            } else {
+                box.style.display = 'block';
+            }
+        }
+
+        function sendCommand(cmd) {
+            fetch('/command/' + cmd).then(r => r.json()).then(data => {
+                if(data.redirect) window.location.href = data.redirect;
+            });
+        }
+
+        setInterval(() => {
+            fetch('/status').then(r => r.json()).then(data => {
+                const panel = document.getElementById('panel-text');
+                if(panel && data.html) panel.innerHTML = data.html;
+                if(document.getElementById('win-count')) document.getElementById('win-count').innerText = data.wins;
+                if(document.getElementById('loss-count')) document.getElementById('loss-count').innerText = data.reds;
+                if(document.getElementById('wr-text')) document.getElementById('wr-text').innerText = data.winrate + "%";
+                if(document.getElementById('wr-fill')) document.getElementById('wr-fill').style.width = data.winrate + "%";
+                if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
+                
+                if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
+                if(document.getElementById('current-asset')) {
+                    if(data.rodando) {
+                        document.getElementById('current-asset').innerText = data.ativo_atual || "VARRENDO...";
+                    } else {
+                        document.getElementById('current-asset').innerText = "SISTEMA PAUSADO";
+                    }
+                }
+
+                if(data.notificacao && data.notificacao.id !== lastNotifId) {
+                    lastNotifId = data.notificacao.id;
+                    dispararNotificacaoNativa(data.notificacao.titulo, data.notificacao.corpo);
+                }
+
+                let histHtml = "";
+                if(data.historico) {
+                    data.historico.forEach(item => {
+                        let cor = "#64748b";
+                        if(item.res.includes("Win")) cor = "#10b981";
+                        if(item.res.includes("Red")) cor = "#ef4444";
+                        histHtml += `<div class="historico-item"><span>🕒 ${item.sinal}</span><b style="color:${cor}">${item.res}</b></div>`;
+                    });
+                }
+                if(document.getElementById('lista-sinais')) document.getElementById('lista-sinais').innerHTML = histHtml || "<div style='text-align:center; font-size:11px; color:#64748b;'>Nenhum sinal no histórico.</div>";
+            });
+        }, 1000);
+
+        window.addEventListener('load', () => {
+            if (window.Notification && Notification.permission === 'granted') {
+                document.getElementById('btn-enable-notify').innerText = "✅ NOTIFICAÇÕES NATIVAS ATIVADAS";
+                document.getElementById('btn-enable-notify').style.borderColor = "#10b981";
+                document.getElementById('btn-enable-notify').style.color = "#10b981";
+            }
+        });
+    </script>
+</body>
+</html>
+"""
+
+# ================= BANCO DE DADOS =================
 def init_db():
-
-    conn = None
-    cur = None
-
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-
         cur.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
                 email VARCHAR(255) PRIMARY KEY,
                 senha VARCHAR(255) NOT NULL,
                 criado_em VARCHAR(50) NOT NULL,
-                wins INT NOT NULL DEFAULT 0,
-                reds INT NOT NULL DEFAULT 0,
-                winrate DOUBLE PRECISION NOT NULL DEFAULT 0.0,
-                ips_autorizados TEXT NOT NULL DEFAULT '[]'
+                wins INT DEFAULT 0,
+                reds INT DEFAULT 0,
+                winrate FLOAT DEFAULT 0.0,
+                ips_autorizados VARCHAR(255) DEFAULT '[]'
             );
-        """)
+            
+            ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ips_autorizados VARCHAR(255) DEFAULT '[]';
 
-        cur.execute("""
-            ALTER TABLE usuarios
-            ADD COLUMN IF NOT EXISTS ips_autorizados TEXT
-            NOT NULL DEFAULT '[]';
-        """)
-
-        cur.execute("""
             CREATE TABLE IF NOT EXISTS historico_sinais (
-                id BIGSERIAL PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 user_email VARCHAR(255) NOT NULL,
                 sinal VARCHAR(255) NOT NULL,
-                resultado VARCHAR(50) NOT NULL,
-                criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                resultado VARCHAR(50) NOT NULL
             );
         """)
-
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_historico_user
-            ON historico_sinais(user_email);
-        """)
-
         conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Aviso de Inicialização DB: {e}")
 
-        log.info("Banco de dados inicializado.")
+try:
+    init_db()
+except Exception as e:
+    pass
 
+def parse_ips(ips_raw):
+    try:
+        if not ips_raw: return []
+        return json.loads(ips_raw)
     except Exception:
-        if conn:
-            conn.rollback()
-
-        log.exception("Erro inicializando banco.")
-
-        raise
-
-    finally:
-        if cur:
-            cur.close()
-
-        if conn:
-            conn.close()
-
-
-init_db()
-
-
-# ============================================================
-# UTILITÁRIOS DE BANCO
-# ============================================================
+        return []
 
 def carregar_usuarios():
-
-    conn = None
-    cur = None
-
     try:
         conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM usuarios;")
+        raw_data = cur.fetchall()
+        cur.close()
+        conn.close()
 
-        cur = conn.cursor(
-            cursor_factory=RealDictCursor
-        )
-
-        cur.execute("""
-            SELECT
-                email,
-                senha,
-                criado_em,
-                wins,
-                reds,
-                winrate,
-                ips_autorizados
-            FROM usuarios
-            ORDER BY email;
-        """)
-
-        rows = cur.fetchall()
-
-        resultado = {}
-
-        for row in rows:
-
-            email = str(
-                row.get("email", "")
-            ).strip().lower()
-
-            if not email:
-                continue
-
-            item = dict(row)
-
-            ips = parse_ips(
-                item.get("ips_autorizados")
-            )
-
-            item["ips_list"] = ips
-
-            item["ips_Formatados"] = (
-                ", ".join(ips)
-                if ips
-                else "Nenhum (Livre)"
-            )
-
-            resultado[email] = item
-
-        return resultado
-
-    except Exception:
-        log.exception("Erro carregando usuários.")
+        dict_usuarios = {}
+        for u in raw_data:
+            email = u.get("email", "").strip().lower()
+            if email:
+                u_dict = dict(u)
+                ips_list = parse_ips(u_dict.get("ips_autorizados", "[]"))
+                u_dict["ips_list"] = ips_list
+                u_dict["ips_Formatados"] = ", ".join(ips_list) if ips_list else "Nenhum (Livre)"
+                dict_usuarios[email] = u_dict
+        return dict_usuarios
+    except Exception as e:
         return {}
 
-    finally:
-        if cur:
-            cur.close()
-
-        if conn:
-            conn.close()
-
-
-def obter_usuario(email):
-
-    email = email.strip().lower()
-
-    conn = None
-    cur = None
-
+def salvar_usuario(email, senha, data=None, ip_inicial=None):
     try:
-        conn = get_db_connection()
-
-        cur = conn.cursor(
-            cursor_factory=RealDictCursor
-        )
-
-        cur.execute("""
-            SELECT *
-            FROM usuarios
-            WHERE email = %s
-            LIMIT 1;
-        """, (email,))
-
-        row = cur.fetchone()
-
-        return dict(row) if row else None
-
-    except Exception:
-        log.exception("Erro obtendo usuário.")
-        return None
-
-    finally:
-        if cur:
-            cur.close()
-
-        if conn:
-            conn.close()
-
-
-def parse_ips(raw):
-
-    if not raw:
-        return []
-
-    try:
-
-        data = json.loads(raw)
-
-        if not isinstance(data, list):
-            return []
-
-        resultado = []
-
-        for ip in data:
-
-            if isinstance(ip, str) and len(ip) <= 64:
-                resultado.append(ip)
-
-        return resultado[:2]
-
-    except Exception:
-        return []
-
-
-def validar_email(email):
-
-    email = email.strip().lower()
-
-    if len(email) > 255:
-        return False
-
-    padrao = (
-        r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+"
-        r"@[A-Za-z0-9-]+"
-        r"(?:\.[A-Za-z0-9-]+)+$"
-    )
-
-    return bool(re.match(padrao, email))
-
-
-def validar_senha(password):
-
-    if not password:
-        return False
-
-    if len(password) < 8:
-        return False
-
-    if len(password) > 128:
-        return False
-
-    return True
-
-
-def salvar_usuario(
-    email,
-    senha,
-    data=None,
-    ip_inicial=None
-):
-
-    email = email.strip().lower()
-
-    if not validar_email(email):
-        raise ValueError("E-mail inválido.")
-
-    if not validar_senha(senha):
-        raise ValueError(
-            "A senha deve possuir entre 8 e 128 caracteres."
-        )
-
-    data_criacao = (
-        data
-        if data
-        else agora_brasilia().strftime("%Y-%m-%d")
-    )
-
-    senha_hash = generate_password_hash(
-        senha,
-        method="scrypt"
-    )
-
-    ips = []
-
-    if ip_inicial:
-        ips.append(ip_inicial)
-
-    ips = ips[:2]
-
-    conn = None
-    cur = None
-
-    try:
+        email_clean = email.strip().lower()
+        data_criacao = data if data else agora_brasilia().strftime("%Y-%m-%d")
+        senha_hash = senha if senha.startswith("scrypt:") or senha.startswith("pbkdf2:") else generate_password_hash(senha)
+        
+        ips = json.dumps([ip_inicial]) if ip_inicial else "[]"
 
         conn = get_db_connection()
         cur = conn.cursor()
-
-        cur.execute("""
-            INSERT INTO usuarios (
-                email,
-                senha,
-                criado_em,
-                wins,
-                reds,
-                winrate,
-                ips_autorizados
-            )
-            VALUES (
-                %s, %s, %s, 0, 0, 0.0, %s
-            )
-            ON CONFLICT (email)
-            DO UPDATE SET senha = EXCLUDED.senha;
-        """, (
-            email,
-            senha_hash,
-            data_criacao,
-            json.dumps(ips)
-        ))
-
+        query = """
+            INSERT INTO usuarios (email, senha, criado_em, wins, reds, winrate, ips_autorizados)
+            VALUES (%s, %s, %s, 0, 0, 0.0, %s)
+            ON CONFLICT (email) DO UPDATE 
+            SET senha = EXCLUDED.senha;
+        """
+        cur.execute(query, (email_clean, senha_hash, data_criacao, ips))
         conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        raise e
 
-    except Exception:
-        if conn:
-            conn.rollback()
-
-        raise
-
-    finally:
-        if cur:
-            cur.close()
-
-        if conn:
-            conn.close()
-
-
-# ============================================================
-# IP AUTORIZADO
-# ============================================================
-
-def verificar_ip_usuario(email):
-
-    usuario = obter_usuario(email)
-
-    if not usuario:
-        return False
-
-    ips = parse_ips(
-        usuario.get("ips_autorizados")
-    )
-
-    # Nenhum IP cadastrado = acesso livre
-    if not ips:
-        return True
-
-    ip_atual = get_client_ip()
-
-    return ip_atual in ips
-
-
-def registrar_ip_usuario(email):
-
-    ip = get_client_ip()
-
-    conn = None
-    cur = None
-
+def adicionar_ip_usuario(email, ip_cliente):
     try:
-
+        email_clean = email.strip().lower()
         conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT ips_autorizados FROM usuarios WHERE email = %s;", (email_clean,))
+        res = cur.fetchone()
+        
+        ips_list = parse_ips(res.get("ips_autorizados", "[]")) if res else []
+        if ip_cliente not in ips_list and len(ips_list) < 2:
+            ips_list.append(ip_cliente)
+            cur.execute("UPDATE usuarios SET ips_autorizados = %s WHERE email = %s;", (json.dumps(ips_list), email_clean))
+            conn.commit()
+            
+        cur.close()
+        conn.close()
+    except Exception as e:
+        pass
 
-        cur = conn.cursor(
-            cursor_factory=RealDictCursor
-        )
-
-        cur.execute("""
-            SELECT ips_autorizados
-            FROM usuarios
-            WHERE email = %s
-            FOR UPDATE;
-        """, (email,))
-
-        row = cur.fetchone()
-
-        if not row:
-            conn.rollback()
-            return False
-
-        ips = parse_ips(
-            row["ips_autorizados"]
-        )
-
-        if not ips:
-            ips = [ip]
-
-        elif ip not in ips:
-
-            if len(ips) >= 2:
-                conn.rollback()
-                return False
-
-            ips.append(ip)
-
-        cur.execute("""
-            UPDATE usuarios
-            SET ips_autorizados = %s
-            WHERE email = %s;
-        """, (
-            json.dumps(ips[:2]),
-            email
-        ))
-
-        conn.commit()
-
-        return True
-
-    except Exception:
-        if conn:
-            conn.rollback()
-
-        log.exception("Erro registrando IP.")
-        return False
-
-    finally:
-        if cur:
-            cur.close()
-
-        if conn:
-            conn.close()
-
-
-# ============================================================
-# ASSINATURA
-# ============================================================
-
-def verificar_assinatura(email):
-
-    email = email.strip().lower()
-
-    if email == ADMIN_EMAIL:
-        return True, 9999
-
-    usuario = obter_usuario(email)
-
-    if not usuario:
-        return False, 0
-
+def liberar_ip_usuario_db(email):
     try:
-
-        criado_str = str(
-            usuario["criado_em"]
-        ).split("T")[0]
-
-        data_criacao = datetime.strptime(
-            criado_str,
-            "%Y-%m-%d"
-        )
-
-        hoje = agora_brasilia().replace(
-            tzinfo=None
-        )
-
-        dias_passados = (
-            hoje - data_criacao
-        ).days
-
-        dias_restantes = 30 - dias_passados
-
-        return (
-            dias_restantes > 0,
-            max(dias_restantes, 0)
-        )
-
-    except Exception:
-        log.exception(
-            "Erro verificando assinatura."
-        )
-
-        return False, 0
-
-
-# ============================================================
-# ESTATÍSTICAS
-# ============================================================
-
-def atualizar_estatisticas_usuario(
-    email,
-    resultado
-):
-
-    email = email.strip().lower()
-
-    if resultado not in ("win", "red"):
-        return False
-
-    conn = None
-    cur = None
-
-    try:
-
+        email_clean = email.strip().lower()
         conn = get_db_connection()
-
-        cur = conn.cursor(
-            cursor_factory=RealDictCursor
-        )
-
-        cur.execute("""
-            SELECT wins, reds
-            FROM usuarios
-            WHERE email = %s
-            FOR UPDATE;
-        """, (email,))
-
-        row = cur.fetchone()
-
-        if not row:
-            conn.rollback()
-            return False
-
-        wins = int(row["wins"] or 0)
-        reds = int(row["reds"] or 0)
-
-        if resultado == "win":
-            wins += 1
-        else:
-            reds += 1
-
-        total = wins + reds
-
-        winrate = (
-            round((wins / total) * 100, 1)
-            if total
-            else 0.0
-        )
-
-        cur.execute("""
-            UPDATE usuarios
-            SET
-                wins = %s,
-                reds = %s,
-                winrate = %s
-            WHERE email = %s;
-        """, (
-            wins,
-            reds,
-            winrate,
-            email
-        ))
-
+        cur = conn.cursor()
+        cur.execute("UPDATE usuarios SET ips_autorizados = %s WHERE email = %s;", ("[]", email_clean))
         conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        pass
 
-        return True
+def atualizar_estatisticas_usuario(email, is_win):
+    try:
+        email_clean = email.strip().lower()
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT wins, reds FROM usuarios WHERE email = %s;", (email_clean,))
+        res = cur.fetchone()
 
-    except Exception:
-        if conn:
-            conn.rollback()
+        if res:
+            wins = res.get("wins", 0) + (1 if is_win else 0)
+            reds = res.get("reds", 0) + (0 if is_win else 1)
+            total = wins + reds
+            winrate = round((wins / total) * 100, 1) if total > 0 else 0.0
 
-        log.exception(
-            "Erro atualizando estatísticas."
-        )
+            cur.execute("""
+                UPDATE usuarios 
+                SET wins = %s, reds = %s, winrate = %s 
+                WHERE email = %s;
+            """, (wins, reds, winrate, email_clean))
+            conn.commit()
 
-        return False
-
-    finally:
-        if cur:
-            cur.close()
-
-        if conn:
-            conn.close()
-
+        cur.close()
+        conn.close()
+    except Exception as e:
+        pass
 
 def zerar_estatisticas_usuario(email):
-
-    conn = None
-    cur = None
-
     try:
-
+        email_clean = email.strip().lower()
         conn = get_db_connection()
         cur = conn.cursor()
-
-        cur.execute("""
-            UPDATE usuarios
-            SET
-                wins = 0,
-                reds = 0,
-                winrate = 0.0
-            WHERE email = %s;
-        """, (
-            email.strip().lower(),
-        ))
-
+        cur.execute("UPDATE usuarios SET wins = 0, reds = 0, winrate = 0.0 WHERE email = %s;", (email_clean,))
         conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        pass
 
-    except Exception:
-        if conn:
-            conn.rollback()
-
-        log.exception(
-            "Erro zerando estatísticas."
-        )
-
-    finally:
-        if cur:
-            cur.close()
-
-        if conn:
-            conn.close()
-
-
-def registrar_sinal_bd(
-    email,
-    sinal,
-    resultado="Analisando..."
-):
-
-    conn = None
-    cur = None
-
+def renovar_usuario_db(email):
     try:
-
+        hoje = agora_brasilia().strftime("%Y-%m-%d")
         conn = get_db_connection()
         cur = conn.cursor()
-
-        cur.execute("""
-            INSERT INTO historico_sinais (
-                user_email,
-                sinal,
-                resultado
-            )
-            VALUES (%s, %s, %s);
-        """, (
-            email.strip().lower(),
-            sinal,
-            resultado
-        ))
-
+        cur.execute("UPDATE usuarios SET criado_em = %s WHERE email = %s;", (hoje, email.strip().lower()))
         conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        pass
 
-    except Exception:
-        if conn:
-            conn.rollback()
-
-        log.exception(
-            "Erro registrando sinal."
-        )
-
-    finally:
-        if cur:
-            cur.close()
-
-        if conn:
-            conn.close()
-
-
-# ============================================================
-# TELEGRAM
-# ============================================================
-
-ULTIMO_MSG_ID_TELEGRAM = None
-
-
-def enviar_telegram(
-    mensagem,
-    auto_delete=None,
-    user_solicitante=None
-):
-
-    global ULTIMO_MSG_ID_TELEGRAM
-
-    if user_solicitante != ADMIN_EMAIL:
-        return None
-
-    if not TOKEN_TELEGRAM:
-        log.warning(
-            "TOKEN_TELEGRAM não configurado."
-        )
-        return None
-
-    if not CHAT_ID_TELEGRAM:
-        return None
-
+def excluir_usuario_db(email):
     try:
+        email_clean = email.strip().lower()
+        if email_clean != ADMIN_EMAIL:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM usuarios WHERE email = %s;", (email_clean,))
+            conn.commit()
+            cur.close()
+            conn.close()
+    except Exception as e:
+        pass
 
-        url = (
-            "https://api.telegram.org/"
-            f"bot{TOKEN_TELEGRAM}/sendMessage"
-        )
+def verificar_assinatura(email):
+    email_clean = email.strip().lower()
+    if email_clean == ADMIN_EMAIL: return True, 999
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT criado_em FROM usuarios WHERE email = %s;", (email_clean,))
+        res = cur.fetchone()
+        cur.close()
+        conn.close()
 
-        payload = {
-            "chat_id": CHAT_ID_TELEGRAM,
-            "text": mensagem,
-            "parse_mode": "HTML",
+        if not res: return False, 0
+        
+        criado_str = str(res["criado_em"]).split("T")[0]
+        data_criacao = datetime.strptime(criado_str, "%Y-%m-%d")
+        dias_restantes = 30 - (agora_brasilia().replace(tzinfo=None) - data_criacao).days
+        return (True, dias_restantes) if dias_restantes > 0 else (False, 0)
+    except Exception as e:
+        return True, 30
+
+def init_user_session(email):
+    if email not in DADOS_USUARIOS:
+        DADOS_USUARIOS[email] = {
+            "sinal_atual": "Aguardando Início..."
         }
 
-        response = requests.post(
-            url,
-            json=payload,
-            timeout=8
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        if not data.get("ok"):
-            return None
-
-        msg_id = data["result"]["message_id"]
-
-        if any(
-            termo in mensagem
-            for termo in (
-                "SINAL CONFIRMADO",
-                "🔥",
-                "🎯"
-            )
-        ):
-            ULTIMO_MSG_ID_TELEGRAM = msg_id
-
-        if auto_delete:
-            threading.Thread(
-                target=deletar_mensagem_atrasada,
-                args=(msg_id, auto_delete),
-                daemon=True
-            ).start()
-
-        return msg_id
-
-    except Exception:
-        log.exception(
-            "Erro enviando Telegram."
-        )
-
-        return None
-
-
-def deletar_mensagem_telegram(msg_id):
-
-    if not TOKEN_TELEGRAM:
-        return
-
-    if not CHAT_ID_TELEGRAM:
-        return
-
-    if not msg_id:
-        return
-
+def registrar_sinal_bd(email, sinal_str):
     try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO historico_sinais (user_email, sinal, resultado)
+            VALUES (%s, %s, %s);
+        """, (email.strip().lower(), sinal_str, "Analisando..."))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        pass
 
-        url = (
-            "https://api.telegram.org/"
-            f"bot{TOKEN_TELEGRAM}/deleteMessage"
-        )
+def buscar_historico_bd(email):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id, sinal, resultado 
+            FROM historico_sinais 
+            WHERE user_email = %s 
+            ORDER BY id DESC LIMIT 20;
+        """, (email.strip().lower(),))
+        res = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [{"id": r["id"], "sinal": r["sinal"], "res": r["resultado"]} for r in res]
+    except Exception as e:
+        return []
 
-        requests.post(
-            url,
-            json={
-                "chat_id": CHAT_ID_TELEGRAM,
-                "message_id": msg_id
-            },
-            timeout=8
-        )
+def atualizar_ultimo_sinal_bd(email, resultado):
+    try:
+        email_clean = email.strip().lower()
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id FROM historico_sinais 
+            WHERE user_email = %s 
+            ORDER BY id DESC LIMIT 1;
+        """, (email_clean,))
+        res = cur.fetchone()
 
-    except Exception:
-        log.exception(
-            "Erro removendo mensagem Telegram."
-        )
+        if res:
+            ultimo_id = res["id"]
+            cur.execute("UPDATE historico_sinais SET resultado = %s WHERE id = %s;", (resultado, ultimo_id))
+            conn.commit()
 
+        cur.close()
+        conn.close()
+    except Exception as e:
+        pass
 
-def deletar_mensagem_atrasada(
-    msg_id,
-    delay
-):
+# ================= BOT CONFIGS =================
+TIMEFRAME_OPERACAO = 5
+TIPO_MERCADO = "TODOS"
+ESTRATEGIA_ESCOLHIDA = "TODAS"
+LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
 
-    if delay > 0:
-        time.sleep(delay)
+BOT_RODANDO = True
+BOT_PAUSADO = True
+BOT_INICIADO = False
 
-    deletar_mensagem_telegram(msg_id)
+AG_RESULTADO = False
+AGUARDANDO_CONFIRMACAO_RESULTADO = False
 
+ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
+SINAL_DISPLAY_PERMANENTE = None
+ATIVO_ATUAL_GLOBAL = "AGUARDANDO..."
 
-# ============================================================
-# ESTADO DO ROBÔ POR USUÁRIO
-# ============================================================
-
-ESTADOS = {}
-ESTADOS_LOCK = threading.RLock()
-
-
-def estado_padrao():
-
-    return {
-        "bot_iniciado": False,
-        "bot_pausado": True,
-
-        "timeframe": 5,
-        "mercado": "TODOS",
-        "estrategia": "TODAS",
-
-        "aguardando_resultado": False,
-
-        "ultimo_sinal": "Aguardando Comando...",
-        "sinal_display": None,
-
-        "ativo_atual": "AGUARDANDO...",
-
-        "ultimo_ativo_sinal": None,
-        "ultimo_resultado": None,
-
-        "entrada": None,
-        "saida": None,
-    }
-
-
-def obter_estado(email):
-
-    with ESTADOS_LOCK:
-
-        if email not in ESTADOS:
-            ESTADOS[email] = estado_padrao()
-
-        return ESTADOS[email]
-
-
-def limpar_estado(email):
-
-    with ESTADOS_LOCK:
-        ESTADOS.pop(email, None)
-
-
-# ============================================================
-# ATIVOS
-# ============================================================
-
+# ================= ATIVOS EXPANSAO TOTAL (FOREX + CRIPTO) =================
 ATIVOS_BASE = {
-
     "FOREX": [
-        "EURUSD",
-        "GBPUSD",
-        "USDJPY",
-        "AUDUSD",
-        "USDCAD",
-        "USDCHF",
-        "NZDUSD",
-        "EURGBP",
-        "EURJPY",
-        "GBPJPY",
-        "AUDJPY",
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
+        "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCAD", "EURCHF",
+        "GBPAUD", "GBPCAD", "GBPCHF", "AUDCAD", "AUDCHF", "CADJPY", "CHFJPY",
+        "NZDJPY", "NZDCAD", "NZDCHF", "AUDNZD", "EURNZD", "GBPNZD"
     ],
-
     "CRIPTO": [
-        "BTCUSD",
-        "ETHUSD",
-        "SOLUSD",
-        "BNBUSD",
-        "XRPUSD",
-        "ADAUSD",
-        "AVAXUSD",
-        "LINKUSD",
-        "DOGEUSD",
-    ],
-
-    "OTC": [
-        "EURUSD_OTC",
-        "GBPUSD_OTC",
-        "USDJPY_OTC",
-    ],
+        "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "ADAUSD", "AVAXUSD",
+        "LINKUSD", "DOGEUSD", "DOTUSD", "MATICUSD", "LTCUSD", "SHIBUSD", "TRXUSD"
+    ]
 }
-
 
 MAPA_TICKERS = {}
+for par in ATIVOS_BASE["FOREX"]: MAPA_TICKERS[par] = f"{par}=X"
+for par in ATIVOS_BASE["CRIPTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
 
-for par in ATIVOS_BASE["FOREX"]:
-    MAPA_TICKERS[par] = f"{par}=X"
-
-for par in ATIVOS_BASE["CRIPTO"]:
-    MAPA_TICKERS[par] = (
-        par.replace("USD", "USDT")
-    )
-
-
-# ============================================================
-# API DE DADOS
-# ============================================================
-
-def get_data_v2(
-    ticker,
-    tf,
-    mercado="CRIPTO"
-):
-
-    if mercado == "OTC":
-        return None
-
-    if mercado == "FOREX":
-
-        try:
-
-            url = (
-                "https://query2.finance.yahoo.com/"
-                "v8/finance/chart/"
-                f"{ticker}"
-            )
-
-            params = {
-                "interval": f"{tf}m",
-                "range": "1d",
-            }
-
-            headers = {
-                "User-Agent":
-                    "VisionProV3/1.0",
-                "Accept":
-                    "application/json",
-            }
-
-            response = requests.get(
-                url,
-                params=params,
-                headers=headers,
-                timeout=8
-            )
-
-            if response.status_code != 200:
-                return None
-
-            payload = response.json()
-
-            result_list = (
-                payload
-                .get("chart", {})
-                .get("result")
-            )
-
-            if not result_list:
-                return None
-
-            result = result_list[0]
-
-            timestamps = result.get(
-                "timestamp"
-            )
-
-            quote = (
-                result
-                .get("indicators", {})
-                .get("quote", [{}])[0]
-            )
-
-            if not timestamps or not quote:
-                return None
-
-            o = np.array(
-                quote.get("open", []),
-                dtype=float
-            )
-
-            h = np.array(
-                quote.get("high", []),
-                dtype=float
-            )
-
-            l = np.array(
-                quote.get("low", []),
-                dtype=float
-            )
-
-            c = np.array(
-                quote.get("close", []),
-                dtype=float
-            )
-
-            t = np.array(
-                timestamps,
-                dtype=np.int64
-            )
-
-            tamanho = min(
-                len(t),
-                len(o),
-                len(h),
-                len(l),
-                len(c)
-            )
-
-            if tamanho < 30:
-                return None
-
-            t = t[:tamanho]
-            o = o[:tamanho]
-            h = h[:tamanho]
-            l = l[:tamanho]
-            c = c[:tamanho]
-
-            valido = (
-                np.isfinite(o)
-                & np.isfinite(h)
-                & np.isfinite(l)
-                & np.isfinite(c)
-            )
-
-            if valido.sum() < 30:
-                return None
-
-            return {
-                "time": t[valido],
-                "open": o[valido],
-                "high": h[valido],
-                "low": l[valido],
-                "close": c[valido],
-            }
-
-        except Exception:
-            log.exception(
-                "Erro API Yahoo."
-            )
-
-            return None
-
-    # ========================================================
-    # BINANCE
-    # ========================================================
-
+# ================= MOTOR DE ANÁLISE OTIMIZADO =================
+def get_data_v2(ticker, tf, period='5d'):
     try:
-
-        intervalos = {
-            1: "1m",
-            5: "5m",
-            15: "15m",
+        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval={tf}m&range={period}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            'Accept': 'application/json'
         }
-
-        intervalo = intervalos.get(
-            tf,
-            "5m"
-        )
-
-        response = requests.get(
-            "https://api.binance.com/api/v3/klines",
-            params={
-                "symbol": ticker,
-                "interval": intervalo,
-                "limit": 100,
-            },
-            timeout=8
-        )
-
-        if response.status_code != 200:
+        
+        res = requests.get(url, headers=headers, timeout=5.0)
+        if res.status_code != 200:
             return None
-
-        data = response.json()
-
-        if not isinstance(data, list):
-            return None
-
-        if len(data) < 30:
-            return None
-
-        return {
-            "time": np.array(
-                [int(x[0]) for x in data],
-                dtype=np.int64
-            ),
-
-            "open": np.array(
-                [float(x[1]) for x in data],
-                dtype=float
-            ),
-
-            "high": np.array(
-                [float(x[2]) for x in data],
-                dtype=float
-            ),
-
-            "low": np.array(
-                [float(x[3]) for x in data],
-                dtype=float
-            ),
-
-            "close": np.array(
-                [float(x[4]) for x in data],
-                dtype=float
-            ),
+            
+        data_json = res.json()
+        result = data_json['chart']['result'][0]
+        timestamps = result['timestamp']
+        quote = result['indicators']['quote'][0]
+        
+        ohlc = {
+            "time": np.array(timestamps),
+            "open": np.array(quote['open']),
+            "high": np.array(quote['high']),
+            "low": np.array(quote['low']),
+            "close": np.array(quote['close'])
         }
-
+        
+        idx = ~np.isnan(ohlc["close"])
+        for k in ohlc: 
+            ohlc[k] = ohlc[k][idx]
+            
+        if len(ohlc["close"]) < 30:
+            return None
+            
+        return ohlc
     except Exception:
-        log.exception(
-            "Erro API Binance."
-        )
-
         return None
 
-
-# ============================================================
-# INDICADORES
-# ============================================================
-
-def calcular_ema(
-    dados,
-    periodo
-):
-
-    dados = np.asarray(
-        dados,
-        dtype=float
-    )
-
-    if len(dados) < periodo:
-        return None
-
-    ema = np.zeros(
-        len(dados),
-        dtype=float
-    )
-
-    ema[:periodo - 1] = np.nan
-
-    ema[periodo - 1] = np.mean(
-        dados[:periodo]
-    )
-
-    multiplicador = (
-        2 / (periodo + 1)
-    )
-
-    for i in range(
-        periodo,
-        len(dados)
-    ):
-        ema[i] = (
-            (dados[i] - ema[i - 1])
-            * multiplicador
-            + ema[i - 1]
-        )
-
+def calcular_ema(dados, periodo):
+    ema = np.zeros_like(dados)
+    multiplicador = 2 / (periodo + 1)
+    ema[periodo-1] = np.mean(dados[:periodo])
+    for i in range(periodo, len(dados)):
+        ema[i] = (dados[i] - ema[i-1]) * multiplicador + ema[i-1]
     return ema
 
-
-def calcular_rsi(
-    closes,
-    periodo=14
-):
-
-    closes = np.asarray(
-        closes,
-        dtype=float
-    )
-
-    if len(closes) < periodo + 1:
-        return None
-
-    delta = np.diff(closes)
-
-    ganhos = np.where(
-        delta > 0,
-        delta,
-        0
-    )
-
-    perdas = np.where(
-        delta < 0,
-        -delta,
-        0
-    )
-
-    media_ganho = np.mean(
-        ganhos[-periodo:]
-    )
-
-    media_perda = np.mean(
-        perdas[-periodo:]
-    )
-
-    if media_perda == 0:
-        return 100.0
-
-    rs = (
-        media_ganho
-        / media_perda
-    )
-
-    return 100 - (
-        100 / (1 + rs)
-    )
-
-
-# ============================================================
-# ESTRATÉGIAS
-# ============================================================
-
-LISTA_ESTRATEGIAS = [
-    "LOGICA_DO_PRECO",
-    "RSI_MACD_MA",
-    "MHI1",
-    "REVERSAO",
-]
-
-
-def analisar_estrategia(
-    data,
-    estrategia,
-    i=-1
-):
-
+def validar_analise_profunda(data, direcao, i=-1, estrategia=""):
     c = data["close"]
-    o = data["open"]
-    h = data["high"]
-    l = data["low"]
+    if len(c) < 30: return False
+    return True
 
-    if len(c) < 30:
-        return None
-
+def analisar_estrategia(data, estrategia, i=-1):
+    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
+    if len(c) < 30: return None
     sinal = None
 
-    # ========================================================
-    # LÓGICA DO PREÇO
-    # ========================================================
-
     if estrategia == "LOGICA_DO_PRECO":
-
-        cor = (
-            "G"
-            if c[i] > o[i]
-            else "R"
-        )
-
-        tamanho = abs(
-            c[i] - o[i]
-        )
-
-        if tamanho <= 0:
-            return None
-
-        pavio_superior = (
-            h[i]
-            - max(o[i], c[i])
-        )
-
-        pavio_inferior = (
-            min(o[i], c[i])
-            - l[i]
-        )
-
-        tolerancia = (
-            tamanho * 0.05
-        )
-
-        if (
-            cor == "G"
-            and pavio_inferior >= tamanho * 0.8
-        ):
-            sinal = "CALL"
-
-        elif (
-            cor == "R"
-            and pavio_superior >= tamanho * 0.8
-        ):
-            sinal = "PUT"
-
-        elif (
-            cor == "G"
-            and pavio_superior <= tolerancia
-        ):
-            sinal = "CALL"
-
-        elif (
-            cor == "R"
-            and pavio_inferior <= tolerancia
-        ):
-            sinal = "PUT"
-
-    # ========================================================
-    # RSI + MACD + MA
-    # ========================================================
+        cor = "G" if c[i] > o[i] else "R"
+        tamanho = abs(c[i] - o[i])
+        p_sup = max(0, h[i] - max(o[i], c[i]))
+        p_inf = max(0, min(o[i], c[i]) - l[i])
+        
+        tolerancia = tamanho * 0.05
+        
+        if cor == "G" and p_inf >= (tamanho * 0.8): sinal = "CALL"
+        elif cor == "R" and p_sup >= (tamanho * 0.8): sinal = "PUT"
+        elif cor == "G" and p_sup <= tolerancia: sinal = "CALL" 
+        elif cor == "R" and p_inf <= tolerancia: sinal = "PUT"
 
     elif estrategia == "RSI_MACD_MA":
+        diff = np.diff(c[i-14:i])
+        up = diff[diff > 0]
+        down = abs(diff[diff < 0])
+        avg_up = np.mean(up) if len(up) > 0 else 1e-7
+        avg_down = np.mean(down) if len(down) > 0 else 1e-7
+        rs = avg_up / avg_down
+        rsi = 100 - (100 / (1 + rs))
 
-        rsi = calcular_rsi(c)
+        ema12 = calcular_ema(c, 12)
+        ema26 = calcular_ema(c, 26)
+        macd_line = ema12 - ema26
+        signal_line = calcular_ema(macd_line, 9)
 
-        ema12 = calcular_ema(
-            c,
-            12
-        )
-
-        ema26 = calcular_ema(
-            c,
-            26
-        )
-
-        if (
-            rsi is None
-            or ema12 is None
-            or ema26 is None
-        ):
-            return None
-
-        macd = (
-            ema12 - ema26
-        )
-
-        signal_line = calcular_ema(
-            macd[
-                ~np.isnan(macd)
-            ],
-            9
-        )
-
-        if signal_line is None:
-            return None
-
-        macd_valid = macd[
-            ~np.isnan(macd)
-        ]
-
-        if len(macd_valid) < 9:
-            return None
-
-        macd_atual = macd_valid[-1]
-        signal_atual = signal_line[-1]
-
-        if (
-            rsi < 45
-            and macd_atual > signal_atual
-        ):
-            sinal = "CALL"
-
-        elif (
-            rsi > 55
-            and macd_atual < signal_atual
-        ):
-            sinal = "PUT"
-
-    # ========================================================
-    # MHI1
-    # ========================================================
+        if rsi < 45 and macd_line[i] > signal_line[i]: sinal = "CALL"
+        elif rsi > 55 and macd_line[i] < signal_line[i]: sinal = "PUT"
 
     elif estrategia == "MHI1":
-
-        if len(c) < 4:
-            return None
-
         cores = []
-
-        for j in range(
-            i - 2,
-            i + 1
-        ):
-
-            if c[j] > o[j] + 1e-6:
-                cores.append("G")
-
-            elif c[j] < o[j] - 1e-6:
-                cores.append("R")
-
-            else:
-                cores.append("D")
-
+        for j in range(i-2, i+1):
+            if c[j] > o[j] + 1e-6: cores.append("G")
+            elif c[j] < o[j] - 1e-6: cores.append("R")
+            else: cores.append("D") 
+            
         qtd_g = cores.count("G")
         qtd_r = cores.count("R")
-
-        if qtd_g > qtd_r:
-            sinal = "PUT"
-
-        elif qtd_r > qtd_g:
-            sinal = "CALL"
-
-    # ========================================================
-    # REVERSÃO
-    # ========================================================
-
-    elif estrategia == "REVERSAO":
-
-        janela = c[i - 20:i]
-
-        if len(janela) < 20:
-            return None
-
-        std = np.std(janela)
-
-        ma = np.mean(janela)
-
-        banda_superior = (
-            ma + 1.8 * std
-        )
-
-        banda_inferior = (
-            ma - 1.8 * std
-        )
-
-        if c[i] <= banda_inferior:
-            sinal = "CALL"
-
-        elif c[i] >= banda_superior:
-            sinal = "PUT"
-
-    return sinal
-
-
-# ============================================================
-# AUTENTICAÇÃO
-# ============================================================
-
-def usuario_logado():
-
-    email = session.get("user")
-
-    if not email:
-        return None
-
-    email = str(
-        email
-    ).strip().lower()
-
-    usuario = obter_usuario(email)
-
-    if not usuario:
-        session.clear()
-        return None
-
-    return email
-
-
-def exigir_login():
-
-    user = usuario_logado()
-
-    if not user:
-        return redirect("/login")
-
-    return user
-
-
-def exigir_admin():
-
-    user = usuario_logado()
-
-    if not user:
-        return redirect("/login")
-
-    if user != ADMIN_EMAIL:
-        abort(403)
-
-    return user
-
-
-# ============================================================
-# TEMPLATES
-# ============================================================
-
-HTML_TERMOS = """
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Termos de Uso</title>
-
-<style>
-body{
-    background:#060913;
-    color:#f1f5f9;
-    font-family:Arial,sans-serif;
-    padding:20px;
-    line-height:1.6;
-}
-
-.card{
-    max-width:650px;
-    margin:auto;
-    background:#0f172a;
-    padding:25px;
-    border-radius:16px;
-    border:1px solid #00f2fe;
-}
-
-h2{
-    color:#00f2fe;
-}
-
-p{
-    color:#cbd5e1;
-    font-size:14px;
-}
-
-.btn{
-    display:block;
-    text-align:center;
-    padding:14px;
-    background:#0072ff;
-    color:white;
-    text-decoration:none;
-    border-radius:8px;
-    margin-top:20px;
-}
-</style>
-</head>
-
-<body>
-
-<div class="card">
-
-<h2>⚖️ TERMOS DE USO E RESPONSABILIDADE</h2>
-
-<p>
-<b>1. NATUREZA DO SERVIÇO:</b>
-O Vision Pro V3 é uma ferramenta de análise.
-Nenhum resultado futuro é garantido.
-</p>
-
-<p>
-<b>2. RISCO:</b>
-Operações financeiras podem resultar em perdas.
-</p>
-
-<p>
-<b>3. RESPONSABILIDADE:</b>
-O usuário é responsável pelas próprias decisões.
-</p>
-
-<a class="btn" href="/login">
-LI E CONCORDO
-</a>
-
-</div>
-
-</body>
-</html>
-"""
-
-
-HTML_LOGIN = """
-<!DOCTYPE html>
-<html lang="pt-BR">
-
-<head>
-
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-
-<title>Vision Pro V3</title>
-
-<style>
-
-*{
-    box-sizing:border-box;
-}
-
-body{
-    margin:0;
-    min-height:100vh;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    background:#060913;
-    color:white;
-    font-family:Arial,sans-serif;
-}
-
-.card{
-    width:90%;
-    max-width:380px;
-    padding:30px;
-    border-radius:20px;
-    background:#0f172a;
-    border:1px solid rgba(0,242,254,.3);
-    box-shadow:0 15px 50px rgba(0,0,0,.6);
-}
-
-h2{
-    text-align:center;
-    color:#00f2fe;
-    margin-bottom:25px;
-}
-
-input{
-    width:100%;
-    padding:14px;
-    margin:7px 0;
-    border-radius:9px;
-    border:1px solid #334155;
-    background:#020617;
-    color:white;
-}
-
-button{
-    width:100%;
-    padding:14px;
-    margin-top:12px;
-    border:0;
-    border-radius:9px;
-    background:#0072ff;
-    color:white;
-    font-weight:bold;
-    cursor:pointer;
-}
-
-.error{
-    background:rgba(239,68,68,.1);
-    border:1px solid #ef4444;
-    color:#fca5a5;
-    padding:10px;
-    border-radius:8px;
-    margin-bottom:12px;
-    font-size:13px;
-}
-
-.links{
-    text-align:center;
-    margin-top:20px;
-}
-
-a{
-    color:#00f2fe;
-    text-decoration:none;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="card">
-
-<h2>VISION PRO V3</h2>
-
-{% if erro %}
-<div class="error">{{ erro }}</div>
-{% endif %}
-
-<form method="POST" action="/login">
-
-<input
-type="hidden"
-name="_csrf_token"
-value="{{ csrf_token() }}"
->
-
-<input
-type="email"
-name="email"
-placeholder="Seu E-mail"
-autocomplete="email"
-required
->
-
-<input
-type="password"
-name="password"
-placeholder="Sua Senha"
-autocomplete="current-password"
-required
->
-
-<button type="submit">
-ACESSAR O TERMINAL
-</button>
-
-</form>
-
-<div class="links">
-<a href="/register">Criar Conta</a>
-<br><br>
-<a href="/termos">Termos de Uso</a>
-</div>
-
-</div>
-
-</body>
-</html>
-"""
-
-
-HTML_REGISTER = """
-<!DOCTYPE html>
-<html lang="pt-BR">
-
-<head>
-
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-
-<title>Criar Conta</title>
-
-<style>
-
-*{
-box-sizing:border-box;
-}
-
-body{
-margin:0;
-min-height:100vh;
-display:flex;
-align-items:center;
-justify-content:center;
-background:#060913;
-color:white;
-font-family:Arial,sans-serif;
-}
-
-.card{
-width:90%;
-max-width:380px;
-padding:30px;
-background:#0f172a;
-border-radius:20px;
-border:1px solid rgba(16,185,129,.4);
-}
-
-h2{
-color:#10b981;
-text-align:center;
-}
-
-input{
-width:100%;
-padding:14px;
-margin:7px 0;
-border-radius:9px;
-border:1px solid #334155;
-background:#020617;
-color:white;
-}
-
-button{
-width:100%;
-padding:14px;
-margin-top:12px;
-border:0;
-border-radius:9px;
-background:#059669;
-color:white;
-font-weight:bold;
-}
-
-.error{
-color:#fca5a5;
-background:rgba(239,68,68,.1);
-border:1px solid #ef4444;
-padding:10px;
-border-radius:8px;
-}
-
-a{
-display:block;
-text-align:center;
-margin-top:20px;
-color:#00f2fe;
-text-decoration:none;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="card">
-
-<h2>CRIAR CONTA</h2>
-
-{% if erro %}
-<div class="error">{{ erro }}</div>
-{% endif %}
-
-<form method="POST" action="/register">
-
-<input
-type="hidden"
-name="_csrf_token"
-value="{{ csrf_token() }}"
->
-
-<input
-type="email"
-name="email"
-placeholder="Novo E-mail"
-autocomplete="email"
-required
->
-
-<input
-type="password"
-name="password"
-placeholder="Nova Senha"
-autocomplete="new-password"
-required
->
-
-<button>
-CONCLUIR CADASTRO
-</button>
-
-</form>
-
-<a href="/login">
-Já possui uma conta?
-</a>
-
-</div>
-
-</body>
-</html>
-"""
-
-
-HTML_INDEX = """
-<!DOCTYPE html>
-<html lang="pt-BR">
-
-<head>
-
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-
-<title>VISION PRO V3</title>
-
-<style>
-
-*{
-box-sizing:border-box;
-margin:0;
-padding:0;
-font-family:Arial,sans-serif;
-}
-
-body{
-background:#060913;
-color:#f1f5f9;
-min-height:100vh;
-padding:15px 10px;
-}
-
-.container{
-width:100%;
-max-width:520px;
-margin:auto;
-background:#0f172a;
-border:1px solid rgba(0,242,254,.2);
-border-radius:22px;
-padding:20px;
-box-shadow:0 20px 50px rgba(0,0,0,.7);
-}
-
-.header{
-display:flex;
-justify-content:space-between;
-align-items:center;
-padding-bottom:15px;
-margin-bottom:15px;
-border-bottom:1px solid #1e293b;
-}
-
-.brand{
-font-weight:900;
-color:#00f2fe;
-}
-
-.version{
-font-size:10px;
-background:#0b1120;
-padding:5px 8px;
-border-radius:8px;
-color:#38ef7d;
-}
-
-.logout{
-color:#ef4444;
-text-decoration:none;
-font-weight:bold;
-font-size:12px;
-}
-
-.card{
-background:#0b1120;
-border:1px solid #1e293b;
-border-radius:15px;
-padding:15px;
-margin-bottom:15px;
-}
-
-.grid{
-display:grid;
-grid-template-columns:repeat(3,1fr);
-gap:8px;
-text-align:center;
-}
-
-.label{
-font-size:10px;
-color:#64748b;
-}
-
-.value{
-font-size:20px;
-font-weight:bold;
-margin-top:4px;
-}
-
-.win{
-color:#10b981;
-}
-
-.loss{
-color:#ef4444;
-}
-
-.blue{
-color:#3b82f6;
-}
-
-.bar{
-height:6px;
-margin-top:15px;
-background:#1e293b;
-border-radius:10px;
-overflow:hidden;
-}
-
-.fill{
-height:100%;
-background:#10b981;
-width:0%;
-}
-
-.status{
-padding:18px;
-border-radius:15px;
-border:1px solid rgba(0,242,254,.3);
-background:#0b1120;
-margin-bottom:15px;
-text-align:center;
-min-height:100px;
-display:flex;
-align-items:center;
-justify-content:center;
-}
-
-.console{
-color:#38ef7d;
-font-size:13px;
-}
-
-.settings{
-background:#0b1120;
-border:1px solid #1e293b;
-border-radius:15px;
-padding:15px;
-}
-
-.section{
-display:block;
-color:#64748b;
-font-size:10px;
-font-weight:bold;
-margin-bottom:9px;
-text-transform:uppercase;
-}
-
-.actions{
-display:flex;
-gap:7px;
-margin-bottom:15px;
-}
-
-button{
-border:0;
-cursor:pointer;
-}
-
-.action{
-flex:1;
-padding:12px 4px;
-border-radius:9px;
-color:white;
-font-weight:bold;
-}
-
-.start{
-background:#059669;
-}
-
-.pause{
-background:#d97706;
-}
-
-.stop{
-background:#dc2626;
-}
-
-.select{
-width:100%;
-background:#020617;
-color:white;
-border:1px solid #334155;
-padding:11px;
-border-radius:8px;
-margin-bottom:12px;
-}
-
-.result-grid{
-display:grid;
-grid-template-columns:repeat(4,1fr);
-gap:7px;
-margin-bottom:15px;
-}
-
-.result{
-padding:12px 3px;
-border-radius:8px;
-color:white;
-font-weight:bold;
-}
-
-.result-win{
-background:#059669;
-}
-
-.result-g1{
-background:#d97706;
-color:#000;
-}
-
-.result-red{
-background:#dc2626;
-}
-
-.result-skip{
-background:#334155;
-}
-
-.broker{
-width:100%;
-height:400px;
-display:none;
-margin-bottom:15px;
-}
-
-iframe{
-width:100%;
-height:100%;
-border:0;
-border-radius:10px;
-background:#0b1120;
-}
-
-.close{
-width:100%;
-padding:8px;
-margin-bottom:8px;
-background:#334155;
-color:white;
-border-radius:7px;
-}
-
-.admin{
-width:100%;
-padding:12px;
-background:#0e7490;
-color:white;
-border-radius:8px;
-margin-top:15px;
-font-weight:bold;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="container">
-
-<div class="header">
-
-<div class="brand">
-VISION PRO
-<span class="version">V3 ULTRA</span>
-</div>
-
-<a class="logout" href="/logout">
-SAIR
-</a>
-
-</div>
-
-
-<div class="card">
-
-<div class="grid">
-
-<div>
-<div class="label">WINS</div>
-<div id="win-count" class="value win">0</div>
-</div>
-
-<div>
-<div class="label">ASSERTIVIDADE</div>
-<div id="wr-text" class="value blue">0%</div>
-</div>
-
-<div>
-<div class="label">LOSS</div>
-<div id="loss-count" class="value loss">0</div>
-</div>
-
-</div>
-
-<div class="bar">
-<div id="wr-fill" class="fill"></div>
-</div>
-
-</div>
-
-
-<div class="card">
-
-<div style="text-align:center;font-size:12px">
-
-MERCADO:
-<b id="mkt-badge" class="blue">
-{{ modo }}
-</b>
-
-<br>
-
-ATIVO:
-<b id="current-asset" class="win">
-AGUARDANDO...
-</b>
-
-</div>
-
-</div>
-
-
-<div id="broker-view-container" class="broker">
-
-<button
-class="close"
-onclick="closeBrokerView()"
->
-FECHAR CORRETORA
-</button>
-
-<iframe
-id="brokerIframe"
-src=""
-sandbox="allow-forms allow-scripts allow-same-origin allow-popups"
-referrerpolicy="no-referrer"
-></iframe>
-
-</div>
-
-
-<div id="panel-text" class="status">
-Aguardando Comando...
-</div>
-
-
-<div
-id="result-area"
-class="result-grid"
-style="display:none"
->
-
-<button
-class="result result-win"
-onclick="registrarResultado('win')"
->
-WIN
-</button>
-
-<button
-class="result result-g1"
-onclick="registrarResultado('g1')"
->
-G1
-</button>
-
-<button
-class="result result-red"
-onclick="registrarResultado('red')"
->
-RED
-</button>
-
-<button
-class="result result-skip"
-onclick="registrarResultado('pular')"
->
-PULAR
-</button>
-
-</div>
-
-
-<div class="settings">
-
-<span class="section">
-CONTROLES DO ROBÔ
-</span>
-
-<div class="actions">
-
-<button
-class="action start"
-onclick="sendCommand('start_bot')"
->
-START
-</button>
-
-<button
-class="action pause"
-onclick="sendCommand('pause_bot')"
->
-PAUSE
-</button>
-
-<button
-class="action stop"
-onclick="sendCommand('stop_bot')"
->
-STOP
-</button>
-
-</div>
-
-
-<span class="section">
-TIPO DE MERCADO
-</span>
-
-<select
-class="select"
-onchange="sendCommand('mkt_' + this.value)"
->
-
-<option value="TODOS">
-Aberto — Cripto + Forex
-</option>
-
-<option value="FOREX">
-Apenas Forex
-</option>
-
-<option value="CRIPTO">
-Apenas Cripto
-</option>
-
-<option value="OTC">
-Mercado OTC
-</option>
-
-</select>
-
-
-<span class="section">
-TIMEFRAME
-</span>
-
-<select
-class="select"
-onchange="sendCommand('tf_' + this.value)"
->
-
-<option value="1">
-M1
-</option>
-
-<option value="5" selected>
-M5
-</option>
-
-<option value="15">
-M15
-</option>
-
-</select>
-
-
-<span class="section">
-ESTRATÉGIA
-</span>
-
-<select
-class="select"
-onchange="sendCommand('set_est_' + this.value)"
->
-
-<option value="TODAS">
-TODAS
-</option>
-
-<option value="RSI_MACD_MA">
-RSI + MACD + MA
-</option>
-
-<option value="LOGICA_DO_PRECO">
-Lógica do Preço
-</option>
-
-<option value="MHI1">
-MHI 1
-</option>
-
-<option value="REVERSAO">
-Reversão
-</option>
-
-</select>
-
-
-<span class="section">
-PLATAFORMAS
-</span>
-
-<div class="actions">
-
-<button
-class="action"
-style="background:#1e293b"
-onclick="openBroker('https://qxbroker.com')"
->
-Quotex
-</button>
-
-<button
-class="action"
-style="background:#1e293b"
-onclick="openBroker('https://iqoption.com')"
->
-IQ Option
-</button>
-
-</div>
-
-
-{% if user == admin %}
-
-<button
-class="admin"
-onclick="location.href='/admin_panel'"
->
-PAINEL ADMINISTRATIVO
-</button>
-
-{% endif %}
-
-</div>
-
-</div>
-
-
-<script>
-
-let csrfToken = "{{ csrf_token() }}";
-
-
-async function sendCommand(cmd){
-
-    try{
-
-        const response = await fetch(
-            "/command/" + encodeURIComponent(cmd),
-            {
-                method:"POST",
-                headers:{
-                    "X-CSRF-Token":csrfToken
+        
+        if qtd_g > qtd_r: sinal = "PUT"
+        elif qtd_r > qtd_g: sinal = "CALL"
+
+    elif estrategia in ["REVERSAO", "RETRACAO"]:
+        std = np.std(c[i-20:i])
+        ma = np.mean(c[i-20:i])
+        banda_superior = ma + (1.8 * std)
+        banda_inferior = ma - (1.8 * std)
+
+        if c[i] <= banda_inferior: sinal = "CALL"
+        elif c[i] >= banda_superior: sinal = "PUT"
+
+    if sinal and validar_analise_profunda(data, sinal, i, estrategia):
+        return sinal
+
+    return None
+
+# ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
+@app.route('/sw.js')
+def service_worker():
+    sw_code = """
+    self.addEventListener('notificationclick', function(event) {
+        event.notification.close();
+        event.waitUntil(
+            clients.matchAll({ type: 'window' }).then(function(clientList) {
+                for (var i = 0; i < clientList.length; i++) {
+                    var client = clientList[i];
+                    if (client.url === '/' && 'focus' in client) return client.focus();
                 }
-            }
+                if (clients.openWindow) return clients.openWindow('/');
+            })
         );
-
-        if(response.status === 401){
-            location.href="/login";
-            return;
-        }
-
-        const data = await response.json();
-
-        if(data.redirect){
-            location.href=data.redirect;
-        }
-
-    }catch(e){
-
-        console.error(e);
-
-    }
-
-}
-
-
-async function registrarResultado(resultado){
-
-    try{
-
-        const response = await fetch(
-            "/resultado/" + encodeURIComponent(resultado),
-            {
-                method:"POST",
-                headers:{
-                    "X-CSRF-Token":csrfToken
-                }
-            }
-        );
-
-        if(response.status === 401){
-            location.href="/login";
-        }
-
-    }catch(e){
-
-        console.error(e);
-
-    }
-
-}
-
-
-async function atualizarStatus(){
-
-    try{
-
-        const response = await fetch(
-            "/status",
-            {
-                cache:"no-store"
-            }
-        );
-
-        if(response.status === 401){
-            location.href="/login";
-            return;
-        }
-
-        const data = await response.json();
-
-        document.getElementById(
-            "panel-text"
-        ).innerHTML = data.html || "Aguardando...";
-
-
-        document.getElementById(
-            "win-count"
-        ).innerText = data.wins || 0;
-
-
-        document.getElementById(
-            "loss-count"
-        ).innerText = data.reds || 0;
-
-
-        document.getElementById(
-            "wr-text"
-        ).innerText =
-            (data.winrate || 0) + "%";
-
-
-        document.getElementById(
-            "wr-fill"
-        ).style.width =
-            Math.min(
-                Math.max(
-                    Number(data.winrate || 0),
-                    0
-                ),
-                100
-            ) + "%";
-
-
-        document.getElementById(
-            "result-area"
-        ).style.display =
-            data.aguardando
-            ? "grid"
-            : "none";
-
-
-        document.getElementById(
-            "mkt-badge"
-        ).innerText =
-            data.mercado || "TODOS";
-
-
-        document.getElementById(
-            "current-asset"
-        ).innerText =
-            data.rodando
-            ? (
-                data.ativo_atual
-                || "VARRRENDO..."
-              )
-            : "SISTEMA PAUSADO";
-
-
-    }catch(e){
-
-        console.error(e);
-
-    }
-
-}
-
-
-function openBroker(url){
-
-    const container =
-        document.getElementById(
-            "broker-view-container"
-        );
-
-    const iframe =
-        document.getElementById(
-            "brokerIframe"
-        );
-
-    iframe.src = url;
-
-    container.style.display = "block";
-
-}
-
-
-function closeBrokerView(){
-
-    const container =
-        document.getElementById(
-            "broker-view-container"
-        );
-
-    const iframe =
-        document.getElementById(
-            "brokerIframe"
-        );
-
-    iframe.src = "";
-
-    container.style.display = "none";
-
-}
-
-
-atualizarStatus();
-
-setInterval(
-    atualizarStatus,
-    1500
-);
-
-</script>
-
-</body>
-</html>
-"""
-
-
-# ============================================================
-# PAINEL ADMIN
-# ============================================================
-
-HTML_ADM = """
-<!DOCTYPE html>
-<html lang="pt-BR">
-
-<head>
-
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-
-<title>Administração</title>
-
-<style>
-
-body{
-background:#060913;
-color:white;
-font-family:Arial,sans-serif;
-padding:15px;
-}
-
-.container{
-max-width:800px;
-margin:auto;
-}
-
-.card{
-background:#0f172a;
-border:1px solid #1e293b;
-border-radius:12px;
-padding:15px;
-margin-bottom:12px;
-}
-
-input{
-width:100%;
-padding:10px;
-margin:5px 0;
-background:#020617;
-border:1px solid #334155;
-color:white;
-border-radius:7px;
-}
-
-button,
-a{
-display:inline-block;
-padding:9px 12px;
-border:0;
-border-radius:7px;
-margin:4px;
-text-decoration:none;
-font-weight:bold;
-cursor:pointer;
-}
-
-.blue{
-background:#2563eb;
-color:white;
-}
-
-.green{
-background:#059669;
-color:white;
-}
-
-.orange{
-background:#d97706;
-color:white;
-}
-
-.red{
-background:#dc2626;
-color:white;
-}
-
-.back{
-color:#00f2fe;
-}
-
-.online{
-color:#10b981;
-}
-
-.offline{
-color:#64748b;
-}
-
-</style>
-
-<script>
-
-function toggle(id){
-
-    const el =
-        document.getElementById(id);
-
-    el.style.display =
-        el.style.display === "block"
-        ? "none"
-        : "block";
-
-}
-
-</script>
-
-</head>
-
-<body>
-
-<div class="container">
-
-<h2>
-🛡️ GESTÃO DE USUÁRIOS
-</h2>
-
-<p>
-Online:
-<b>{{ online_count }}</b>
-</p>
-
-<a class="back" href="/">
-⬅ Voltar
-</a>
-
-{% for email, info in lista.items() %}
-
-<div class="card">
-
-<div
-onclick="toggle('details-{{ loop.index }}')"
-style="cursor:pointer"
->
-
-<b>{{ email }}</b>
-
-{% if email in online_list %}
-
-<span class="online">
-● ONLINE
-</span>
-
-{% else %}
-
-<span class="offline">
-● OFFLINE
-</span>
-
-{% endif %}
-
-</div>
-
-
-<div
-id="details-{{ loop.index }}"
-style="display:none;margin-top:15px"
->
-
-<p>
-Wins:
-<b>{{ info.wins }}</b>
-</p>
-
-<p>
-Reds:
-<b>{{ info.reds }}</b>
-</p>
-
-<p>
-Assertividade:
-<b>{{ info.winrate }}%</b>
-</p>
-
-<p>
-IPs:
-<b>{{ info.ips_Formatados }}</b>
-</p>
-
-
-<form
-method="POST"
-action="/adm/editar"
->
-
-<input
-type="hidden"
-name="_csrf_token"
-value="{{ csrf_token() }}"
->
-
-<input
-type="hidden"
-name="email_original"
-value="{{ email }}"
->
-
-<input
-type="email"
-name="novo_email"
-value="{{ email }}"
-required
->
-
-<input
-type="password"
-name="nova_senha"
-placeholder="Nova senha — opcional"
->
-
-<button class="blue">
-SALVAR
-</button>
-
-</form>
-
-
-<form
-method="POST"
-action="/adm/renovar"
-style="display:inline"
->
-
-<input
-type="hidden"
-name="_csrf_token"
-value="{{ csrf_token() }}"
->
-
-<input
-type="hidden"
-name="email"
-value="{{ email }}"
->
-
-<button class="green">
-+30 DIAS
-</button>
-
-</form>
-
-
-<form
-method="POST"
-action="/adm/liberar_ip"
-style="display:inline"
->
-
-<input
-type="hidden"
-name="_csrf_token"
-value="{{ csrf_token() }}"
->
-
-<input
-type="hidden"
-name="email"
-value="{{ email }}"
->
-
-<button class="orange">
-LIBERAR IP
-</button>
-
-</form>
-
-
-{% if email != admin %}
-
-<form
-method="POST"
-action="/adm/excluir"
-style="display:inline"
-onsubmit="return confirm('Excluir este usuário?')"
->
-
-<input
-type="hidden"
-name="_csrf_token"
-value="{{ csrf_token() }}"
->
-
-<input
-type="hidden"
-name="email"
-value="{{ email }}"
->
-
-<button class="red">
-EXCLUIR
-</button>
-
-</form>
-
-{% endif %}
-
-</div>
-
-</div>
-
-{% endfor %}
-
-</div>
-
-</body>
-</html>
-"""
-
-
-# ============================================================
-# ROTAS
-# ============================================================
-
-@app.route("/health")
+    });
+    """
+    return Response(sw_code, mimetype='application/javascript')
+
+# ================= ROTAS DE NAVEGAÇÃO =================
+@app.route('/health')
 def health():
+    return jsonify({"status": "ok"}), 200
 
-    return jsonify({
-        "status": "ok"
-    })
-
-
-@app.route("/termos")
-def termos():
-
-    return render_template_string(
-        HTML_TERMOS
-    )
-
-
-@app.route("/login", methods=["GET", "POST"])
+@app.route('/login', methods=['GET', 'POST'])
 def login():
+    if request.method == 'POST':
+        e = request.form.get('email', '').strip().lower()
+        s = request.form.get('password', '').strip()
+        ip_cliente = get_client_ip()
 
-    if request.method == "POST":
+        if not e or not s:
+            return render_template_string(HTML_LOGIN, erro="Preencha todos os campos.")
 
-        validar_csrf()
+        if e == ADMIN_EMAIL:
+            try:
+                salvar_usuario(e, s, agora_brasilia().strftime("%Y-%m-%d"), ip_inicial=None)
+            except Exception as err:
+                return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM: {err}")
 
-        ip = get_client_ip()
+        usuarios = carregar_usuarios()
+        if e not in usuarios:
+            return render_template_string(HTML_LOGIN, erro=f"Usuário não cadastrado ({e}). Faça o cadastro.")
 
-        if not rate_limit_login(ip):
+        user_db = usuarios[e]
+        if not check_password_hash(user_db['senha'], s):
+            return render_template_string(HTML_LOGIN, erro="Senha Incorreta.")
 
-            return render_template_string(
-                HTML_LOGIN,
-                erro=(
-                    "Muitas tentativas. "
-                    "Aguarde alguns minutos."
-                )
-            ), 429
+        if e != ADMIN_EMAIL:
+            ips_cadastrados = user_db.get('ips_list', [])
+            if ip_cliente not in ips_cadastrados:
+                if len(ips_cadastrados) < 2:
+                    adicionar_ip_usuario(e, ip_cliente)
+                else:
+                    return render_template_string(HTML_LOGIN, erro="🚫 ACESSO BLOQUEADO: Limite de 2 IPs/dispositivos atingido.")
 
-        email = (
-            request.form
-            .get("email", "")
-            .strip()
-            .lower()
-        )
+        ativo, dias = verificar_assinatura(e)
+        if not ativo:
+            return render_template_string(HTML_LOGIN, erro=f"Assinatura expirada (Dias: {dias}).")
 
-        password = request.form.get(
-            "password",
-            ""
-        )
+        session['user'] = e
+        USUARIOS_ONLINE[e] = time.time()
+        init_user_session(e)
+        return redirect('/')
 
-        if (
-            not validar_email(email)
-            or not password
-        ):
+    return render_template_string(HTML_LOGIN)
 
-            return render_template_string(
-                HTML_LOGIN,
-                erro="E-mail ou senha inválidos."
-            ), 400
-
-
-        usuario = obter_usuario(email)
-
-        if not usuario:
-
-            return render_template_string(
-                HTML_LOGIN,
-                erro="E-mail ou senha inválidos."
-            ), 401
-
-
-        try:
-
-            senha_ok = check_password_hash(
-                usuario["senha"],
-                password
-            )
-
-        except Exception:
-
-            senha_ok = False
-
-
-        if not senha_ok:
-
-            return render_template_string(
-                HTML_LOGIN,
-                erro="E-mail ou senha inválidos."
-            ), 401
-
-
-        assinatura_ok, _ = verificar_assinatura(
-            email
-        )
-
-        if not assinatura_ok:
-
-            return render_template_string(
-                HTML_LOGIN,
-                erro="Sua assinatura expirou."
-            ), 403
-
-
-        if not verificar_ip_usuario(email):
-
-            return render_template_string(
-                HTML_LOGIN,
-                erro=(
-                    "Este dispositivo não está "
-                    "autorizado para esta conta."
-                )
-            ), 403
-
-
-        if not registrar_ip_usuario(email):
-
-            return render_template_string(
-                HTML_LOGIN,
-                erro=(
-                    "Limite de dispositivos atingido."
-                )
-            ), 403
-
-
-        session.clear()
-
-        session.permanent = True
-
-        session["user"] = email
-
-        session["_csrf_token"] = secrets.token_urlsafe(
-            32
-        )
-
-        return redirect("/")
-
-
-    return render_template_string(
-        HTML_LOGIN
-    )
-
-
-@app.route("/register", methods=["GET", "POST"])
+@app.route('/register', methods=['GET', 'POST'])
 def register():
-
-    if request.method == "POST":
-
-        validar_csrf()
-
-        email = (
-            request.form
-            .get("email", "")
-            .strip()
-            .lower()
-        )
-
-        password = request.form.get(
-            "password",
-            ""
-        )
-
-
-        if not validar_email(email):
-
-            return render_template_string(
-                HTML_REGISTER,
-                erro="Informe um e-mail válido."
-            ), 400
-
-
-        if not validar_senha(password):
-
-            return render_template_string(
-                HTML_REGISTER,
-                erro=(
-                    "A senha deve possuir "
-                    "entre 8 e 128 caracteres."
-                )
-            ), 400
-
-
-        if email == ADMIN_EMAIL:
-
-            return render_template_string(
-                HTML_REGISTER,
-                erro=(
-                    "Esta conta é reservada "
-                    "à administração."
-                )
-            ), 403
-
-
-        if obter_usuario(email):
-
-            return render_template_string(
-                HTML_REGISTER,
-                erro="Este e-mail já está cadastrado."
-            ), 409
-
-
+    if request.method == 'POST':
+        e = request.form.get('email', '').strip().lower()
+        s = request.form.get('password', '').strip()
+        ip_cliente = get_client_ip()
+        
+        if not e or not s:
+            return render_template_string(HTML_REGISTER, erro="Preencha todos os campos.")
+            
         try:
+            salvar_usuario(e, s, ip_inicial=ip_cliente)
+            session['user'] = e
+            USUARIOS_ONLINE[e] = time.time()
+            init_user_session(e)
+            return redirect('/')
+        except Exception as err:
+            return render_template_string(HTML_REGISTER, erro=f"Erro ao salvar: {err}")
 
-            salvar_usuario(
-                email,
-                password,
-                ip_inicial=get_client_ip()
-            )
+    return render_template_string(HTML_REGISTER)
 
-        except Exception:
-
-            log.exception(
-                "Erro criando usuário."
-            )
-
-            return render_template_string(
-                HTML_REGISTER,
-                erro="Não foi possível criar a conta."
-            ), 500
-
-
-        session.clear()
-
-        session.permanent = True
-
-        session["user"] = email
-
-        session["_csrf_token"] = secrets.token_urlsafe(
-            32
-        )
-
-        return redirect("/")
-
-
-    return render_template_string(
-        HTML_REGISTER
-    )
-
-
-@app.route("/logout")
+@app.route('/logout')
 def logout():
-
-    user = session.get("user")
-
-    if user:
-        with ESTADOS_LOCK:
-            estado = ESTADOS.get(user)
-
-            if estado:
-                estado["bot_iniciado"] = False
-                estado["bot_pausado"] = True
-                estado["aguardando_resultado"] = False
-
+    global QUEM_INICIOU_O_BOT
+    user = session.get('user')
+    if user in USUARIOS_ONLINE: del USUARIOS_ONLINE[user]
+    if user == QUEM_INICIOU_O_BOT: QUEM_INICIOU_O_BOT = None
     session.clear()
+    return redirect('/login')
 
-    return redirect("/login")
+@app.route('/termos')
+def termos():
+    return render_template_string(HTML_TERMOS)
 
+@app.route('/admin_panel')
+def admin_panel():
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
+    now = time.time()
+    for u in list(USUARIOS_ONLINE.keys()):
+        if now - USUARIOS_ONLINE[u] > 60: del USUARIOS_ONLINE[u]
+    return render_template_string(HTML_ADM, lista=carregar_usuarios(), admin=ADMIN_EMAIL, online_count=len(USUARIOS_ONLINE), online_list=USUARIOS_ONLINE.keys())
 
-# ============================================================
-# PAINEL PRINCIPAL
-# ============================================================
+@app.route('/adm/renovar/<email>')
+def adm_renovar(email):
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
+    renovar_usuario_db(email)
+    return redirect('/admin_panel')
 
-@app.route("/")
+@app.route('/adm/liberar_ip/<email>')
+def adm_liberar_ip(email):
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
+    liberar_ip_usuario_db(email)
+    return redirect('/admin_panel')
+
+@app.route('/adm/editar', methods=['POST'])
+def adm_editar():
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
+    original = request.form.get('email_original', '').strip().lower()
+    novo_email = request.form.get('novo_email', '').strip().lower()
+    nova_senha = request.form.get('nova_senha', '').strip()
+    
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        if nova_senha:
+            hash_senha = generate_password_hash(nova_senha)
+            cur.execute("UPDATE usuarios SET email = %s, senha = %s WHERE email = %s;", (novo_email, hash_senha, original))
+        else:
+            cur.execute("UPDATE usuarios SET email = %s WHERE email = %s;", (novo_email, original))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        pass
+        
+    return redirect('/admin_panel')
+
+@app.route('/adm/excluir/<email>')
+def adm_excluir(email):
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
+    excluir_usuario_db(email)
+    return redirect('/admin_panel')
+
+@app.route('/')
 def index():
+    if 'user' not in session: return redirect('/login')
+    user = session['user']
+    USUARIOS_ONLINE[user] = time.time()
+    init_user_session(user)
+    return render_template_string(HTML_INDEX, modo=TIPO_MERCADO, tf=TIMEFRAME_OPERACAO, estrat=ESTRATEGIA_ESCOLHIDA, user=user, admin=ADMIN_EMAIL)
 
-    user = usuario_logado()
-
-    if not user:
-        return redirect("/login")
-
-    assinatura_ok, _ = verificar_assinatura(
-        user
-    )
-
-    if not assinatura_ok:
-        session.clear()
-
-        return redirect("/login")
-
-
-    estado = obter_estado(user)
-
-    return render_template_string(
-        HTML_INDEX,
-        modo=estado["mercado"],
-        tf=estado["timeframe"],
-        estrat=estado["estrategia"],
-        user=user,
-        admin=ADMIN_EMAIL
-    )
-
-
-# ============================================================
-# STATUS
-# ============================================================
-
-@app.route("/status")
+@app.route('/status')
 def status():
-
-    user = usuario_logado()
-
-    if not user:
-        return jsonify({
-            "error": "unauthorized"
-        }), 401
-
-
-    estado = obter_estado(user)
-
-    usuario = obter_usuario(user)
-
-    if not usuario:
-        session.clear()
-
-        return jsonify({
-            "error": "unauthorized"
-        }), 401
-
-
-    html = (
-        estado["sinal_display"]
-        if (
-            estado["aguardando_resultado"]
-            and estado["sinal_display"]
-        )
-        else estado["ultimo_sinal"]
-    )
-
+    user = session.get('user')
+    if not user: return jsonify({})
+    USUARIOS_ONLINE[user] = time.time()
+    
+    usuarios = carregar_usuarios()
+    u_info = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
+    historico = buscar_historico_bd(user)
+    
+    display_texto = SINAL_DISPLAY_PERMANENTE if (AGUARDANDO_CONFIRMACAO_RESULTADO and SINAL_DISPLAY_PERMANENTE) else ULTIMO_SINAL_GLOBAL
 
     return jsonify({
-
-        "html": html,
-
-        "aguardando":
-            estado["aguardando_resultado"],
-
-        "wins":
-            usuario.get("wins", 0),
-
-        "reds":
-            usuario.get("reds", 0),
-
-        "winrate":
-            usuario.get("winrate", 0.0),
-
-        "ativo_atual":
-            estado["ativo_atual"],
-
-        "mercado":
-            estado["mercado"],
-
-        "rodando":
-            (
-                estado["bot_iniciado"]
-                and not estado["bot_pausado"]
-            ),
-
+        "html": display_texto, 
+        "aguardando": AGUARDANDO_CONFIRMACAO_RESULTADO, 
+        "wins": u_info.get("wins", 0),
+        "reds": u_info.get("reds", 0), 
+        "winrate": u_info.get("winrate", 0.0), 
+        "historico": historico,
+        "ativo_atual": ATIVO_ATUAL_GLOBAL,
+        "mercado": TIPO_MERCADO,
+        "rodando": BOT_INICIADO and not BOT_PAUSADO,
+        "notificacao": NOTIFICACAO_SISTEMA
     })
 
-
-# ============================================================
-# COMANDOS
-# ============================================================
-
-@app.route(
-    "/command/<cmd>",
-    methods=["POST"]
-)
+@app.route('/command/<cmd>')
 def command(cmd):
-
-    user = usuario_logado()
-
-    if not user:
-        return jsonify({
-            "error": "unauthorized"
-        }), 401
-
-
-    validar_csrf_header()
-
-
-    estado = obter_estado(user)
-
-
-    # --------------------------------------------------------
-    # START
-    # --------------------------------------------------------
+    global BOT_INICIADO, BOT_PAUSADO, TIMEFRAME_OPERACAO, TIPO_MERCADO, QUEM_INICIOU_O_BOT, ULTIMO_SINAL_GLOBAL, AG_RESULTADO, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, ESTRATEGIA_ESCOLHIDA, ATIVO_ATUAL_GLOBAL
+    user = session.get('user')
 
     if cmd == "start_bot":
-
-        estado["bot_iniciado"] = True
-
-        estado["bot_pausado"] = False
-
-        estado["aguardando_resultado"] = False
-
-        estado["sinal_display"] = None
-
-        estado["ativo_atual"] = (
-            "INICIANDO VARREDURA..."
+        QUEM_INICIOU_O_BOT = user
+        BOT_INICIADO = True
+        BOT_PAUSADO = False
+        AG_RESULTADO = False
+        AGUARDANDO_CONFIRMACAO_RESULTADO = False
+        SINAL_DISPLAY_PERMANENTE = None
+        ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>VARREDURA INICIADA</b><br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+        
+        msg_inicio_telegram = (
+            f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
+            f"🟢 <b>Status:</b> Operacional / Varredura Ativa\n"
+            f"👤 <b>Administrador:</b> {user}\n"
+            f"📊 <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
+            f"🌐 <b>Mercado:</b> {TIPO_MERCADO}\n"
+            f"⚙️ <b>Estratégia:</b> {ESTRATEGIA_ESCOLHIDA}\n\n"
+            f"<i>O algoritmo está varrendo o mercado em busca de oportunidades de alta assertividade. Preparem suas bancas!</i>"
         )
+        enviar_telegram(msg_inicio_telegram, user_solicitante=user)
+        return jsonify({"ok": True})
 
-        estado["ultimo_sinal"] = (
-            "<div class='console'>"
-            "⚡ <b>VARREDURA INICIADA</b>"
-            "</div>"
-        )
+    elif cmd == "pause_bot":
+        BOT_PAUSADO = not BOT_PAUSADO
+        status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if BOT_PAUSADO else f"🔍 ANALISANDO: {ATIVO_ATUAL_GLOBAL} (M{TIMEFRAME_OPERACAO})"
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+        msg_pause = "⏸ <b>O SISTEMA FOI PAUSADO PELO ADMINISTRADOR</b>" if BOT_PAUSADO else "▶️ <b>O SISTEMA RETOMOU A VARREDURA DE MERCADO!</b>"
+        enviar_telegram(msg_pause, user_solicitante=user)
+        return jsonify({"ok": True})
 
-        return jsonify({
-            "ok": True
-        })
+    elif cmd == "stop_bot":
+        BOT_INICIADO = False
+        BOT_PAUSADO = True
+        AG_RESULTADO = False
+        AGUARDANDO_CONFIRMACAO_RESULTADO = False
+        SINAL_DISPLAY_PERMANENTE = None
+        ATIVO_ATUAL_GLOBAL = "DESCONECTADO"
+        ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
+        
+        if user:
+            zerar_estatisticas_usuario(user)
+        enviar_telegram("🔴 <b>ROBÔ ENCERRADO E SISTEMA LIMPO COM SUCESSO!</b>", user_solicitante=user)
+        return jsonify({"ok": True})
 
+    elif cmd.startswith("tf_"): 
+        TIMEFRAME_OPERACAO = int(cmd.split('_')[1])
+    elif cmd.startswith("mkt_"): 
+        TIPO_MERCADO = cmd.split('_')[1]
+    elif cmd.startswith("set_est_"): 
+        ESTRATEGIA_ESCOLHIDA = cmd.replace("set_est_", "")
+    
+    return jsonify({"ok": True})
 
-    # --------------------------------------------------------
-    # PAUSE
-    # --------------------------------------------------------
-
-    if cmd == "pause_bot":
-
-        estado["bot_pausado"] = (
-            not estado["bot_pausado"]
-        )
-
-        if estado["bot_pausado"]:
-
-            estado["ultimo_sinal"] = (
-                "<div class='console' "
-                "style='color:#f59e0b'>"
-                "⏸ SISTEMA PAUSADO"
-                "</div>"
-            )
-
-        else:
-
-            estado["ultimo_sinal"] = (
-                "<div class='console'>"
-                "🔍 ANALISANDO: "
-                f"<b>{estado['ativo_atual']}</b>"
-                "</div>"
-            )
-
-        return jsonify({
-            "ok": True
-        })
-
-
-    # --------------------------------------------------------
-    # STOP
-    # --------------------------------------------------------
-
-    if cmd == "stop_bot":
-
-        estado["bot_iniciado"] = False
-
-        estado["bot_pausado"] = True
-
-        estado["aguardando_resultado"] = False
-
-        estado["sinal_display"] = None
-
-        estado["ativo_atual"] = (
-            "DESCONECTADO"
-        )
-
-        estado["ultimo_sinal"] = (
-            "Aguardando Comando..."
-        )
-
-        return jsonify({
-            "ok": True
-        })
-
-
-    # --------------------------------------------------------
-    # TIMEFRAME
-    # --------------------------------------------------------
-
-    if cmd.startswith("tf_"):
-
-        try:
-
-            valor = int(
-                cmd.split("_", 1)[1]
-            )
-
-        except Exception:
-
-            return jsonify({
-                "error": "Timeframe inválido."
-            }), 400
-
-
-        if valor not in (1, 5, 15):
-
-            return jsonify({
-                "error": "Timeframe inválido."
-            }), 400
-
-
-        estado["timeframe"] = valor
-
-        return jsonify({
-            "ok": True
-        })
-
-
-    # --------------------------------------------------------
-    # MERCADO
-    # --------------------------------------------------------
-
-    if cmd.startswith("mkt_"):
-
-        valor = cmd.split(
-            "_",
-            1
-        )[1].upper()
-
-        if valor not in (
-            "TODOS",
-            "FOREX",
-            "CRIPTO",
-            "OTC"
-        ):
-
-            return jsonify({
-                "error": "Mercado inválido."
-            }), 400
-
-
-        estado["mercado"] = valor
-
-        return jsonify({
-            "ok": True
-        })
-
-
-    # --------------------------------------------------------
-    # ESTRATÉGIA
-    # --------------------------------------------------------
-
-    if cmd.startswith("set_est_"):
-
-        valor = cmd.replace(
-            "set_est_",
-            "",
-            1
-        )
-
-        if valor != "TODAS" and valor not in LISTA_ESTRATEGIAS:
-
-            return jsonify({
-                "error": "Estratégia inválida."
-            }), 400
-
-
-        estado["estrategia"] = valor
-
-        return jsonify({
-            "ok": True
-        })
-
-
-    return jsonify({
-        "error": "Comando desconhecido."
-    }), 404
-
-
-# ============================================================
-# CSRF POR HEADER
-# ============================================================
-
-def validar_csrf_header():
-
-    session_token = session.get(
-        "_csrf_token"
-    )
-
-    recebido = request.headers.get(
-        "X-CSRF-Token",
-        ""
-    )
-
-    if (
-        not session_token
-        or not recebido
-        or not secrets.compare_digest(
-            session_token,
-            recebido
-        )
-    ):
-        abort(
-            400,
-            description="CSRF inválido."
-        )
-
-
-# ============================================================
-# RESULTADOS
-# ============================================================
-
-@app.route(
-    "/resultado/<res>",
-    methods=["POST"]
-)
+@app.route('/resultado/<res>')
 def resultado(res):
-
-    user = usuario_logado()
-
-    if not user:
-        return jsonify({
-            "error": "unauthorized"
-        }), 401
-
-
-    validar_csrf_header()
-
-
-    if res not in (
-        "win",
-        "g1",
-        "red",
-        "pular"
-    ):
-        abort(400)
-
-
-    estado = obter_estado(user)
-
-
-    if not estado["aguardando_resultado"]:
-
-        return jsonify({
-            "ok": False,
-            "message": "Nenhum sinal aguardando resultado."
-        })
-
-
-    if res in ("win", "g1"):
-
-        atualizar_estatisticas_usuario(
-            user,
-            "win"
-        )
-
-        registrar_sinal_bd(
-            user,
-            estado["ultimo_ativo_sinal"]
-            or "desconhecido",
-            res
-        )
-
-    elif res == "red":
-
-        atualizar_estatisticas_usuario(
-            user,
-            "red"
-        )
-
-        registrar_sinal_bd(
-            user,
-            estado["ultimo_ativo_sinal"]
-            or "desconhecido",
-            "red"
-        )
-
-
-    estado["aguardando_resultado"] = False
-
-    estado["sinal_display"] = None
-
-    estado["ultimo_resultado"] = res
-
-    estado["ultimo_sinal"] = (
-        "<div class='console'>"
-        "🔍 RETOMANDO VARREDURA..."
-        "</div>"
-    )
-
-
-    return jsonify({
-        "ok": True
-    })
-
-
-# ============================================================
-# ADMIN
-# ============================================================
-
-@app.route("/admin_panel")
-def admin_panel():
-
-    admin = exigir_admin()
-
-    if not isinstance(admin, str):
-        return admin
-
-
-    usuarios = carregar_usuarios()
-
-    agora = time.time()
-
-    online_list = [
-        email
-        for email, timestamp
-        in ONLINE.items()
-        if agora - timestamp < 60
-    ]
-
-
-    return render_template_string(
-        HTML_ADM,
-        lista=usuarios,
-        online_list=online_list,
-        online_count=len(online_list),
-        admin=ADMIN_EMAIL
-    )
-
-
-# ============================================================
-# ONLINE
-# ============================================================
-
-ONLINE = {}
-ONLINE_LOCK = threading.Lock()
-
-
-@app.before_request
-def registrar_online():
-
-    user = session.get("user")
-
+    global AG_RESULTADO, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, ULTIMO_SINAL_GLOBAL
+    user = session.get('user')
     if user:
-
-        with ONLINE_LOCK:
-            ONLINE[user] = time.time()
-
-
-# ============================================================
-# ADMIN — EDITAR
-# ============================================================
-
-@app.route(
-    "/adm/editar",
-    methods=["POST"]
-)
-def admin_editar():
-
-    admin = exigir_admin()
-
-    if not isinstance(admin, str):
-        return admin
-
-
-    validar_csrf()
-
-
-    email_original = (
-        request.form
-        .get("email_original", "")
-        .strip()
-        .lower()
-    )
-
-    novo_email = (
-        request.form
-        .get("novo_email", "")
-        .strip()
-        .lower()
-    )
-
-    nova_senha = request.form.get(
-        "nova_senha",
-        ""
-    )
-
-
-    if not validar_email(
-        email_original
-    ):
-        abort(400)
-
-
-    if not validar_email(
-        novo_email
-    ):
-        abort(400)
-
-
-    usuario = obter_usuario(
-        email_original
-    )
-
-    if not usuario:
-        abort(404)
-
-
-    conn = None
-    cur = None
-
-    try:
-
-        conn = get_db_connection()
-
-        cur = conn.cursor()
-
-        if nova_senha:
-
-            if not validar_senha(
-                nova_senha
-            ):
-                abort(
-                    400,
-                    description="Senha inválida."
-                )
-
-            senha_hash = generate_password_hash(
-                nova_senha,
-                method="scrypt"
-            )
-
-            cur.execute("""
-                UPDATE usuarios
-                SET
-                    email = %s,
-                    senha = %s
-                WHERE email = %s;
-            """, (
-                novo_email,
-                senha_hash,
-                email_original
-            ))
-
-        else:
-
-            cur.execute("""
-                UPDATE usuarios
-                SET email = %s
-                WHERE email = %s;
-            """, (
-                novo_email,
-                email_original
-            ))
-
-
-        conn.commit()
-
-
-    except Exception:
-
-        if conn:
-            conn.rollback()
-
-        log.exception(
-            "Erro editando usuário."
-        )
-
-        return redirect(
-            "/admin_panel"
-        )
-
-    finally:
-
-        if cur:
-            cur.close()
-
-        if conn:
-            conn.close()
-
-
-    return redirect(
-        "/admin_panel"
-    )
-
-
-# ============================================================
-# ADMIN — RENOVAR
-# ============================================================
-
-@app.route(
-    "/adm/renovar",
-    methods=["POST"]
-)
-def admin_renovar():
-
-    admin = exigir_admin()
-
-    if not isinstance(admin, str):
-        return admin
-
-
-    validar_csrf()
-
-
-    email = (
-        request.form
-        .get("email", "")
-        .strip()
-        .lower()
-    )
-
-
-    if not validar_email(email):
-        abort(400)
-
-
-    if not obter_usuario(email):
-        abort(404)
-
-
-    nova_data = (
-        agora_brasilia()
-        .strftime("%Y-%m-%d")
-    )
-
-
-    conn = None
-    cur = None
-
-    try:
-
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            UPDATE usuarios
-            SET criado_em = %s
-            WHERE email = %s;
-        """, (
-            nova_data,
-            email
-        ))
-
-        conn.commit()
-
-    except Exception:
-
-        if conn:
-            conn.rollback()
-
-        log.exception(
-            "Erro renovando usuário."
-        )
-
-    finally:
-
-        if cur:
-            cur.close()
-
-        if conn:
-            conn.close()
-
-
-    return redirect(
-        "/admin_panel"
-    )
-
-
-# ============================================================
-# ADMIN — LIBERAR IP
-# ============================================================
-
-@app.route(
-    "/adm/liberar_ip",
-    methods=["POST"]
-)
-def admin_liberar_ip():
-
-    admin = exigir_admin()
-
-    if not isinstance(admin, str):
-        return admin
-
-
-    validar_csrf()
-
-
-    email = (
-        request.form
-        .get("email", "")
-        .strip()
-        .lower()
-    )
-
-
-    if not validar_email(email):
-        abort(400)
-
-
-    conn = None
-    cur = None
-
-    try:
-
-        conn = get_db_connection()
-
-        cur = conn.cursor()
-
-        cur.execute("""
-            UPDATE usuarios
-            SET ips_autorizados = '[]'
-            WHERE email = %s;
-        """, (
-            email,
-        ))
-
-        conn.commit()
-
-    except Exception:
-
-        if conn:
-            conn.rollback()
-
-        log.exception(
-            "Erro liberando IP."
-        )
-
-    finally:
-
-        if cur:
-            cur.close()
-
-        if conn:
-            conn.close()
-
-
-    return redirect(
-        "/admin_panel"
-    )
-
-
-# ============================================================
-# ADMIN — EXCLUIR
-# ============================================================
-
-@app.route(
-    "/adm/excluir",
-    methods=["POST"]
-)
-def admin_excluir():
-
-    admin = exigir_admin()
-
-    if not isinstance(admin, str):
-        return admin
-
-
-    validar_csrf()
-
-
-    email = (
-        request.form
-        .get("email", "")
-        .strip()
-        .lower()
-    )
-
-
-    if email == ADMIN_EMAIL:
-        abort(403)
-
-
-    if not validar_email(email):
-        abort(400)
-
-
-    conn = None
-    cur = None
-
-    try:
-
-        conn = get_db_connection()
-
-        cur = conn.cursor()
-
-        cur.execute("""
-            DELETE FROM historico_sinais
-            WHERE user_email = %s;
-        """, (
-            email,
-        ))
-
-        cur.execute("""
-            DELETE FROM usuarios
-            WHERE email = %s;
-        """, (
-            email,
-        ))
-
-        conn.commit()
-
-
-        limpar_estado(email)
-
-        with ONLINE_LOCK:
-            ONLINE.pop(email, None)
-
-
-    except Exception:
-
-        if conn:
-            conn.rollback()
-
-        log.exception(
-            "Erro excluindo usuário."
-        )
-
-    finally:
-
-        if cur:
-            cur.close()
-
-        if conn:
-            conn.close()
-
-
-    return redirect(
-        "/admin_panel"
-    )
-
-
-# ============================================================
-# LOOP DO BOT
-# ============================================================
-
-BOT_GLOBAL_ATIVO = True
-
-
-def gerar_sinal_para_usuario(
-    email,
-    estado
-):
-
-    mercado = estado["mercado"]
-
-    timeframe = estado["timeframe"]
-
-    estrategia = estado["estrategia"]
-
-
-    if mercado == "OTC":
-
-        estado["ultimo_sinal"] = (
-            "<div class='console' "
-            "style='color:#f59e0b'>"
-            "⚠️ MERCADO OTC"
-            "<br>"
-            "Análise automática indisponível."
-            "</div>"
-        )
-
-        return False
-
-
-    if mercado == "TODOS":
-
-        ativos = (
-            ATIVOS_BASE["FOREX"]
-            + ATIVOS_BASE["CRIPTO"]
-        )
-
-    else:
-
-        ativos = ATIVOS_BASE.get(
-            mercado,
-            []
-        )
-
-
-    for ativo in ativos:
-
-        if not (
-            estado["bot_iniciado"]
-            and not estado["bot_pausado"]
-            and not estado[
-                "aguardando_resultado"
-            ]
-        ):
-            return False
-
-
-        estado["ativo_atual"] = ativo
-
-
-        ticker = MAPA_TICKERS.get(
-            ativo
-        )
-
-
-        mercado_atual = (
-            "CRIPTO"
-            if ativo in ATIVOS_BASE["CRIPTO"]
-            else "FOREX"
-        )
-
-
-        estado["ultimo_sinal"] = (
-            "<div class='console'>"
-            "🔍 ANALISANDO: "
-            f"<b>{ativo}</b>"
-            f" — M{timeframe}"
-            "</div>"
-        )
-
-
-        data = get_data_v2(
-            ticker,
-            timeframe,
-            mercado_atual
-        )
-
-
-        if not data:
-            continue
-
-
-        sinal = None
-
-        estrategia_encontrada = estrategia
-
-
-        if estrategia == "TODAS":
-
-            sinais = []
-
-            for est in LISTA_ESTRATEGIAS:
-
-                resultado = analisar_estrategia(
-                    data,
-                    est
-                )
-
-                if resultado:
-                    sinais.append(
-                        (est, resultado)
-                    )
-
-
-            if sinais:
-
-                # Só aceita quando há pelo menos
-                # duas estratégias concordando.
-                contagem_call = sum(
-                    1
-                    for _, s in sinais
-                    if s == "CALL"
-                )
-
-                contagem_put = sum(
-                    1
-                    for _, s in sinais
-                    if s == "PUT"
-                )
-
-
-                if contagem_call >= 2:
-
-                    sinal = "CALL"
-
-                    estrategia_encontrada = (
-                        "CONFLUÊNCIA"
-                    )
-
-                elif contagem_put >= 2:
-
-                    sinal = "PUT"
-
-                    estrategia_encontrada = (
-                        "CONFLUÊNCIA"
-                    )
-
-        else:
-
-            sinal = analisar_estrategia(
-                data,
-                estrategia
-            )
-
-
-        if not sinal:
-            continue
-
-
-        agora = agora_brasilia()
-
-
-        minutos_passados = (
-            agora.minute
-            % timeframe
-        )
-
-
-        segundos_passados = (
-            minutos_passados * 60
-            + agora.second
-        )
-
-
-        segundos_restantes = (
-            timeframe * 60
-            - segundos_passados
-        )
-
-
-        proxima_entrada = (
-            agora
-            + timedelta(
-                seconds=segundos_restantes
-            )
-        )
-
-
-        saida = (
-            proxima_entrada
-            + timedelta(
-                minutes=timeframe
-            )
-        )
-
-
-        entrada_str = (
-            proxima_entrada
-            .strftime("%H:%M")
-        )
-
-
-        saida_str = (
-            saida
-            .strftime("%H:%M")
-        )
-
-
-        estado["ultimo_sinal"] = (
-            "<div style='text-align:center'>"
-            "⚠️ <b>PREPARE O ATIVO</b>"
-            "<br><br>"
-            f"<b>{ativo}</b>"
-            "<br>"
-            f"Entrada: <b>{entrada_str}</b>"
-            "<br>"
-            f"M{timeframe}"
-            "<br><br>"
-            "<small>"
-            "Aguardando confirmação..."
-            "</small>"
-            "</div>"
-        )
-
-
-        # Aguarda a próxima vela.
-        while (
-            agora_brasilia()
-            < proxima_entrada
-        ):
-
-            if not (
-                estado["bot_iniciado"]
-                and not estado["bot_pausado"]
-            ):
-                return False
-
-            if estado[
-                "aguardando_resultado"
-            ]:
-                return False
-
-            time.sleep(0.5)
-
-
-        direcao_cor = (
-            "#10b981"
-            if sinal == "CALL"
-            else "#ef4444"
-        )
-
-
-        estado["sinal_display"] = (
-            "<div>"
-            "<h3 style='color:#00f2fe'>"
-            "🎯 SINAL CONFIRMADO"
-            "</h3>"
-            "<br>"
-            f"<b>ATIVO:</b> {ativo}"
-            "<br>"
-            f"<b>DIREÇÃO:</b> "
-            f"<span style='color:{direcao_cor}'>"
-            f"{sinal}"
-            "</span>"
-            "<br>"
-            f"<b>TIMEFRAME:</b> M{timeframe}"
-            "<br>"
-            f"<b>EXPIRAÇÃO:</b> {saida_str}"
-            "<br>"
-            f"<small>"
-            f"Estratégia: {estrategia_encontrada}"
-            "</small>"
-            "</div>"
-        )
-
-
-        estado["ultimo_sinal"] = (
-            estado["sinal_display"]
-        )
-
-
-        estado["ultimo_ativo_sinal"] = (
-            f"{ativo} | "
-            f"{sinal} | "
-            f"M{timeframe}"
-        )
-
-
-        estado["entrada"] = entrada_str
-
-        estado["saida"] = saida_str
-
-        estado["aguardando_resultado"] = True
-
-
-        registrar_sinal_bd(
-            email,
-            estado["ultimo_ativo_sinal"]
-        )
-
-
-        return True
-
-
-    return False
-
-
+        if res == 'win':
+            atualizar_estatisticas_usuario(user, True)
+            atualizar_ultimo_sinal_bd(user, "Win")
+            enviar_telegram("💎 <b>RESULTADO: WIN DIRETO!</b> ✅", user_solicitante=user)
+        elif res == 'g1':
+            atualizar_estatisticas_usuario(user, True)
+            atualizar_ultimo_sinal_bd(user, "WinG1")
+            enviar_telegram("🔄 <b>RESULTADO: WIN NO GALE 1!</b> ✅", user_solicitante=user)
+        elif res == 'red':
+            atualizar_estatisticas_usuario(user, False)
+            atualizar_ultimo_sinal_bd(user, "Red")
+            enviar_telegram("📉 <b>RESULTADO: STOP LOSS / RED</b> ❌", user_solicitante=user)
+        elif res == 'pular':
+            atualizar_ultimo_sinal_bd(user, "Ignorado")
+            enviar_telegram("⚠️ <b>SINAL IGNORADO / PULADO</b>", user_solicitante=user)
+
+        AGUARDANDO_CONFIRMACAO_RESULTADO = False
+        SINAL_DISPLAY_PERMANENTE = None
+        
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[RETOMANDO VARREDURA]</span></div><div class='tech-scanner'></div>"
+    
+    AG_RESULTADO = False
+    return redirect('/')
+
+# ================= LOOP PRINCIPAL DO BOT =================
 def bot_loop():
+    global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, QUEM_INICIOU_O_BOT, NOTIFICACAO_SISTEMA
 
-    while BOT_GLOBAL_ATIVO:
-
+    while BOT_RODANDO:
         try:
+            if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
+                time.sleep(1)
+                continue
 
-            usuarios = carregar_usuarios()
+            if TIPO_MERCADO == "TODOS":
+                ativos = ATIVOS_BASE["FOREX"] + ATIVOS_BASE["CRIPTO"]
+            else:
+                ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX"])
 
-            for email in usuarios:
+            for ativo in ativos:
+                if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
+                    break
 
-                estado = obter_estado(email)
+                ATIVO_ATUAL_GLOBAL = ativo
+                ticker = MAPA_TICKERS.get(ativo, f"{ativo}=X" if TIPO_MERCADO != "CRIPTO" else ativo.replace("USD", "-USD"))
 
+                # Atualiza na interface qual par o robô está lendo
+                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
 
-                if not (
-                    estado["bot_iniciado"]
-                    and not estado["bot_pausado"]
-                ):
+                # Dá tempo para o frontend (página HTML) atualizar e o usuário conseguir ver o ativo na tela
+                time.sleep(1.0) 
+
+                data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
+                if not data:
                     continue
 
+                sinal_encontrado = None
+                est_nome_encontrada = ESTRATEGIA_ESCOLHIDA
 
-                if estado[
-                    "aguardando_resultado"
-                ]:
-                    continue
+                if ESTRATEGIA_ESCOLHIDA == "TODAS":
+                    for est_nome in LISTA_ESTRATEGIAS:
+                        sinal_encontrado = analisar_estrategia(data, est_nome)
+                        if sinal_encontrado:
+                            est_nome_encontrada = est_nome
+                            break
+                else:
+                    sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
 
+                if sinal_encontrado:
+                    agora = agora_brasilia()
+                    
+                    minutos_passados = agora.minute % TIMEFRAME_OPERACAO
+                    segundos_passados = minutos_passados * 60 + agora.second
+                    total_segundos_tf = TIMEFRAME_OPERACAO * 60
+                    segundos_restantes = total_segundos_tf - segundos_passados
 
-                try:
+                    prox_minuto_entrada = agora + timedelta(seconds=segundos_restantes)
+                    horario_saida = prox_minuto_entrada + timedelta(minutes=TIMEFRAME_OPERACAO)
 
-                    gerar_sinal_para_usuario(
-                        email,
-                        estado
+                    str_entrada = prox_minuto_entrada.strftime("%H:%M")
+                    str_saida = horario_saida.strftime("%H:%M")
+
+                    msg_pre_alerta = (
+                        f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE</b> ⚠️\n\n"
+                        f"<b>Ativo:</b> {ativo}\n"
+                        f"<b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
+                        f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
+                        f"👉 <i>Abra o ativo na sua corretora e prepare-se!</i>"
+                    )
+                    
+                    ULTIMO_SINAL_GLOBAL = (
+                        f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
+                        f"⚠️ <b>PREPARE O ATIVO: {ativo}</b> ⚠️<br>"
+                        f"<span style='color:#fff;'>Entrada às <b>{str_entrada}</b> (M{TIMEFRAME_OPERACAO})</span><br>"
+                        f"<span style='font-size:12px; color:#94a3b8;'>Aguardando fechamento da vela para confirmar...</span>"
+                        f"</div>"
                     )
 
-                except Exception:
+                    NOTIFICACAO_SISTEMA = {
+                        "id": str(time.time()),
+                        "titulo": f"⚠️ PREPARE-SE: {ativo}",
+                        "corpo": f"Possível entrada às {str_entrada} (M{TIMEFRAME_OPERACAO}). Abra o gráfico!"
+                    }
 
-                    log.exception(
-                        "Erro no bot do usuário %s",
-                        email
+                    msg_pre_id = enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
+
+                    while agora_brasilia() < prox_minuto_entrada:
+                        if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
+                            break
+                        time.sleep(1)
+
+                    if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
+                        continue
+
+                    msg_sinal = (
+                        f"🎯 <b>SINAL CONFIRMADO - ENTRADA AGORA!</b> 🎯\n\n"
+                        f"💱 <b>Paridade:</b> {ativo}\n"
+                        f"⏱ <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
+                        f"↕️ <b>Direção:</b> {sinal_encontrado}\n"
+                        f"🧠 <b>Estratégia:</b> {est_nome_encontrada}\n\n"
+                        f"⌛ <b>Expiração:</b> {str_saida}\n"
+                        f"💡 <i>Gerencie seu capital com responsabilidade.</i>"
                     )
-
-
-                time.sleep(0.2)
-
-
-            time.sleep(1)
-
-
-        except Exception:
-
-            log.exception(
-                "Erro geral no loop do bot."
-            )
-
+                    
+                    enviar_telegram(msg_sinal, auto_delete=None, user_solicitante=QUEM_INICIOU_O_BOT)
+                    
+                    SINAL_DISPLAY_PERMANENTE = (
+                        f"<div class='status-box' style='border-color:#00f2fe; background:rgba(0,242,254,0.1);'>"
+                        f"<h3 style='color:#00f2fe; margin-bottom:10px;'>🎯 SINAL CONFIRMADO!</h3>"
+                        f"<b>ATIVO:</b> {ativo} | <b>DIREÇÃO:</b> <span style='color:{'#10b981' if sinal_encontrado=='CALL' else '#ef4444'}'>{sinal_encontrado}</span><br>"
+                        f"<b>TIMEFRAME:</b> M{TIMEFRAME_OPERACAO} | <b>EXPIRAÇÃO:</b> {str_saida}"
+                        f"</div>"
+                    )
+                    
+                    AGUARDANDO_CONFIRMACAO_RESULTADO = True
+                    registrar_sinal_bd(QUEM_INICIOU_O_BOT or ADMIN_EMAIL, f"{ativo} | {sinal_encontrado} | M{TIMEFRAME_OPERACAO}")
+                    
+                    break  
+            
+            time.sleep(1.5)
+        except Exception as err:
+            print(f"Erro no loop do bot: {err}")
             time.sleep(5)
 
+# ================= CORREÇÃO AQUI: REINSERINDO INÍCIO DA THREAD =================
+thread_iniciada = False
+lock_thread = threading.Lock()
 
-# ============================================================
-# INICIAR THREAD DO BOT
-# ============================================================
+@app.before_request
+def start_background_loop():
+    """Garante que a thread inicie em qualquer ambiente (Render, Gunicorn, Heroku)"""
+    global thread_iniciada
+    if not thread_iniciada:
+        with lock_thread:
+            if not thread_iniciada:
+                threading.Thread(target=bot_loop, daemon=True).start()
+                thread_iniciada = True
 
-thread_bot = threading.Thread(
-    target=bot_loop,
-    daemon=True,
-    name="VisionBot"
-)
-
-thread_bot.start()
-
-
-# ============================================================
-# EXECUÇÃO
-# ============================================================
-
-if __name__ == "__main__":
-
-    port = int(
-        os.getenv(
-            "PORT",
-            "5000"
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False,
-        threaded=True
-    )
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
