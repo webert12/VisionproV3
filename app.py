@@ -1296,11 +1296,8 @@ def bot_loop():
                 # Atualiza na interface qual par o robô está lendo
                 ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
 
-                # >>> CORREÇÃO DO PROBLEMA <<<
-                # O robô checa os gráficos em milésimos e pula os ativos muito rápido, 
-                # e o navegador que carrega de segundo a segundo não conseguia ver o resultado.
-                # Esse sleep dá tempo ao painel (que checa via fetch a cada 1000ms) puxar e exibir visualmente os ativos trocando.
-                time.sleep(1.5)
+                # Dá tempo para o frontend (página HTML) atualizar e o usuário conseguir ver o ativo na tela
+                time.sleep(1.0) 
 
                 data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
                 if not data:
@@ -1356,7 +1353,6 @@ def bot_loop():
 
                     msg_pre_id = enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
 
-                    # Espera a vela terminar
                     while agora_brasilia() < prox_minuto_entrada:
                         if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
                             break
@@ -1365,7 +1361,6 @@ def bot_loop():
                     if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
                         continue
 
-                    # Confirma o Sinal e solicita resposta do usuário no Painel
                     msg_sinal = (
                         f"🎯 <b>SINAL CONFIRMADO - ENTRADA AGORA!</b> 🎯\n\n"
                         f"💱 <b>Paridade:</b> {ativo}\n"
@@ -1389,18 +1384,27 @@ def bot_loop():
                     AGUARDANDO_CONFIRMACAO_RESULTADO = True
                     registrar_sinal_bd(QUEM_INICIOU_O_BOT or ADMIN_EMAIL, f"{ativo} | {sinal_encontrado} | M{TIMEFRAME_OPERACAO}")
                     
-                    # Interrompe a varredura atual e aguarda que o botão (Win/Loss) seja apertado no Front
                     break  
             
-            # Pequeno intervalo antes de rodar o loop global novamente
-            time.sleep(2)
+            time.sleep(1.5)
         except Exception as err:
             print(f"Erro no loop do bot: {err}")
             time.sleep(5)
 
+# ================= CORREÇÃO AQUI: REINSERINDO INÍCIO DA THREAD =================
+thread_iniciada = False
+lock_thread = threading.Lock()
+
+@app.before_request
+def start_background_loop():
+    """Garante que a thread inicie em qualquer ambiente (Render, Gunicorn, Heroku)"""
+    global thread_iniciada
+    if not thread_iniciada:
+        with lock_thread:
+            if not thread_iniciada:
+                threading.Thread(target=bot_loop, daemon=True).start()
+                thread_iniciada = True
+
 if __name__ == '__main__':
-    # Inicia o motor de análise no background assim que ligar a aplicação
-    threading.Thread(target=bot_loop, daemon=True).start()
-    
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
