@@ -211,29 +211,6 @@ HTML_LOGIN = """
         .links { margin-top: 25px; font-size: 13px; }
         a { color: #00f2fe; text-decoration: none; margin: 0 8px; font-weight: 500; }
         a:hover { text-decoration: underline; }
-
-        .whatsapp-float {
-            position: fixed;
-            width: 55px;
-            height: 55px;
-            bottom: 20px;
-            right: 20px;
-            background-color: #25d366;
-            color: #FFF;
-            border-radius: 50px;
-            text-align: center;
-            font-size: 30px;
-            box-shadow: 0px 4px 10px rgba(0,0,0,0.3);
-            z-index: 1000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            text-decoration: none;
-            transition: transform 0.3s ease;
-        }
-        .whatsapp-float:hover {
-            transform: scale(1.1);
-        }
     </style>
 </head>
 <body>
@@ -461,7 +438,7 @@ HTML_INDEX = """
             
             <div class="settings-grid full">
                 <div class="setting-group">
-                    <label>ESTRATÉGIA OPERACIONAL (C/ FILTROS MACD)</label>
+                    <label>ESTRATÉGIA OPERACIONAL</label>
                     <div class="select-wrapper">
                         <select class="modern-select" onchange="sendCommand('set_est_' + this.value)">
                             <option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS (Modo Inteligente)</option>
@@ -645,12 +622,12 @@ def init_db():
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro ao inicializar tabelas do Banco: {e}")
+        print(f"Aviso de Inicialização DB: {e}")
 
 try:
     init_db()
 except Exception as e:
-    print(f"Aviso de Inicialização DB: {e}")
+    pass
 
 def parse_ips(ips_raw):
     try:
@@ -721,7 +698,7 @@ def adicionar_ip_usuario(email, ip_cliente):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro Banco: {e}")
+        pass
 
 def liberar_ip_usuario_db(email):
     try:
@@ -733,7 +710,7 @@ def liberar_ip_usuario_db(email):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Erro Banco: {e}")
+        pass
 
 def atualizar_estatisticas_usuario(email, is_win):
     try:
@@ -913,7 +890,7 @@ for par in ATIVOS_BASE["FOREX"]: MAPA_TICKERS[par] = f"{par}=X"
 for par in ATIVOS_BASE["CRIPTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE OTIMIZADO =================
-def get_data_v2(ticker, tf, period='5d'): # CORREÇÃO: Usar 5d garante que o script sobreviva aos finais de semana e evite retornar None para Forex
+def get_data_v2(ticker, tf, period='5d'):
     try:
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval={tf}m&range={period}"
         headers = {
@@ -973,7 +950,6 @@ def analisar_estrategia(data, estrategia, i=-1):
         p_sup = max(0, h[i] - max(o[i], c[i]))
         p_inf = max(0, min(o[i], c[i]) - l[i])
         
-        # CORREÇÃO: Tolerância para matemática de precisão Float no Forex
         tolerancia = tamanho * 0.05
         
         if cor == "G" and p_inf >= (tamanho * 0.8): sinal = "CALL"
@@ -985,7 +961,6 @@ def analisar_estrategia(data, estrategia, i=-1):
         diff = np.diff(c[i-14:i])
         up = diff[diff > 0]
         down = abs(diff[diff < 0])
-        # CORREÇÃO: Usar 1e-7 ao invés de 0.0001 porque o Forex tem variações ínfimas e 0.0001 ofuscava o cálculo
         avg_up = np.mean(up) if len(up) > 0 else 1e-7
         avg_down = np.mean(down) if len(down) > 0 else 1e-7
         rs = avg_up / avg_down
@@ -1004,7 +979,7 @@ def analisar_estrategia(data, estrategia, i=-1):
         for j in range(i-2, i+1):
             if c[j] > o[j] + 1e-6: cores.append("G")
             elif c[j] < o[j] - 1e-6: cores.append("R")
-            else: cores.append("D") # Ignora o Doji para não afetar matemática limpa
+            else: cores.append("D") 
             
         qtd_g = cores.count("G")
         qtd_r = cores.count("R")
@@ -1291,7 +1266,7 @@ def resultado(res):
         AGUARDANDO_CONFIRMACAO_RESULTADO = False
         SINAL_DISPLAY_PERMANENTE = None
         
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[RETOMANDO VARREDURA]</span></div><div class='tech-scanner'></div>"
     
     AG_RESULTADO = False
     return redirect('/')
@@ -1318,7 +1293,14 @@ def bot_loop():
                 ATIVO_ATUAL_GLOBAL = ativo
                 ticker = MAPA_TICKERS.get(ativo, f"{ativo}=X" if TIPO_MERCADO != "CRIPTO" else ativo.replace("USD", "-USD"))
 
+                # Atualiza na interface qual par o robô está lendo
                 ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA EM ANDAMENTO]</span></div><div class='tech-scanner'></div>"
+
+                # >>> CORREÇÃO DO PROBLEMA <<<
+                # O robô checa os gráficos em milésimos e pula os ativos muito rápido, 
+                # e o navegador que carrega de segundo a segundo não conseguia ver o resultado.
+                # Esse sleep dá tempo ao painel (que checa via fetch a cada 1000ms) puxar e exibir visualmente os ativos trocando.
+                time.sleep(1.5)
 
                 data = get_data_v2(ticker, TIMEFRAME_OPERACAO)
                 if not data:
@@ -1372,7 +1354,6 @@ def bot_loop():
                         "corpo": f"Possível entrada às {str_entrada} (M{TIMEFRAME_OPERACAO}). Abra o gráfico!"
                     }
 
-                    # ======= CÓDIGO CORRIGIDO E COMPLETADO A PARTIR DAQUI =======
                     msg_pre_id = enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
 
                     # Espera a vela terminar
