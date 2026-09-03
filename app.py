@@ -418,9 +418,11 @@ HTML_INDEX = """
                     <label>TIPO DE MERCADO</label>
                     <div class="select-wrapper">
                         <select class="modern-select" onchange="sendCommand('mkt_' + this.value)">
-                            <option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>Todos os Ativos (Forex e Cripto OTC)</option>
-                            <option value="FOREX" {% if modo == 'FOREX' %}selected{% endif %}>Apenas Forex / OTC</option>
-                            <option value="CRIPTO" {% if modo == 'CRIPTO' %}selected{% endif %}>Apenas Cripto / OTC</option>
+                            <option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>Analisar Tudo</option>
+                            <option value="FOREX_ABERTO" {% if modo == 'FOREX_ABERTO' %}selected{% endif %}>Forex Aberto (Seg a Sex)</option>
+                            <option value="CRIPTO_ABERTO" {% if modo == 'CRIPTO_ABERTO' %}selected{% endif %}>Criptomoedas (24/7)</option>
+                            <option value="FOREX_OTC" {% if modo == 'FOREX_OTC' %}selected{% endif %}>Forex OTC (Exclusivo FDS)</option>
+                            <option value="CRIPTO_OTC" {% if modo == 'CRIPTO_OTC' %}selected{% endif %}>Cripto OTC (Exclusivo FDS)</option>
                         </select>
                     </div>
                 </div>
@@ -879,39 +881,40 @@ ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
 SINAL_DISPLAY_PERMANENTE = None
 ATIVO_ATUAL_GLOBAL = "AGUARDANDO..."
 
-# NOVAS VARIÁVEIS PARA CONTROLE DE DELAY E DUPLICIDADE
 INICIO_VARREDURA_TIME = 0
-SINAIS_ENVIADOS = {} # Substitui o antigo ULTIMO_HORARIO_ENTRADA
+SINAIS_ENVIADOS = {} 
 
-# ================= ATIVOS EXPANSAO TOTAL (FOREX OTC + CRIPTO OTC / REAL TIME) =================
+# ================= ATIVOS DIVIDIDOS ABERTO E OTC =================
 ATIVOS_BASE = {
-    "FOREX": [
+    "FOREX_ABERTO": [
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
+        "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCAD", "EURCHF"
+    ],
+    "CRIPTO_ABERTO": [
+        "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "ADAUSD", "AVAXUSD",
+        "LINKUSD", "DOGEUSD", "DOTUSD", "MATICUSD", "LTCUSD", "SHIBUSD", "TRXUSD"
+    ],
+    "FOREX_OTC": [
         "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC", "USDCAD-OTC", "USDCHF-OTC", "NZDUSD-OTC",
         "EURGBP-OTC", "EURJPY-OTC", "GBPJPY-OTC", "AUDJPY-OTC", "EURAUD-OTC", "EURCAD-OTC", "EURCHF-OTC"
     ],
-    "CRIPTO": [
+    "CRIPTO_OTC": [
         "BTCUSD-OTC", "ETHUSD-OTC", "SOLUSD-OTC", "BNBUSD-OTC", "XRPUSD-OTC", "ADAUSD-OTC", "AVAXUSD-OTC",
         "LINKUSD-OTC", "DOGEUSD-OTC", "DOTUSD-OTC", "MATICUSD-OTC", "LTCUSD-OTC", "SHIBUSD-OTC", "TRXUSD-OTC"
     ]
 }
 
+# ================= MAPEAMENTO PARA BUSCAR OS DADOS (YAHOO/CRYPTO) =================
 MAPA_TICKERS = {}
-for par in ATIVOS_BASE["FOREX"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X")
-for par in ATIVOS_BASE["CRIPTO"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
+for par in ATIVOS_BASE["FOREX_ABERTO"]: MAPA_TICKERS[par] = par + "=X"
+for par in ATIVOS_BASE["CRIPTO_ABERTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
+for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X")
+for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
 def get_data_v2(ticker, tf, velas_minimas=30):
     try:
         base_ticker = ticker
-        if "=X" not in ticker and "-USD" not in ticker:
-            if "-OTC" in ticker:
-                if "USD" in ticker and not any(f in ticker for f in ["EUR", "GBP", "AUD", "CAD", "CHF", "NZD", "JPY"]):
-                    base_ticker = ticker.replace("-OTC", "").replace("USD", "-USD")
-                else:
-                    base_ticker = ticker.replace("-OTC", "=X")
-            elif len(ticker) == 6 and not ticker.endswith("=X"):
-                base_ticker = ticker + "=X"
-
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*'
@@ -1228,7 +1231,7 @@ def command(cmd):
         AGUARDANDO_CONFIRMACAO_RESULTADO = False
         SINAL_DISPLAY_PERMANENTE = None
         INICIO_VARREDURA_TIME = time.time() + 4 
-        SINAIS_ENVIADOS.clear() # Zera o cache de repetições
+        SINAIS_ENVIADOS.clear() 
         
         ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
         ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE</b><br><span style='color:#00f2fe;'>[AGUARDANDO CICLO DO MERCADO...]</span></div><div class='tech-scanner'></div>"
@@ -1270,7 +1273,7 @@ def command(cmd):
     elif cmd.startswith("tf_"): 
         TIMEFRAME_OPERACAO = int(cmd.split('_')[1])
     elif cmd.startswith("mkt_"): 
-        TIPO_MERCADO = cmd.split('_')[1]
+        TIPO_MERCADO = cmd.split('_', 1)[1] 
     elif cmd.startswith("set_est_"): 
         ESTRATEGIA_ESCOLHIDA = cmd.replace("set_est_", "")
     
@@ -1333,11 +1336,10 @@ def bot_loop():
                 continue
 
             if TIPO_MERCADO == "TODOS":
-                ativos = ATIVOS_BASE["FOREX"] + ATIVOS_BASE["CRIPTO"]
+                ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
             else:
-                ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX"])
+                ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX_ABERTO"])
 
-            # Embaralha os ativos para não focar apenas no primeiro (EURUSD)
             ativos_scan = ativos.copy()
             random.shuffle(ativos_scan)
 
@@ -1381,11 +1383,9 @@ def bot_loop():
                     str_entrada = prox_minuto_entrada.strftime("%H:%M")
                     str_saida = horario_saida.strftime("%H:%M")
 
-                    # Bloqueia disparo múltiplo/aleatório verificando se ESTE ATIVO já disparou NESTE MINUTO
                     if SINAIS_ENVIADOS.get(ativo) == str_entrada:
                         continue
 
-                    # Salva a trava deste ativo
                     SINAIS_ENVIADOS[ativo] = str_entrada
                     
                     nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
