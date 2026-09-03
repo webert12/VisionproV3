@@ -881,7 +881,7 @@ ATIVO_ATUAL_GLOBAL = "AGUARDANDO..."
 
 # NOVAS VARIÁVEIS PARA CONTROLE DE DELAY E DUPLICIDADE
 INICIO_VARREDURA_TIME = 0
-ULTIMO_HORARIO_ENTRADA = None
+SINAIS_ENVIADOS = {} # Substitui o antigo ULTIMO_HORARIO_ENTRADA
 
 # ================= ATIVOS EXPANSAO TOTAL (FOREX OTC + CRIPTO OTC / REAL TIME) =================
 ATIVOS_BASE = {
@@ -1217,7 +1217,7 @@ def status():
 
 @app.route('/command/<cmd>')
 def command(cmd):
-    global BOT_INICIADO, BOT_PAUSADO, TIMEFRAME_OPERACAO, TIPO_MERCADO, QUEM_INICIOU_O_BOT, ULTIMO_SINAL_GLOBAL, AG_RESULTADO, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, ESTRATEGIA_ESCOLHIDA, ATIVO_ATUAL_GLOBAL, INICIO_VARREDURA_TIME, ULTIMO_HORARIO_ENTRADA
+    global BOT_INICIADO, BOT_PAUSADO, TIMEFRAME_OPERACAO, TIPO_MERCADO, QUEM_INICIOU_O_BOT, ULTIMO_SINAL_GLOBAL, AG_RESULTADO, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, ESTRATEGIA_ESCOLHIDA, ATIVO_ATUAL_GLOBAL, INICIO_VARREDURA_TIME, SINAIS_ENVIADOS
     user = session.get('user')
 
     if cmd == "start_bot":
@@ -1227,8 +1227,8 @@ def command(cmd):
         AG_RESULTADO = False
         AGUARDANDO_CONFIRMACAO_RESULTADO = False
         SINAL_DISPLAY_PERMANENTE = None
-        INICIO_VARREDURA_TIME = time.time() + 4 # Impede a varredura instantânea ao clicar no botão
-        ULTIMO_HORARIO_ENTRADA = None # Reseta o bloqueio de duplicidade
+        INICIO_VARREDURA_TIME = time.time() + 4 
+        SINAIS_ENVIADOS.clear() # Zera o cache de repetições
         
         ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
         ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE</b><br><span style='color:#00f2fe;'>[AGUARDANDO CICLO DO MERCADO...]</span></div><div class='tech-scanner'></div>"
@@ -1307,7 +1307,7 @@ def resultado(res):
 
 # ================= LOOP PRINCIPAL DO BOT =================
 def bot_loop():
-    global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, QUEM_INICIOU_O_BOT, NOTIFICACAO_SISTEMA, ULTIMO_HORARIO_ENTRADA
+    global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, QUEM_INICIOU_O_BOT, NOTIFICACAO_SISTEMA, SINAIS_ENVIADOS
 
     while BOT_RODANDO:
         try:
@@ -1324,9 +1324,6 @@ def bot_loop():
             segundos_passados = minutos_passados * 60 + agora_scan.second
             segundos_restantes = (TIMEFRAME_OPERACAO * 60) - segundos_passados
 
-            # O pulo do gato: Só escaneia e toma decisão no final da vela 
-            # (Ex: últimos 30 segs p/ M1, últimos 45 segs p/ M5 e M15).
-            # Impede alertas instantâneos ao dar start ou logo após confirmar operação.
             tempo_limite = 30 if TIMEFRAME_OPERACAO == 1 else 45
             
             if segundos_restantes > tempo_limite:
@@ -1340,7 +1337,11 @@ def bot_loop():
             else:
                 ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX"])
 
-            for ativo in ativos:
+            # Embaralha os ativos para não focar apenas no primeiro (EURUSD)
+            ativos_scan = ativos.copy()
+            random.shuffle(ativos_scan)
+
+            for ativo in ativos_scan:
                 if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
                     break
 
@@ -1380,11 +1381,13 @@ def bot_loop():
                     str_entrada = prox_minuto_entrada.strftime("%H:%M")
                     str_saida = horario_saida.strftime("%H:%M")
 
-                    # Bloqueia disparo múltiplo/aleatório dentro do mesmo minuto de expiração
-                    if ULTIMO_HORARIO_ENTRADA == f"{ativo}_{str_entrada}":
+                    # Bloqueia disparo múltiplo/aleatório verificando se ESTE ATIVO já disparou NESTE MINUTO
+                    if SINAIS_ENVIADOS.get(ativo) == str_entrada:
                         continue
 
-                    ULTIMO_HORARIO_ENTRADA = f"{ativo}_{str_entrada}"
+                    # Salva a trava deste ativo
+                    SINAIS_ENVIADOS[ativo] = str_entrada
+                    
                     nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
 
                     msg_pre_alerta = (
