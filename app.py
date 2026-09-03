@@ -50,6 +50,11 @@ def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
 
     if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
         return None
+
+    # VALIDAÇÃO RIGOROSA DE ADM: Apenas envia pro Telegram se a ação/sessão foi iniciada pelo e-mail ADM
+    usuario_ativo = (user_solicitante or QUEM_INICIOU_O_BOT or "").strip().lower()
+    if usuario_ativo != ADMIN_EMAIL:
+        return None
         
     try:
         url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
@@ -1144,10 +1149,8 @@ def register():
 
 @app.route('/logout')
 def logout():
-    global QUEM_INICIOU_O_BOT
     user = session.get('user')
     if user in USUARIOS_ONLINE: del USUARIOS_ONLINE[user]
-    if user == QUEM_INICIOU_O_BOT: QUEM_INICIOU_O_BOT = None
     session.clear()
     return redirect('/login')
 
@@ -1287,6 +1290,7 @@ def command(cmd):
         if user:
             zerar_estatisticas_usuario(user)
         enviar_telegram("🔴 <b>ROBÔ ENCERRADO!</b>", user_solicitante=user)
+        QUEM_INICIOU_O_BOT = None
         return jsonify({"ok": True})
 
     elif cmd.startswith("tf_"): 
@@ -1411,6 +1415,7 @@ def bot_loop():
                     
                     nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
 
+                    # ALERTA PRÉVIO DE ATENÇÃO
                     msg_pre_alerta = (
                         f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n"
                         f"<b>Ativo:</b> {ativo}\n"
@@ -1434,6 +1439,7 @@ def bot_loop():
                         "corpo": f"Possível entrada às {str_entrada} (M{TIMEFRAME_OPERACAO}) via {nome_est_formatado}. Abra o gráfico!"
                     }
 
+                    # Envia o Alerta para o Telegram
                     enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
 
                     while agora_brasilia() < prox_minuto_entrada:
@@ -1444,6 +1450,7 @@ def bot_loop():
                     if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
                         continue
 
+                    # SINAL CONFIRMADO NO MOMENTO EXATO DA ENTRADA
                     msg_sinal = (
                         f"🎯 <b>SINAL CONFIRMADO - ENTRADA AGORA!</b> 🎯\n\n"
                         f"💱 <b>Paridade:</b> {ativo}\n"
@@ -1454,6 +1461,7 @@ def bot_loop():
                         f"💡 <i>Gerencie seu capital com responsabilidade.</i>"
                     )
                     
+                    # Envia a Confirmação de Entrada para o Telegram
                     enviar_telegram(msg_sinal, auto_delete=None, user_solicitante=QUEM_INICIOU_O_BOT)
                     
                     SINAL_DISPLAY_PERMANENTE = (
