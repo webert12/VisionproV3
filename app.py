@@ -74,7 +74,6 @@ def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
     chat_id = CHAT_ID_TELEGRAM.strip()
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     
-    # Tentativa 1: Enviar formatado em HTML
     payload = {
         "chat_id": chat_id, 
         "text": mensagem, 
@@ -92,7 +91,6 @@ def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
             return msg_id
         else:
             print(f"⚠️ Telegram API Recusou HTML ({r.get('description')}). Tentando formato Texto...")
-            # Fallback: Tenta enviar removendo as tags HTML para garantir a entrega
             texto_limpo = re.sub('<[^<]+?>', '', mensagem)
             payload_plain = {
                 "chat_id": chat_id, 
@@ -487,9 +485,9 @@ HTML_INDEX = """
                     <label>ESTRATÉGIA OPERACIONAL</label>
                     <div class="select-wrapper">
                         <select class="modern-select" onchange="sendCommand('set_est_' + this.value)">
-                            <option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS (Análise Dinâmica Múltipla)</option>
-                            <option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + Cruzamento MACD + MA</option>
+                            <option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS (Analisar Todas as Estratégias)</option>
                             <option value="LOGICA_DO_PRECO" {% if estrat == 'LOGICA_DO_PRECO' %}selected{% endif %}>Lógica do Preço</option>
+                            <option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + Cruzamento MACD + MA</option>
                             <option value="MHI1" {% if estrat == 'MHI1' %}selected{% endif %}>MHI 1 (+ Filtro Tendência)</option>
                             <option value="REVERSAO" {% if estrat == 'REVERSAO' %}selected{% endif %}>Reversão de Bandas</option>
                         </select>
@@ -965,7 +963,6 @@ def get_data_v2(ticker, tf, velas_minimas=30):
             if len(ohlc["close"]) >= velas_minimas:
                 return ohlc
 
-        # Fallback CryptoCompare
         if "-USD" in base_ticker or "USD" in ticker:
             crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
             url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=100&aggregate={tf}"
@@ -982,13 +979,9 @@ def get_data_v2(ticker, tf, velas_minimas=30):
                 if len(closes) >= velas_minimas:
                     return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
         
-        # Fallback de mercado sintético para garantir funcionamento contínuo
         base_val = 1.0850 if "EUR" in ticker else (65000.0 if "BTC" in ticker else 150.0)
         times = np.array([int(time.time()) - (i * tf * 60) for i in range(velas_minimas, 0, -1)])
-        closes = []
-        opens = []
-        highs = []
-        lows = []
+        closes, opens, highs, lows = [], [], [], []
         c = base_val
         for _ in range(velas_minimas):
             o = c + random.uniform(-0.0005, 0.0005)
@@ -1020,6 +1013,7 @@ def calcular_ema(dados, periodo):
         ema[i] = (dados[i] - ema[i-1]) * multiplicador + ema[i-1]
     return ema
 
+# ================= MOTOR DE ESTRATÉGIAS =================
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
     
@@ -1036,12 +1030,16 @@ def analisar_estrategia(data, estrategia, i=-1):
             p_sup = h[i] - max(o[i], c[i])
             p_inf = min(o[i], c[i]) - l[i]
             
-            if cor == "G" and p_inf >= (amplitude * 0.40) and p_sup <= (amplitude * 0.25):
+            # Rejeição de Fundo / Suporte (Martelo / Rejeição vendedora)
+            if cor == "G" and p_inf >= (amplitude * 0.45) and p_sup <= (amplitude * 0.20):
                 sinal = "CALL"
-            elif cor == "R" and p_sup >= (amplitude * 0.40) and p_inf <= (amplitude * 0.25):
+            # Rejeição de Topo / Resistência (Estrela Cadente / Rejeição compradora)
+            elif cor == "R" and p_sup >= (amplitude * 0.45) and p_inf <= (amplitude * 0.20):
                 sinal = "PUT"
+            # Exaustão Compradora
             elif cor == "G" and p_sup >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
                 sinal = "PUT"
+            # Exaustão Vendedora
             elif cor == "R" and p_inf >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
                 sinal = "CALL"
 
@@ -1059,11 +1057,10 @@ def analisar_estrategia(data, estrategia, i=-1):
             ema26 = calcular_ema(c, 26)
             macd_line = ema12 - ema26
             signal_line = calcular_ema(macd_line, 9)
-            ma20 = np.mean(c[-20:])
 
-            if rsi < 35 or (rsi < 48 and macd_line[i] > signal_line[i]):
+            if rsi <= 35 and macd_line[i] > signal_line[i]:
                 sinal = "CALL"
-            elif rsi > 65 or (rsi > 52 and macd_line[i] < signal_line[i]):
+            elif rsi >= 65 and macd_line[i] < signal_line[i]:
                 sinal = "PUT"
 
     elif estrategia == "MHI1":
@@ -1073,20 +1070,30 @@ def analisar_estrategia(data, estrategia, i=-1):
             elif c[j] < o[j]: cores.append("R")
             else: cores.append("D") 
             
-        qtd_g = cores.count("G")
-        qtd_r = cores.count("R")
-        
-        if qtd_g > qtd_r and qtd_r > 0: sinal = "PUT"
-        elif qtd_r > qtd_g and qtd_g > 0: sinal = "CALL"
+        if "D" not in cores:
+            qtd_g = cores.count("G")
+            qtd_r = cores.count("R")
+            
+            ema20 = np.mean(c[-20:])
+            if qtd_g == 2 and qtd_r == 1 and c[i] <= ema20:
+                sinal = "PUT"
+            elif qtd_r == 2 and qtd_g == 1 and c[i] >= ema20:
+                sinal = "CALL"
+            elif qtd_g == 3:
+                sinal = "PUT"
+            elif qtd_r == 3:
+                sinal = "CALL"
 
     elif estrategia in ["REVERSAO", "RETRACAO"]:
         std = np.std(c[-20:])
         ma = np.mean(c[-20:])
-        banda_superior = ma + (1.8 * std)
-        banda_inferior = ma - (1.8 * std)
+        banda_superior = ma + (2.0 * std)
+        banda_inferior = ma - (2.0 * std)
 
-        if c[i] <= banda_inferior: sinal = "CALL"
-        elif c[i] >= banda_superior: sinal = "PUT"
+        if c[i] <= banda_inferior and c[i] < o[i]: 
+            sinal = "CALL"
+        elif c[i] >= banda_superior and c[i] > o[i]: 
+            sinal = "PUT"
 
     return sinal
 
@@ -1374,11 +1381,10 @@ def resultado(res):
     
     return redirect('/')
 
-# ================= ASYNCHRONOUS SIGNAL DISPATCHER =================
+# ================= DISPARADOR ASSÍNCRONO DE SINAIS =================
 def disparar_sinal_assincrono(user_email, ativo, tf, sinal_encontrado, nome_est_formatado, str_entrada, str_saida, prox_minuto_entrada):
     st = get_user_state(user_email)
     
-    # Aguarda o momento exato de entrada sem travar o loop de outros ativos
     while agora_brasilia() < prox_minuto_entrada:
         if not st.get("bot_iniciado") or st.get("bot_pausado") or st.get("aguardando_confirmacao"):
             return
@@ -1387,7 +1393,6 @@ def disparar_sinal_assincrono(user_email, ativo, tf, sinal_encontrado, nome_est_
     if not st.get("bot_iniciado") or st.get("bot_pausado") or st.get("aguardando_confirmacao"):
         return
 
-    # SINAL CONFIRMADO NO MOMENTO EXATO DA ENTRADA
     msg_sinal = (
         f"🎯 <b>SINAL CONFIRMADO - ENTRADA AGORA!</b> 🎯\n\n"
         f"💱 <b>Paridade:</b> {ativo}\n"
@@ -1441,7 +1446,6 @@ def bot_loop():
                     mkt = st.get("tipo_mercado", "TODOS")
                     user_est = st.get("estrategia", "TODAS")
 
-                    # SELEÇÃO COMPLETA DE ATIVOS COM SUPORTE A TODOS OS FILTROS
                     if mkt == "TODOS":
                         ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
                     elif mkt == "ABERTO_TODOS":
@@ -1475,20 +1479,26 @@ def bot_loop():
                             continue
 
                         sinal_encontrado = None
-                        est_nome_encontrada = user_est
+                        est_nome_encontrada = None
 
+                        # CORREÇÃO PRINCIPAL: DEFINE AS ESTRATÉGIAS A SEREM ANALISADAS
                         if user_est == "TODAS":
-                            estrategias_embaralhadas = LISTA_ESTRATEGIAS.copy()
-                            random.shuffle(estrategias_embaralhadas)
-                            
-                            for est_nome in estrategias_embaralhadas:
-                                sinal_test = analisar_estrategia(data, est_nome)
-                                if sinal_test:
-                                    sinal_encontrado = sinal_test
-                                    est_nome_encontrada = est_nome
-                                    break
+                            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+                            random.shuffle(estrategias_para_analisar)  # Variação dinâmica de teste por ciclo
+                        elif "," in str(user_est):
+                            estrategias_para_analisar = [e.strip() for e in user_est.split(",") if e.strip() in LISTA_ESTRATEGIAS]
+                        elif user_est in LISTA_ESTRATEGIAS:
+                            estrategias_para_analisar = [user_est]
                         else:
-                            sinal_encontrado = analisar_estrategia(data, user_est)
+                            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+
+                        # PERCORRE TODAS AS ESTRATÉGIAS SELECIONADAS PARA O ATIVO ATUAL
+                        for est_nome in estrategias_para_analisar:
+                            sinal_test = analisar_estrategia(data, est_nome)
+                            if sinal_test:
+                                sinal_encontrado = sinal_test
+                                est_nome_encontrada = est_nome
+                                break  # Sinal gerado com sucesso nesta estratégia
 
                         if sinal_encontrado:
                             agora = agora_brasilia()
@@ -1510,7 +1520,6 @@ def bot_loop():
                             st["sinais_enviados"][ativo] = str_entrada
                             nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
 
-                            # ALERTA PRÉVIO DE ATENÇÃO
                             msg_pre_alerta = (
                                 f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n"
                                 f"<b>Ativo:</b> {ativo}\n"
@@ -1536,7 +1545,6 @@ def bot_loop():
 
                             enviar_telegram(msg_pre_alerta, user_solicitante=user_email)
 
-                            # Dispara confirmação de sinal em thread separada para manter a varredura ativa
                             threading.Thread(
                                 target=disparar_sinal_assincrono, 
                                 args=(user_email, ativo, tf, sinal_encontrado, nome_est_formatado, str_entrada, str_saida, prox_minuto_entrada),
