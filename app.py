@@ -67,23 +67,26 @@ def get_client_ip():
 def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
     if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
         return None
-
-    usuario_ativo = (user_solicitante or "").strip().lower()
-    if usuario_ativo != ADMIN_EMAIL:
-        return None
         
     try:
         url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
-        payload = {"chat_id": CHAT_ID_TELEGRAM, "text": mensagem, "parse_mode": "HTML"}
-        r = requests.post(url, json=payload, timeout=5).json()
+        payload = {
+            "chat_id": CHAT_ID_TELEGRAM, 
+            "text": mensagem, 
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
+        }
+        r = requests.post(url, json=payload, timeout=8).json()
         if r.get("ok"):
             msg_id = r["result"]["message_id"]
             if auto_delete:
                 threading.Thread(target=deletar_mensagem_atrasada, args=(msg_id, auto_delete)).start()
             return msg_id
+        else:
+            print(f"⚠️ Erro ao enviar Telegram: {r}")
         return None
     except Exception as e:
-        print(f"Erro Telegram: {e}")
+        print(f"❌ Erro de conexão Telegram: {e}")
         return None
 
 def deletar_mensagem_telegram(msg_id):
@@ -431,11 +434,11 @@ HTML_INDEX = """
                     <label>TIPO DE MERCADO</label>
                     <div class="select-wrapper">
                         <select class="modern-select" onchange="sendCommand('mkt_' + this.value)">
-                            <option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>Analisar Tudo</option>
+                            <option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>Analisar Tudo (Aberto + OTC)</option>
                             <option value="FOREX_ABERTO" {% if modo == 'FOREX_ABERTO' %}selected{% endif %}>Forex Aberto (Seg a Sex)</option>
                             <option value="CRIPTO_ABERTO" {% if modo == 'CRIPTO_ABERTO' %}selected{% endif %}>Criptomoedas (24/7)</option>
-                            <option value="FOREX_OTC" {% if modo == 'FOREX_OTC' %}selected{% endif %}>Forex OTC (Exclusivo FDS)</option>
-                            <option value="CRIPTO_OTC" {% if modo == 'CRIPTO_OTC' %}selected{% endif %}>Cripto OTC (Exclusivo FDS)</option>
+                            <option value="FOREX_OTC" {% if modo == 'FOREX_OTC' %}selected{% endif %}>Forex OTC (Noite/FDS)</option>
+                            <option value="CRIPTO_OTC" {% if modo == 'CRIPTO_OTC' %}selected{% endif %}>Cripto OTC (Noite/FDS)</option>
                         </select>
                     </div>
                 </div>
@@ -982,13 +985,14 @@ def analisar_estrategia(data, estrategia, i=-1):
             p_sup = h[i] - max(o[i], c[i])
             p_inf = min(o[i], c[i]) - l[i]
             
-            if cor == "G" and p_inf >= (amplitude * 0.45) and p_sup <= (amplitude * 0.25):
+            # Padrões refinados da lógica do preço
+            if cor == "G" and p_inf >= (amplitude * 0.50) and p_sup <= (amplitude * 0.20):
                 sinal = "CALL"
-            elif cor == "R" and p_sup >= (amplitude * 0.45) and p_inf <= (amplitude * 0.25):
+            elif cor == "R" and p_sup >= (amplitude * 0.50) and p_inf <= (amplitude * 0.20):
                 sinal = "PUT"
-            elif cor == "G" and p_sup >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
+            elif cor == "G" and p_sup >= (amplitude * 0.55) and tamanho <= (amplitude * 0.30):
                 sinal = "PUT"
-            elif cor == "R" and p_inf >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
+            elif cor == "R" and p_inf >= (amplitude * 0.55) and tamanho <= (amplitude * 0.30):
                 sinal = "CALL"
 
     elif estrategia == "RSI_MACD_MA":
@@ -1007,17 +1011,10 @@ def analisar_estrategia(data, estrategia, i=-1):
             signal_line = calcular_ema(macd_line, 9)
             ma20 = np.mean(c[-20:])
 
-            if (rsi < 45 or macd_line[i] > signal_line[i]) and c[i] >= ma20:
+            # Gatilhos refinados de confluência real
+            if rsi < 32 or (rsi < 45 and macd_line[i] > signal_line[i] and macd_line[i-1] <= signal_line[i-1] and c[i] >= ma20):
                 sinal = "CALL"
-            elif rsi < 35:
-                sinal = "CALL"
-            elif (rsi > 55 or macd_line[i] < signal_line[i]) and c[i] <= ma20:
-                sinal = "PUT"
-            elif rsi > 65:
-                sinal = "PUT"
-            elif rsi < 48 and macd_line[i] > macd_line[i-1]:
-                sinal = "CALL"
-            elif rsi > 52 and macd_line[i] < macd_line[i-1]:
+            elif rsi > 68 or (rsi > 55 and macd_line[i] < signal_line[i] and macd_line[i-1] >= signal_line[i-1] and c[i] <= ma20):
                 sinal = "PUT"
 
     elif estrategia == "MHI1":
@@ -1030,8 +1027,8 @@ def analisar_estrategia(data, estrategia, i=-1):
         qtd_g = cores.count("G")
         qtd_r = cores.count("R")
         
-        if qtd_g > qtd_r: sinal = "PUT"
-        elif qtd_r > qtd_g: sinal = "CALL"
+        if qtd_g > qtd_r and qtd_r > 0: sinal = "PUT"
+        elif qtd_r > qtd_g and qtd_g > 0: sinal = "CALL"
 
     elif estrategia in ["REVERSAO", "RETRACAO"]:
         std = np.std(c[-20:])
@@ -1355,6 +1352,7 @@ def bot_loop():
                         st["ultimo_sinal"] = f"<div class='system-console'>⏳ ANALISANDO HISTÓRICO...<br><span style='color:#00f2fe;'>[PRÓXIMA VARREDURA EM {segundos_restantes - tempo_limite}s]</span></div><div class='tech-scanner'></div>"
                         continue
 
+                    # SELEÇÃO COMPLETA DE ATIVOS
                     if mkt == "TODOS":
                         ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
                     else:
@@ -1386,9 +1384,12 @@ def bot_loop():
                         sinal_encontrado = None
                         est_nome_encontrada = user_est
 
-                        # SE ESCOLHER "TODAS": Analisa o ativo contra todas as estratégias e aceita a primeira que der sinal
+                        # SE ESCOLHER "TODAS": Embaralha a ordem de checagem para dar oportunidades iguais a cada estratégia
                         if user_est == "TODAS":
-                            for est_nome in LISTA_ESTRATEGIAS:
+                            estrategias_embaralhadas = LISTA_ESTRATEGIAS.copy()
+                            random.shuffle(estrategias_embaralhadas)
+                            
+                            for est_nome in estrategias_embaralhadas:
                                 sinal_test = analisar_estrategia(data, est_nome)
                                 if sinal_test:
                                     sinal_encontrado = sinal_test
