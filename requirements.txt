@@ -1,8 +1,7 @@
-Flask==3.0.3
-requests==2.32.3
-pytz==2024.1
-numpy==1.26.4
-werkzeug==3.0.3
-supabase==2.7.4
-gunicorn==23.0.0
+Flask
+requests
+pytz
+numpy
 psycopg2-binary
+gunicorn
+websocket-client
