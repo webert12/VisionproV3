@@ -22,7 +22,7 @@ FUSO_SP = pytz.timezone('America/Sao_Paulo')
 def agora_brasilia():
     return datetime.now(FUSO_SP)
 
-# ================= CONFIGURAÇÕES DE AMBIENTE =================
+# ================= CONFIGURAÇÕES DE AMBIENTE E BOT TELEGRAM =================
 TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU")
 CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
@@ -1438,7 +1438,6 @@ def bot_loop():
                     # -------------------------------------------------------------
                     alerta = st.get("alerta_ativo")
                     if alerta:
-                        # Chegou o momento da entrada (fechamento da vela de análise)
                         if agora_scan >= alerta["prox_minuto_entrada"]:
                             ativo = alerta["ativo"]
                             sinal = alerta["sinal"]
@@ -1473,7 +1472,6 @@ def bot_loop():
                             st["alerta_ativo"] = None
                             alerta = None
 
-                    # Se o robô já disparou o sinal e aguarda o resultado (WIN/LOSS), bloqueia novos alertas
                     bloquear_novos_alertas = st.get("aguardando_confirmacao", False)
 
                     # -------------------------------------------------------------
@@ -1498,7 +1496,6 @@ def bot_loop():
                         st["ativo_atual"] = ativo
                         ticker = MAPA_TICKERS.get(ativo, ativo)
 
-                        # Exibe no painel qual ativo está sendo analisado
                         if not alerta and not st.get("aguardando_confirmacao"):
                             st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
 
@@ -1527,7 +1524,6 @@ def bot_loop():
                         else:
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
 
-                        # Testa as estratégias e pega a que der a maior porcentagem
                         for est_nome in estrategias_para_analisar:
                             sinal_test, prob_test = analisar_estrategia(data, est_nome)
                             if sinal_test and prob_test > maior_prob:
@@ -1535,7 +1531,6 @@ def bot_loop():
                                 est_nome_encontrada = est_nome
                                 maior_prob = prob_test
 
-                        # Se gerou uma confluência válida e o robô pode gerar alertas:
                         if sinal_encontrado and not bloquear_novos_alertas:
                             agora = agora_brasilia()
                             
@@ -1552,17 +1547,12 @@ def bot_loop():
 
                             nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
 
-                            # -----------------------------------------------------------------
-                            # LÓGICA DE OVERWRITE: SE JÁ EXISTIR UM ALERTA ATIVO NO MESMO CICLO
-                            # -----------------------------------------------------------------
+                            # Substituição se houver um sinal com probabilidade superior no mesmo ciclo
                             if alerta:
-                                # Se o novo ativo tem UMA PROBABILIDADE MAIOR que o alerta ativo atual:
                                 if maior_prob > alerta.get("probabilidade", 0):
-                                    # 1. Apaga a mensagem do alerta anterior no Telegram
                                     if alerta.get("msg_id"):
                                         deletar_mensagem_telegram(alerta["msg_id"])
 
-                                    # 2. Envia o alerta substituto do ativo com MAIOR assertividade
                                     msg_pre_alerta = (
                                         f"⚡ <b>ALERTA ATUALIZADO: MAIOR PROBABILIDADE DETECTADA!</b> ⚡\n\n"
                                         f"<b>Ativo:</b> {ativo} ({maior_prob}% de Assertividade)\n"
@@ -1596,7 +1586,6 @@ def bot_loop():
                                     alerta = st["alerta_ativo"]
 
                             else:
-                                # SE NÃO EXISTIA NENHUM ALERTA, DISPARA O PRIMEIRO PRÉ-ALERTA
                                 if st["sinais_enviados"].get(ativo) == str_entrada:
                                     continue
 
