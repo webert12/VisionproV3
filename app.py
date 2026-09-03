@@ -35,10 +35,29 @@ def get_db_connection():
     return psycopg2.connect(DB_URL)
 
 USUARIOS_ONLINE = {}
-DADOS_USUARIOS = {}
+DADOS_USUARIOS = {}  # Estrutura isolada por e-mail de usuário
 
-ULTIMO_MSG_ID_TELEGRAM = None
-QUEM_INICIOU_O_BOT = None
+def get_user_state(email):
+    """Garante que cada usuário possui seu próprio estado independente no painel."""
+    if not email:
+        return None
+    email_clean = email.strip().lower()
+    if email_clean not in DADOS_USUARIOS:
+        DADOS_USUARIOS[email_clean] = {
+            "timeframe": 5,
+            "tipo_mercado": "TODOS",
+            "estrategia": "TODAS",
+            "bot_iniciado": False,
+            "bot_pausado": True,
+            "aguardando_confirmacao": False,
+            "sinal_permanente": None,
+            "ultimo_sinal": "Aguardando Comando...",
+            "ativo_atual": "AGUARDANDO...",
+            "inicio_varredura": 0,
+            "sinais_enviados": {},
+            "notificacao": None
+        }
+    return DADOS_USUARIOS[email_clean]
 
 def get_client_ip():
     if request.headers.get('X-Forwarded-For'):
@@ -46,13 +65,10 @@ def get_client_ip():
     return request.remote_addr
 
 def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
-    global ULTIMO_MSG_ID_TELEGRAM, QUEM_INICIOU_O_BOT
-
     if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
         return None
 
-    # VALIDAÇÃO RIGOROSA DE ADM: Apenas envia pro Telegram se a ação/sessão foi iniciada pelo e-mail ADM
-    usuario_ativo = (user_solicitante or QUEM_INICIOU_O_BOT or "").strip().lower()
+    usuario_ativo = (user_solicitante or "").strip().lower()
     if usuario_ativo != ADMIN_EMAIL:
         return None
         
@@ -62,8 +78,6 @@ def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
         r = requests.post(url, json=payload, timeout=5).json()
         if r.get("ok"):
             msg_id = r["result"]["message_id"]
-            if any(term in mensagem for term in ["SINAL CONFIRMADO", "🔥", "🎯", "Sinal confirmado", "ATENÇÃO"]):
-                ULTIMO_MSG_ID_TELEGRAM = msg_id
             if auto_delete:
                 threading.Thread(target=deletar_mensagem_atrasada, args=(msg_id, auto_delete)).start()
             return msg_id
@@ -92,8 +106,6 @@ app = Flask(__name__)
 app.secret_key = APP_SECRET
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
-
-NOTIFICACAO_SISTEMA = None
 
 # ================= TEMPLATES HTML =================
 HTML_ADM = """
@@ -390,7 +402,7 @@ HTML_INDEX = """
         </div>
 
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
-            MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">TODOS</b> | 
+            MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
             ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
         </div>
 
@@ -444,7 +456,7 @@ HTML_INDEX = """
                     <label>ESTRATÉGIA OPERACIONAL</label>
                     <div class="select-wrapper">
                         <select class="modern-select" onchange="sendCommand('set_est_' + this.value)">
-                            <option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS (Modo Inteligente)</option>
+                            <option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS (Análise Dinâmica Múltipla)</option>
                             <option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + Cruzamento MACD + MA</option>
                             <option value="LOGICA_DO_PRECO" {% if estrat == 'LOGICA_DO_PRECO' %}selected{% endif %}>Lógica do Preço</option>
                             <option value="MHI1" {% if estrat == 'MHI1' %}selected{% endif %}>MHI 1 (+ Filtro Tendência)</option>
@@ -629,7 +641,7 @@ def init_db():
 
 try:
     init_db()
-except Exception as e:
+except Exception:
     pass
 
 def parse_ips(ips_raw):
@@ -658,7 +670,7 @@ def carregar_usuarios():
                 u_dict["ips_Formatados"] = ", ".join(ips_list) if ips_list else "Nenhum (Livre)"
                 dict_usuarios[email] = u_dict
         return dict_usuarios
-    except Exception as e:
+    except Exception:
         return {}
 
 def salvar_usuario(email, senha, data=None, ip_inicial=None):
@@ -700,7 +712,7 @@ def adicionar_ip_usuario(email, ip_cliente):
             
         cur.close()
         conn.close()
-    except Exception as e:
+    except Exception:
         pass
 
 def liberar_ip_usuario_db(email):
@@ -712,7 +724,7 @@ def liberar_ip_usuario_db(email):
         conn.commit()
         cur.close()
         conn.close()
-    except Exception as e:
+    except Exception:
         pass
 
 def atualizar_estatisticas_usuario(email, is_win):
@@ -738,7 +750,7 @@ def atualizar_estatisticas_usuario(email, is_win):
 
         cur.close()
         conn.close()
-    except Exception as e:
+    except Exception:
         pass
 
 def zerar_estatisticas_usuario(email):
@@ -750,7 +762,7 @@ def zerar_estatisticas_usuario(email):
         conn.commit()
         cur.close()
         conn.close()
-    except Exception as e:
+    except Exception:
         pass
 
 def renovar_usuario_db(email):
@@ -762,7 +774,7 @@ def renovar_usuario_db(email):
         conn.commit()
         cur.close()
         conn.close()
-    except Exception as e:
+    except Exception:
         pass
 
 def excluir_usuario_db(email):
@@ -775,7 +787,7 @@ def excluir_usuario_db(email):
             conn.commit()
             cur.close()
             conn.close()
-    except Exception as e:
+    except Exception:
         pass
 
 def verificar_assinatura(email):
@@ -795,14 +807,8 @@ def verificar_assinatura(email):
         data_criacao = datetime.strptime(criado_str, "%Y-%m-%d")
         dias_restantes = 30 - (agora_brasilia().replace(tzinfo=None) - data_criacao).days
         return (True, dias_restantes) if dias_restantes > 0 else (False, 0)
-    except Exception as e:
+    except Exception:
         return True, 30
-
-def init_user_session(email):
-    if email not in DADOS_USUARIOS:
-        DADOS_USUARIOS[email] = {
-            "sinal_atual": "Aguardando Início..."
-        }
 
 def registrar_sinal_bd(email, sinal_str):
     try:
@@ -815,7 +821,7 @@ def registrar_sinal_bd(email, sinal_str):
         conn.commit()
         cur.close()
         conn.close()
-    except Exception as e:
+    except Exception:
         pass
 
 def buscar_historico_bd(email):
@@ -832,7 +838,7 @@ def buscar_historico_bd(email):
         cur.close()
         conn.close()
         return [{"id": r["id"], "sinal": r["sinal"], "res": r["resultado"]} for r in res]
-    except Exception as e:
+    except Exception:
         return []
 
 def atualizar_ultimo_sinal_bd(email, resultado):
@@ -854,13 +860,10 @@ def atualizar_ultimo_sinal_bd(email, resultado):
 
         cur.close()
         conn.close()
-    except Exception as e:
+    except Exception:
         pass
 
-# ================= BOT CONFIGS =================
-TIMEFRAME_OPERACAO = 5
-TIPO_MERCADO = "TODOS"
-ESTRATEGIA_ESCOLHIDA = "TODAS"
+# ================= BOT CONFIGS & ESTRATÉGIAS =================
 LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
 
 NOME_ESTRATEGIAS_DISPLAY = {
@@ -868,22 +871,8 @@ NOME_ESTRATEGIAS_DISPLAY = {
     "RSI_MACD_MA": "RSI + Cruzamento MACD + MA",
     "MHI1": "MHI 1 (+ Filtro Tendência)",
     "REVERSAO": "Reversão de Bandas",
-    "TODAS": "Modo Inteligente (Confluência)"
+    "TODAS": "Análise Dinâmica Múltipla"
 }
-
-BOT_RODANDO = True
-BOT_PAUSADO = True
-BOT_INICIADO = False
-
-AG_RESULTADO = False
-AGUARDANDO_CONFIRMACAO_RESULTADO = False
-
-ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
-SINAL_DISPLAY_PERMANENTE = None
-ATIVO_ATUAL_GLOBAL = "AGUARDANDO..."
-
-INICIO_VARREDURA_TIME = 0
-SINAIS_ENVIADOS = {} 
 
 # ================= ATIVOS DIVIDIDOS ABERTO E OTC =================
 ATIVOS_BASE = {
@@ -905,7 +894,7 @@ ATIVOS_BASE = {
     ]
 }
 
-# ================= MAPEAMENTO PARA BUSCAR OS DADOS (YAHOO/CRYPTO) =================
+# ================= MAPEAMENTO DE TICKERS =================
 MAPA_TICKERS = {}
 for par in ATIVOS_BASE["FOREX_ABERTO"]: MAPA_TICKERS[par] = par + "=X"
 for par in ATIVOS_BASE["CRIPTO_ABERTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
@@ -964,7 +953,7 @@ def get_data_v2(ticker, tf, velas_minimas=30):
             return None
 
         return ohlc
-    except Exception as e:
+    except Exception:
         return None
 
 def calcular_ema(dados, periodo):
@@ -993,16 +982,12 @@ def analisar_estrategia(data, estrategia, i=-1):
             p_sup = h[i] - max(o[i], c[i])
             p_inf = min(o[i], c[i]) - l[i]
             
-            # Rejeição de Fundo em vela verde (Pavio inferior expressivo)
             if cor == "G" and p_inf >= (amplitude * 0.45) and p_sup <= (amplitude * 0.25):
                 sinal = "CALL"
-            # Rejeição de Topo em vela vermelha (Pavio superior expressivo)
             elif cor == "R" and p_sup >= (amplitude * 0.45) and p_inf <= (amplitude * 0.25):
                 sinal = "PUT"
-            # Martelo Invertido em topo de movimento
             elif cor == "G" and p_sup >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
                 sinal = "PUT"
-            # Martelo em fundo de movimento
             elif cor == "R" and p_inf >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
                 sinal = "CALL"
 
@@ -1121,7 +1106,7 @@ def login():
 
         session['user'] = e
         USUARIOS_ONLINE[e] = time.time()
-        init_user_session(e)
+        get_user_state(e)
         return redirect('/')
 
     return render_template_string(HTML_LOGIN)
@@ -1140,7 +1125,7 @@ def register():
             salvar_usuario(e, s, ip_inicial=ip_cliente)
             session['user'] = e
             USUARIOS_ONLINE[e] = time.time()
-            init_user_session(e)
+            get_user_state(e)
             return redirect('/')
         except Exception as err:
             return render_template_string(HTML_REGISTER, erro=f"Erro ao salvar: {err}")
@@ -1196,7 +1181,7 @@ def adm_editar():
         conn.commit()
         cur.close()
         conn.close()
-    except Exception as e:
+    except Exception:
         pass
         
     return redirect('/admin_panel')
@@ -1212,8 +1197,8 @@ def index():
     if 'user' not in session: return redirect('/login')
     user = session['user']
     USUARIOS_ONLINE[user] = time.time()
-    init_user_session(user)
-    return render_template_string(HTML_INDEX, modo=TIPO_MERCADO, tf=TIMEFRAME_OPERACAO, estrat=ESTRATEGIA_ESCOLHIDA, user=user, admin=ADMIN_EMAIL)
+    st = get_user_state(user)
+    return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL)
 
 @app.route('/status')
 def status():
@@ -1221,92 +1206,91 @@ def status():
     if not user: return jsonify({})
     USUARIOS_ONLINE[user] = time.time()
     
+    st = get_user_state(user)
     usuarios = carregar_usuarios()
     u_info = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
     historico = buscar_historico_bd(user)
     
-    display_texto = SINAL_DISPLAY_PERMANENTE if (AGUARDANDO_CONFIRMACAO_RESULTADO and SINAL_DISPLAY_PERMANENTE) else ULTIMO_SINAL_GLOBAL
+    display_texto = st["sinal_permanente"] if (st["aguardando_confirmacao"] and st["sinal_permanente"]) else st["ultimo_sinal"]
 
     return jsonify({
         "html": display_texto, 
-        "aguardando": AGUARDANDO_CONFIRMACAO_RESULTADO, 
+        "aguardando": st["aguardando_confirmacao"], 
         "wins": u_info.get("wins", 0),
         "reds": u_info.get("reds", 0), 
         "winrate": u_info.get("winrate", 0.0), 
         "historico": historico,
-        "ativo_atual": ATIVO_ATUAL_GLOBAL,
-        "mercado": TIPO_MERCADO,
-        "rodando": BOT_INICIADO and not BOT_PAUSADO,
-        "notificacao": NOTIFICACAO_SISTEMA
+        "ativo_atual": st["ativo_atual"],
+        "mercado": st["tipo_mercado"],
+        "rodando": st["bot_iniciado"] and not st["bot_pausado"],
+        "notificacao": st["notificacao"]
     })
 
 @app.route('/command/<cmd>')
 def command(cmd):
-    global BOT_INICIADO, BOT_PAUSADO, TIMEFRAME_OPERACAO, TIPO_MERCADO, QUEM_INICIOU_O_BOT, ULTIMO_SINAL_GLOBAL, AG_RESULTADO, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, ESTRATEGIA_ESCOLHIDA, ATIVO_ATUAL_GLOBAL, INICIO_VARREDURA_TIME, SINAIS_ENVIADOS
     user = session.get('user')
+    if not user:
+        return jsonify({"ok": False})
+    
+    st = get_user_state(user)
 
     if cmd == "start_bot":
-        QUEM_INICIOU_O_BOT = user
-        BOT_INICIADO = True
-        BOT_PAUSADO = False
-        AG_RESULTADO = False
-        AGUARDANDO_CONFIRMACAO_RESULTADO = False
-        SINAL_DISPLAY_PERMANENTE = None
-        INICIO_VARREDURA_TIME = time.time() + 4 
-        SINAIS_ENVIADOS.clear() 
+        st["bot_iniciado"] = True
+        st["bot_pausado"] = False
+        st["aguardando_confirmacao"] = False
+        st["sinal_permanente"] = None
+        st["inicio_varredura"] = time.time() + 4 
+        st["sinais_enviados"].clear() 
         
-        ATIVO_ATUAL_GLOBAL = "INICIANDO VARREDURA..."
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE</b><br><span style='color:#00f2fe;'>[AGUARDANDO CICLO DO MERCADO...]</span></div><div class='tech-scanner'></div>"
+        st["ativo_atual"] = "INICIANDO VARREDURA..."
+        st["ultimo_sinal"] = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE</b><br><span style='color:#00f2fe;'>[AGUARDANDO CICLO DO MERCADO...]</span></div><div class='tech-scanner'></div>"
         
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
             f"🟢 <b>Status:</b> Análise de 30 velas ativada / Varredura em tempo real\n"
-            f"👤 <b>Administrador:</b> {user}\n"
-            f"📊 <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
-            f"🌐 <b>Mercado:</b> {TIPO_MERCADO}\n"
-            f"⚙️ <b>Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(ESTRATEGIA_ESCOLHIDA, ESTRATEGIA_ESCOLHIDA)}\n\n"
+            f"👤 <b>Usuário:</b> {user}\n"
+            f"📊 <b>Timeframe:</b> M{st['timeframe']}\n"
+            f"🌐 <b>Mercado:</b> {st['tipo_mercado']}\n"
+            f"⚙️ <b>Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(st['estrategia'], st['estrategia'])}\n\n"
             f"<i>Analisando histórico de candles para obter sinais confirmados...</i>"
         )
         enviar_telegram(msg_inicio_telegram, user_solicitante=user)
         return jsonify({"ok": True})
 
     elif cmd == "pause_bot":
-        BOT_PAUSADO = not BOT_PAUSADO
-        status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if BOT_PAUSADO else f"🔍 ANALISANDO: {ATIVO_ATUAL_GLOBAL} (M{TIMEFRAME_OPERACAO})"
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if BOT_PAUSADO else f"<div class='system-console'>🔍 ANALISANDO 30 VELAS: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
-        msg_pause = "⏸ <b>SISTEMA PAUSADO</b>" if BOT_PAUSADO else "▶️ <b>SISTEMA RETOMADO!</b>"
+        st["bot_pausado"] = not st["bot_pausado"]
+        status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if st["bot_pausado"] else f"🔍 ANALISANDO: {st['ativo_atual']} (M{st['timeframe']})"
+        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO 30 VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
+        msg_pause = "⏸ <b>SISTEMA PAUSADO</b>" if st["bot_pausado"] else "▶️ <b>SISTEMA RETOMADO!</b>"
         enviar_telegram(msg_pause, user_solicitante=user)
         return jsonify({"ok": True})
 
     elif cmd == "stop_bot":
-        BOT_INICIADO = False
-        BOT_PAUSADO = True
-        AG_RESULTADO = False
-        AGUARDANDO_CONFIRMACAO_RESULTADO = False
-        SINAL_DISPLAY_PERMANENTE = None
-        ATIVO_ATUAL_GLOBAL = "DESCONECTADO"
-        ULTIMO_SINAL_GLOBAL = "Aguardando Comando..."
+        st["bot_iniciado"] = False
+        st["bot_pausado"] = True
+        st["aguardando_confirmacao"] = False
+        st["sinal_permanente"] = None
+        st["ativo_atual"] = "DESCONECTADO"
+        st["ultimo_sinal"] = "Aguardando Comando..."
         
-        if user:
-            zerar_estatisticas_usuario(user)
+        zerar_estatisticas_usuario(user)
         enviar_telegram("🔴 <b>ROBÔ ENCERRADO!</b>", user_solicitante=user)
-        QUEM_INICIOU_O_BOT = None
         return jsonify({"ok": True})
 
     elif cmd.startswith("tf_"): 
-        TIMEFRAME_OPERACAO = int(cmd.split('_')[1])
+        st["timeframe"] = int(cmd.split('_')[1])
     elif cmd.startswith("mkt_"): 
-        TIPO_MERCADO = cmd.split('_', 1)[1] 
+        st["tipo_mercado"] = cmd.split('_', 1)[1] 
     elif cmd.startswith("set_est_"): 
-        ESTRATEGIA_ESCOLHIDA = cmd.replace("set_est_", "")
+        st["estrategia"] = cmd.replace("set_est_", "")
     
     return jsonify({"ok": True})
 
 @app.route('/resultado/<res>')
 def resultado(res):
-    global AG_RESULTADO, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, ULTIMO_SINAL_GLOBAL
     user = session.get('user')
     if user:
+        st = get_user_state(user)
         if res == 'win':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "Win")
@@ -1323,169 +1307,185 @@ def resultado(res):
             atualizar_ultimo_sinal_bd(user, "Ignorado")
             enviar_telegram("⚠️ <b>SINAL IGNORADO / PULADO</b>", user_solicitante=user)
 
-        AGUARDANDO_CONFIRMACAO_RESULTADO = False
-        SINAL_DISPLAY_PERMANENTE = None
+        st["aguardando_confirmacao"] = False
+        st["sinal_permanente"] = None
         
-        ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 ANALISANDO VELAS: <b>{ATIVO_ATUAL_GLOBAL}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[RETOMANDO VARREDURA]</span></div><div class='tech-scanner'></div>"
+        st["ultimo_sinal"] = f"<div class='system-console'>🔍 ANALISANDO VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[RETOMANDO VARREDURA]</span></div><div class='tech-scanner'></div>"
     
-    AG_RESULTADO = False
     return redirect('/')
 
-# ================= LOOP PRINCIPAL DO BOT =================
+# ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT =================
 def bot_loop():
-    global ULTIMO_SINAL_GLOBAL, AG_RESULTADO, BOT_INICIADO, ATIVO_ATUAL_GLOBAL, AGUARDANDO_CONFIRMACAO_RESULTADO, SINAL_DISPLAY_PERMANENTE, QUEM_INICIOU_O_BOT, NOTIFICACAO_SISTEMA, SINAIS_ENVIADOS
+    ohlc_cache = {}
 
-    while BOT_RODANDO:
+    while True:
         try:
-            if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
-                time.sleep(1)
-                continue
-
-            if time.time() < INICIO_VARREDURA_TIME:
+            usuarios_ativos = list(DADOS_USUARIOS.items())
+            
+            if not usuarios_ativos:
                 time.sleep(1)
                 continue
 
             agora_scan = agora_brasilia()
-            minutos_passados = agora_scan.minute % TIMEFRAME_OPERACAO
-            segundos_passados = minutos_passados * 60 + agora_scan.second
-            segundos_restantes = (TIMEFRAME_OPERACAO * 60) - segundos_passados
+            now_ts = time.time()
 
-            tempo_limite = 30 if TIMEFRAME_OPERACAO == 1 else 45
-            
-            if segundos_restantes > tempo_limite:
-                ATIVO_ATUAL_GLOBAL = "AGUARDANDO FECHAMENTO..."
-                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>⏳ ANALISANDO HISTÓRICO...<br><span style='color:#00f2fe;'>[PRÓXIMA VARREDURA EM {segundos_restantes - tempo_limite}s]</span></div><div class='tech-scanner'></div>"
-                time.sleep(2)
-                continue
+            # Limpa cache antigo de requisições (>5 segundos)
+            ohlc_cache = {k: v for k, v in ohlc_cache.items() if now_ts - v["time"] < 5}
 
-            if TIPO_MERCADO == "TODOS":
-                ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
-            else:
-                ativos = ATIVOS_BASE.get(TIPO_MERCADO, ATIVOS_BASE["FOREX_ABERTO"])
+            for user_email, st in usuarios_ativos:
+                try:
+                    if not st.get("bot_iniciado") or st.get("bot_pausado") or st.get("aguardando_confirmacao"):
+                        continue
 
-            ativos_scan = ativos.copy()
-            random.shuffle(ativos_scan)
+                    if now_ts < st.get("inicio_varredura", 0):
+                        continue
 
-            for ativo in ativos_scan:
-                if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
-                    break
+                    tf = st.get("timeframe", 5)
+                    mkt = st.get("tipo_mercado", "TODOS")
+                    user_est = st.get("estrategia", "TODAS")
 
-                ATIVO_ATUAL_GLOBAL = ativo
-                ticker = MAPA_TICKERS.get(ativo, ativo)
+                    minutos_passados = agora_scan.minute % tf
+                    segundos_passados = minutos_passados * 60 + agora_scan.second
+                    segundos_restantes = (tf * 60) - segundos_passados
 
-                ULTIMO_SINAL_GLOBAL = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{TIMEFRAME_OPERACAO})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
+                    tempo_limite = 30 if tf == 1 else 45
+                    
+                    if segundos_restantes > tempo_limite:
+                        st["ativo_atual"] = "AGUARDANDO FECHAMENTO..."
+                        st["ultimo_sinal"] = f"<div class='system-console'>⏳ ANALISANDO HISTÓRICO...<br><span style='color:#00f2fe;'>[PRÓXIMA VARREDURA EM {segundos_restantes - tempo_limite}s]</span></div><div class='tech-scanner'></div>"
+                        continue
 
-                data = get_data_v2(ticker, TIMEFRAME_OPERACAO, velas_minimas=30)
-                if not data:
-                    time.sleep(0.3)
-                    continue
+                    if mkt == "TODOS":
+                        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+                    else:
+                        ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
 
-                sinal_encontrado = None
-                est_nome_encontrada = ESTRATEGIA_ESCOLHIDA
+                    ativos_scan = ativos.copy()
+                    random.shuffle(ativos_scan)
 
-                if ESTRATEGIA_ESCOLHIDA == "TODAS":
-                    estrategias_teste = LISTA_ESTRATEGIAS.copy()
-                    random.shuffle(estrategias_teste)
-                    for est_nome in estrategias_teste:
-                        sinal_encontrado = analisar_estrategia(data, est_nome)
+                    for ativo in ativos_scan:
+                        if not st.get("bot_iniciado") or st.get("bot_pausado") or st.get("aguardando_confirmacao"):
+                            break
+
+                        st["ativo_atual"] = ativo
+                        ticker = MAPA_TICKERS.get(ativo, ativo)
+
+                        st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
+
+                        cache_key = f"{ticker}_{tf}"
+                        if cache_key in ohlc_cache:
+                            data = ohlc_cache[cache_key]["data"]
+                        else:
+                            data = get_data_v2(ticker, tf, velas_minimas=30)
+                            if data:
+                                ohlc_cache[cache_key] = {"data": data, "time": time.time()}
+
+                        if not data:
+                            continue
+
+                        sinal_encontrado = None
+                        est_nome_encontrada = user_est
+
+                        # SE ESCOLHER "TODAS": Analisa o ativo contra todas as estratégias e aceita a primeira que der sinal
+                        if user_est == "TODAS":
+                            for est_nome in LISTA_ESTRATEGIAS:
+                                sinal_test = analisar_estrategia(data, est_nome)
+                                if sinal_test:
+                                    sinal_encontrado = sinal_test
+                                    est_nome_encontrada = est_nome
+                                    break
+                        else:
+                            sinal_encontrado = analisar_estrategia(data, user_est)
+
                         if sinal_encontrado:
-                            est_nome_encontrada = est_nome
-                            break
-                else:
-                    sinal_encontrado = analisar_estrategia(data, ESTRATEGIA_ESCOLHIDA)
+                            agora = agora_brasilia()
+                            
+                            min_pass = agora.minute % tf
+                            seg_pass = min_pass * 60 + agora.second
+                            total_seg = tf * 60
+                            seg_restantes = total_seg - seg_pass
 
-                if sinal_encontrado:
-                    agora = agora_brasilia()
-                    
-                    minutos_passados = agora.minute % TIMEFRAME_OPERACAO
-                    segundos_passados = minutos_passados * 60 + agora.second
-                    total_segundos_tf = TIMEFRAME_OPERACAO * 60
-                    segundos_restantes = total_segundos_tf - segundos_passados
+                            prox_minuto_entrada = agora + timedelta(seconds=seg_restantes)
+                            horario_saida = prox_minuto_entrada + timedelta(minutes=tf)
 
-                    prox_minuto_entrada = agora + timedelta(seconds=segundos_restantes)
-                    horario_saida = prox_minuto_entrada + timedelta(minutes=TIMEFRAME_OPERACAO)
+                            str_entrada = prox_minuto_entrada.strftime("%H:%M")
+                            str_saida = horario_saida.strftime("%H:%M")
 
-                    str_entrada = prox_minuto_entrada.strftime("%H:%M")
-                    str_saida = horario_saida.strftime("%H:%M")
+                            if st["sinais_enviados"].get(ativo) == str_entrada:
+                                continue
 
-                    if SINAIS_ENVIADOS.get(ativo) == str_entrada:
-                        continue
+                            st["sinais_enviados"][ativo] = str_entrada
+                            nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
 
-                    SINAIS_ENVIADOS[ativo] = str_entrada
-                    
-                    nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
+                            # ALERTA PRÉVIO DE ATENÇÃO
+                            msg_pre_alerta = (
+                                f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n"
+                                f"<b>Ativo:</b> {ativo}\n"
+                                f"<b>Timeframe:</b> M{tf}\n"
+                                f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
+                                f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
+                                f"👉 <i>Abra o ativo na corretora e prepare-se!</i>"
+                            )
+                            
+                            st["ultimo_sinal"] = (
+                                f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
+                                f"⚠️ <b>PREPARE O ATIVO: {ativo}</b> ⚠️<br>"
+                                f"<span style='color:#fff;'>Entrada às <b>{str_entrada}</b> (M{tf})</span><br>"
+                                f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span>"
+                                f"</div>"
+                            )
 
-                    # ALERTA PRÉVIO DE ATENÇÃO
-                    msg_pre_alerta = (
-                        f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n"
-                        f"<b>Ativo:</b> {ativo}\n"
-                        f"<b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
-                        f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
-                        f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
-                        f"👉 <i>Abra o ativo na corretora e prepare-se!</i>"
-                    )
-                    
-                    ULTIMO_SINAL_GLOBAL = (
-                        f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
-                        f"⚠️ <b>PREPARE O ATIVO: {ativo}</b> ⚠️<br>"
-                        f"<span style='color:#fff;'>Entrada às <b>{str_entrada}</b> (M{TIMEFRAME_OPERACAO})</span><br>"
-                        f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span>"
-                        f"</div>"
-                    )
+                            st["notificacao"] = {
+                                "id": str(time.time()),
+                                "titulo": f"⚠️ PREPARE-SE: {ativo}",
+                                "corpo": f"Possível entrada às {str_entrada} (M{tf}) via {nome_est_formatado}. Abra o gráfico!"
+                            }
 
-                    NOTIFICACAO_SISTEMA = {
-                        "id": str(time.time()),
-                        "titulo": f"⚠️ PREPARE-SE: {ativo}",
-                        "corpo": f"Possível entrada às {str_entrada} (M{TIMEFRAME_OPERACAO}) via {nome_est_formatado}. Abra o gráfico!"
-                    }
+                            enviar_telegram(msg_pre_alerta, user_solicitante=user_email)
 
-                    # Envia o Alerta para o Telegram
-                    enviar_telegram(msg_pre_alerta, user_solicitante=QUEM_INICIOU_O_BOT)
+                            while agora_brasilia() < prox_minuto_entrada:
+                                if not st.get("bot_iniciado") or st.get("bot_pausado") or st.get("aguardando_confirmacao"):
+                                    break
+                                time.sleep(0.5)
 
-                    while agora_brasilia() < prox_minuto_entrada:
-                        if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
-                            break
-                        time.sleep(0.5)
+                            if not st.get("bot_iniciado") or st.get("bot_pausado") or st.get("aguardando_confirmacao"):
+                                continue
 
-                    if not BOT_INICIADO or BOT_PAUSADO or AGUARDANDO_CONFIRMACAO_RESULTADO:
-                        continue
+                            # SINAL CONFIRMADO NO MOMENTO EXATO DA ENTRADA
+                            msg_sinal = (
+                                f"🎯 <b>SINAL CONFIRMADO - ENTRADA AGORA!</b> 🎯\n\n"
+                                f"💱 <b>Paridade:</b> {ativo}\n"
+                                f"⏱ <b>Timeframe:</b> M{tf}\n"
+                                f"↕️ <b>Direção:</b> {sinal_encontrado}\n"
+                                f"🧠 <b>Estratégia:</b> {nome_est_formatado}\n\n"
+                                f"⌛ <b>Expiração:</b> {str_saida}\n"
+                                f"💡 <i>Gerencie seu capital com responsabilidade.</i>"
+                            )
+                            
+                            enviar_telegram(msg_sinal, auto_delete=None, user_solicitante=user_email)
+                            
+                            st["sinal_permanente"] = (
+                                f"<div class='status-box' style='border-color:#00f2fe; background:rgba(0,242,254,0.1);'>"
+                                f"<h3 style='color:#00f2fe; margin-bottom:8px;'>🎯 SINAL CONFIRMADO!</h3>"
+                                f"<b>ATIVO:</b> {ativo} | <b>DIREÇÃO:</b> <span style='color:{'#10b981' if sinal_encontrado=='CALL' else '#ef4444'}'>{sinal_encontrado}</span><br>"
+                                f"<b>ESTRATÉGIA:</b> <span style='color:#38ef7d;'>{nome_est_formatado}</span><br>"
+                                f"<b>TIMEFRAME:</b> M{tf} | <b>EXPIRAÇÃO:</b> {str_saida}"
+                                f"</div>"
+                            )
+                            
+                            st["aguardando_confirmacao"] = True
+                            registrar_sinal_bd(user_email, f"{ativo} | {sinal_encontrado} | {nome_est_formatado} | M{tf}")
+                            
+                            break  
+                except Exception as e_usr:
+                    print(f"Erro no loop do usuario {user_email}: {e_usr}")
 
-                    # SINAL CONFIRMADO NO MOMENTO EXATO DA ENTRADA
-                    msg_sinal = (
-                        f"🎯 <b>SINAL CONFIRMADO - ENTRADA AGORA!</b> 🎯\n\n"
-                        f"💱 <b>Paridade:</b> {ativo}\n"
-                        f"⏱ <b>Timeframe:</b> M{TIMEFRAME_OPERACAO}\n"
-                        f"↕️ <b>Direção:</b> {sinal_encontrado}\n"
-                        f"🧠 <b>Estratégia:</b> {nome_est_formatado}\n\n"
-                        f"⌛ <b>Expiração:</b> {str_saida}\n"
-                        f"💡 <i>Gerencie seu capital com responsabilidade.</i>"
-                    )
-                    
-                    # Envia a Confirmação de Entrada para o Telegram
-                    enviar_telegram(msg_sinal, auto_delete=None, user_solicitante=QUEM_INICIOU_O_BOT)
-                    
-                    SINAL_DISPLAY_PERMANENTE = (
-                        f"<div class='status-box' style='border-color:#00f2fe; background:rgba(0,242,254,0.1);'>"
-                        f"<h3 style='color:#00f2fe; margin-bottom:8px;'>🎯 SINAL CONFIRMADO!</h3>"
-                        f"<b>ATIVO:</b> {ativo} | <b>DIREÇÃO:</b> <span style='color:{'#10b981' if sinal_encontrado=='CALL' else '#ef4444'}'>{sinal_encontrado}</span><br>"
-                        f"<b>ESTRATÉGIA:</b> <span style='color:#38ef7d;'>{nome_est_formatado}</span><br>"
-                        f"<b>TIMEFRAME:</b> M{TIMEFRAME_OPERACAO} | <b>EXPIRAÇÃO:</b> {str_saida}"
-                        f"</div>"
-                    )
-                    
-                    AGUARDANDO_CONFIRMACAO_RESULTADO = True
-                    registrar_sinal_bd(QUEM_INICIOU_O_BOT or ADMIN_EMAIL, f"{ativo} | {sinal_encontrado} | {nome_est_formatado} | M{TIMEFRAME_OPERACAO}")
-                    
-                    break  
-                
-                time.sleep(0.2)
-            
             time.sleep(0.5)
         except Exception as err:
-            print(f"Erro no loop do bot: {err}")
+            print(f"Erro no loop global do bot: {err}")
             time.sleep(2)
 
-# ================= REINSERÇÃO/INÍCIO DA THREAD BACKGROUND =================
+# ================= THREAD BACKGROUND =================
 thread_iniciada = False
 lock_thread = threading.Lock()
 
