@@ -47,10 +47,6 @@ def get_client_ip():
 
 def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
     global ULTIMO_MSG_ID_TELEGRAM, QUEM_INICIOU_O_BOT
-    
-    usuario_ativo = user_solicitante or QUEM_INICIOU_O_BOT
-    if usuario_ativo != ADMIN_EMAIL:
-        return None
 
     if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
         return None
@@ -61,7 +57,7 @@ def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
         r = requests.post(url, json=payload, timeout=5).json()
         if r.get("ok"):
             msg_id = r["result"]["message_id"]
-            if any(term in mensagem for term in ["SINAL CONFIRMADO", "🔥", "🎯", "Sinal confirmado"]):
+            if any(term in mensagem for term in ["SINAL CONFIRMADO", "🔥", "🎯", "Sinal confirmado", "ATENÇÃO"]):
                 ULTIMO_MSG_ID_TELEGRAM = msg_id
             if auto_delete:
                 threading.Thread(target=deletar_mensagem_atrasada, args=(msg_id, auto_delete)).start()
@@ -985,31 +981,54 @@ def analisar_estrategia(data, estrategia, i=-1):
     sinal = None
 
     if estrategia == "LOGICA_DO_PRECO":
-        cor = "G" if c[i] > o[i] else "R"
         tamanho = abs(c[i] - o[i])
-        p_sup = max(0, h[i] - max(o[i], c[i]))
-        p_inf = max(0, min(o[i], c[i]) - l[i])
-        
-        if cor == "G" and p_inf >= (tamanho * 0.4): sinal = "CALL"
-        elif cor == "R" and p_sup >= (tamanho * 0.4): sinal = "PUT"
-        elif cor == "G" and p_sup <= (tamanho * 0.1): sinal = "CALL" 
-        elif cor == "R" and p_inf <= (tamanho * 0.1): sinal = "PUT"
+        amplitude = h[i] - l[i]
+        if amplitude > 0 and tamanho > 0:
+            cor = "G" if c[i] > o[i] else "R"
+            p_sup = h[i] - max(o[i], c[i])
+            p_inf = min(o[i], c[i]) - l[i]
+            
+            # Rejeição de Fundo em vela verde (Pavio inferior expressivo)
+            if cor == "G" and p_inf >= (amplitude * 0.45) and p_sup <= (amplitude * 0.25):
+                sinal = "CALL"
+            # Rejeição de Topo em vela vermelha (Pavio superior expressivo)
+            elif cor == "R" and p_sup >= (amplitude * 0.45) and p_inf <= (amplitude * 0.25):
+                sinal = "PUT"
+            # Martelo Invertido em topo de movimento
+            elif cor == "G" and p_sup >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
+                sinal = "PUT"
+            # Martelo em fundo de movimento
+            elif cor == "R" and p_inf >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
+                sinal = "CALL"
 
     elif estrategia == "RSI_MACD_MA":
-        diff = np.diff(c[-15:])
-        up = diff[diff > 0]
-        down = abs(diff[diff < 0])
-        avg_up = np.mean(up) if len(up) > 0 else 1e-7
-        avg_down = np.mean(down) if len(down) > 0 else 1e-7
-        rs = avg_up / avg_down
-        rsi = 100 - (100 / (1 + rs))
+        if len(c) >= 26:
+            diff = np.diff(c[-15:])
+            gains = diff[diff > 0]
+            losses = np.abs(diff[diff < 0])
+            avg_gain = np.mean(gains) if len(gains) > 0 else 1e-7
+            avg_loss = np.mean(losses) if len(losses) > 0 else 1e-7
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
 
-        ema12 = calcular_ema(c, 12)
-        ema26 = calcular_ema(c, 26)
-        macd_line = ema12 - ema26
+            ema12 = calcular_ema(c, 12)
+            ema26 = calcular_ema(c, 26)
+            macd_line = ema12 - ema26
+            signal_line = calcular_ema(macd_line, 9)
+            ma20 = np.mean(c[-20:])
 
-        if rsi < 48 and macd_line[i] > macd_line[i-1]: sinal = "CALL"
-        elif rsi > 52 and macd_line[i] < macd_line[i-1]: sinal = "PUT"
+            if (rsi < 45 or macd_line[i] > signal_line[i]) and c[i] >= ma20:
+                sinal = "CALL"
+            elif rsi < 35:
+                sinal = "CALL"
+            elif (rsi > 55 or macd_line[i] < signal_line[i]) and c[i] <= ma20:
+                sinal = "PUT"
+            elif rsi > 65:
+                sinal = "PUT"
+            elif rsi < 48 and macd_line[i] > macd_line[i-1]:
+                sinal = "CALL"
+            elif rsi > 52 and macd_line[i] < macd_line[i-1]:
+                sinal = "PUT"
 
     elif estrategia == "MHI1":
         cores = []
@@ -1027,8 +1046,8 @@ def analisar_estrategia(data, estrategia, i=-1):
     elif estrategia in ["REVERSAO", "RETRACAO"]:
         std = np.std(c[-20:])
         ma = np.mean(c[-20:])
-        banda_superior = ma + (1.5 * std)
-        banda_inferior = ma - (1.5 * std)
+        banda_superior = ma + (2.0 * std)
+        banda_inferior = ma - (2.0 * std)
 
         if c[i] <= banda_inferior: sinal = "CALL"
         elif c[i] >= banda_superior: sinal = "PUT"
@@ -1361,7 +1380,9 @@ def bot_loop():
                 est_nome_encontrada = ESTRATEGIA_ESCOLHIDA
 
                 if ESTRATEGIA_ESCOLHIDA == "TODAS":
-                    for est_nome in LISTA_ESTRATEGIAS:
+                    estrategias_teste = LISTA_ESTRATEGIAS.copy()
+                    random.shuffle(estrategias_teste)
+                    for est_nome in estrategias_teste:
                         sinal_encontrado = analisar_estrategia(data, est_nome)
                         if sinal_encontrado:
                             est_nome_encontrada = est_nome
