@@ -52,6 +52,7 @@ def get_user_state(email):
             "bot_pausado": True,
             "aguardando_confirmacao": False,
             "sinal_permanente": None,
+            "sinal_ativo": None,  # Armazena dados do sinal atual {"ativo", "sinal", "estrategia", "probabilidade", "msg_id"}
             "ultimo_sinal": "Aguardando Comando...",
             "ativo_atual": "AGUARDANDO...",
             "inicio_varredura": 0,
@@ -68,7 +69,7 @@ def get_client_ip():
         return request.headers.get('X-Forwarded-For').split(',')[0].strip()
     return request.remote_addr
 
-# ================= ENVIO E DELEÇÃO TELEGRAM (CORRIGIDO E OTIMIZADO) =================
+# ================= ENVIO E DELEÇÃO TELEGRAM (OTIMIZADO) =================
 def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
     token = os.getenv("TOKEN_TELEGRAM", TOKEN_TELEGRAM).strip().strip('"').strip("'").replace(" ", "")
     chat_id_raw = os.getenv("CHAT_ID_TELEGRAM", CHAT_ID_TELEGRAM).strip().strip('"').strip("'").replace(" ", "")
@@ -87,7 +88,7 @@ def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
     }
     
     try:
-        res = requests.post(url, json=payload, timeout=8)
+        res = requests.post(url, json=payload, timeout=5)
         r = res.json()
         if r.get("ok"):
             msg_id = r["result"]["message_id"]
@@ -103,7 +104,7 @@ def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
                 "text": texto_limpo,
                 "disable_web_page_preview": True
             }
-            res_plain = requests.post(url, json=payload_plain, timeout=8)
+            res_plain = requests.post(url, json=payload_plain, timeout=5)
             r_plain = res_plain.json()
             if r_plain.get("ok"):
                 msg_id = r_plain["result"]["message_id"]
@@ -120,12 +121,14 @@ def deletar_mensagem_telegram(msg_id):
     chat_id_raw = os.getenv("CHAT_ID_TELEGRAM", CHAT_ID_TELEGRAM).strip().strip('"').strip("'").replace(" ", "")
     if not token or not chat_id_raw or not msg_id:
         return
-    try:
-        url = f"https://api.telegram.org/bot{token}/deleteMessage"
-        payload = {"chat_id": chat_id_raw, "message_id": msg_id}
-        requests.post(url, json=payload, timeout=4)
-    except Exception as e:
-        print(f"Erro ao deletar mensagem Telegram: {e}")
+    def _exec_delete():
+        try:
+            url = f"https://api.telegram.org/bot{token}/deleteMessage"
+            payload = {"chat_id": chat_id_raw, "message_id": msg_id}
+            requests.post(url, json=payload, timeout=4)
+        except Exception as e:
+            print(f"Erro ao deletar mensagem Telegram: {e}")
+    threading.Thread(target=_exec_delete, daemon=True).start()
 
 def deletar_mensagem_atrasada(msg_id, delay):
     if delay > 0: time.sleep(delay)
@@ -631,7 +634,7 @@ HTML_INDEX = """
                 }
                 if(document.getElementById('lista-sinais')) document.getElementById('lista-sinais').innerHTML = histHtml || "<div style='text-align:center; font-size:11px; color:#64748b;'>Nenhum sinal no histórico.</div>";
             });
-        }, 800);
+        }, 500);
 
         window.addEventListener('load', () => {
             if (window.Notification && Notification.permission === 'granted') {
@@ -948,7 +951,7 @@ def get_data_v2(ticker, tf, velas_minimas=30):
         }
         
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d"
-        res = requests.get(url, headers=headers, timeout=3.5)
+        res = requests.get(url, headers=headers, timeout=2.5)
         
         if res.status_code == 200 and 'chart' in res.json():
             data_json = res.json()
@@ -974,7 +977,7 @@ def get_data_v2(ticker, tf, velas_minimas=30):
         if "-USD" in base_ticker or "USD" in ticker:
             crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
             url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=100&aggregate={tf}"
-            r_alt = requests.get(url_alt, timeout=3.5).json()
+            r_alt = requests.get(url_alt, timeout=2.5).json()
             
             if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
                 data_list = r_alt['Data']['Data']
@@ -1126,7 +1129,7 @@ def processar_ativo_worker(ativo, tf, user_est, ohlc_cache):
     ticker = MAPA_TICKERS.get(ativo, ativo)
     cache_key = f"{ticker}_{tf}"
     
-    if cache_key in ohlc_cache and (time.time() - ohlc_cache[cache_key]["time"] < 3):
+    if cache_key in ohlc_cache and (time.time() - ohlc_cache[cache_key]["time"] < 2.5):
         data = ohlc_cache[cache_key]["data"]
     else:
         data = get_data_v2(ticker, tf, velas_minimas=30)
@@ -1332,7 +1335,7 @@ def status():
     u_info = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
     historico = buscar_historico_bd(user)
     
-    display_texto = st["sinal_permanente"] if (st["aguardando_confirmacao"] and st["sinal_permanente"]) else st["ultimo_sinal"]
+    display_texto = st["ultimo_sinal"]
 
     return jsonify({
         "html": display_texto, 
@@ -1374,6 +1377,7 @@ def command(cmd):
         st["bot_pausado"] = False
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
+        st["sinal_ativo"] = None
         st["alerta_ativo"] = None
         st["inicio_varredura"] = time.time()
         st["sinais_enviados"].clear()
@@ -1408,6 +1412,7 @@ def command(cmd):
         st["bot_pausado"] = True
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
+        st["sinal_ativo"] = None
         st["alerta_ativo"] = None
         st["ativo_atual"] = "DESCONECTADO"
         st["ultimo_sinal"] = "Aguardando Comando..."
@@ -1448,50 +1453,52 @@ def resultado(res):
 
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
+        st["sinal_ativo"] = None
         st["alerta_ativo"] = None
         
         st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO ATIVOS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[VARREDURA EM TEMPO REAL CONTINUA]</span></div><div class='tech-scanner'></div>"
     
     return redirect('/')
 
-# ================= LOOP PRINCIPAL COM ROTAÇÃO DE ATIVOS E ALERTAS TELEGRAM =================
+# ================= LOOP PRINCIPAL COM ANÁLISE CONTINUA E AVISO FALTANDO 4S =================
 def bot_loop():
     ohlc_cache = {}
-    executor = ThreadPoolExecutor(max_workers=12)
+    executor = ThreadPoolExecutor(max_workers=14)
 
     while True:
         try:
             usuarios_ativos = list(DADOS_USUARIOS.items())
             
             if not usuarios_ativos:
-                time.sleep(0.3)
+                time.sleep(0.2)
                 continue
 
             agora_scan = agora_brasilia()
             now_ts = time.time()
 
-            # Limpeza rápida de cache (3s)
-            ohlc_cache = {k: v for k, v in ohlc_cache.items() if now_ts - v["time"] < 3}
+            # Limpeza do cache
+            ohlc_cache = {k: v for k, v in ohlc_cache.items() if now_ts - v["time"] < 2.5}
 
             for user_email, st in usuarios_ativos:
                 try:
                     if not st.get("bot_iniciado") or st.get("bot_pausado"):
                         continue
 
-                    if st.get("aguardando_confirmacao"):
-                        continue
-
                     tf = st.get("timeframe", 5)
                     mkt = st.get("tipo_mercado", "TODOS")
                     user_est = st.get("estrategia", "TODAS")
 
-                    # Cálculo do tempo restante da vela atual em segundos
+                    # Cálculo exato do tempo restante para a vela virar
                     min_passados = agora_scan.minute % tf
                     seg_passados = min_passados * 60 + agora_scan.second
                     total_segundos_vela = tf * 60
                     seg_restantes = total_segundos_vela - seg_passados
+                    
+                    min_restantes = seg_restantes // 60
+                    segs_sobra = seg_restantes % 60
+                    timer_fmt = f"{min_restantes:02d}:{segs_sobra:02d}"
 
-                    # Definição dos ativos para análise
+                    # Seleção das listas de paridades
                     if mkt == "TODOS":
                         ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
                     elif mkt == "ABERTO_TODOS":
@@ -1504,22 +1511,20 @@ def bot_loop():
                     if not ativos:
                         continue
 
-                    # Alternância contínua do nome dos ativos na tela do usuário
+                    # Atualiza rotatividade visual do nome do ativo analisado
                     st["asset_index"] = (st.get("asset_index", 0) + 1) % len(ativos)
                     ativo_em_foco = ativos[st["asset_index"]]
                     st["ativo_atual"] = ativo_em_foco
 
-                    # Executa varredura paralela dos ativos
+                    # VARREDURA PARALELA CONTÍNUA
                     futures = [executor.submit(processar_ativo_worker, ativo, tf, user_est, ohlc_cache) for ativo in ativos]
                     resultados = [f.result() for f in futures if f.result() is not None]
 
-                    # 1. EMISSÃO DE ALERTA PRÉVIO DE ATENÇÃO (10s a 25s ANTES DA VELA FECHAR)
-                    if 10 <= seg_restantes <= 25 and resultados:
+                    # 1. PRÉ-ALERTA TELEGRAM (DE 10s A 25s ANTES DA FECHAMENTO DA VELA)
+                    if 10 <= seg_restantes <= 25 and resultados and not st.get("aguardando_confirmacao"):
                         melhor_cand = max(resultados, key=lambda x: x["probabilidade"])
                         ativo_cand = melhor_cand["ativo"]
-                        sinal_cand = melhor_cand["sinal"]
                         est_cand = melhor_cand["estrategia"]
-                        prob_cand = melhor_cand["probabilidade"]
 
                         prox_min = agora_scan + timedelta(seconds=seg_restantes)
                         str_ent = prox_min.strftime("%H:%M")
@@ -1534,20 +1539,13 @@ def bot_loop():
                                 f"💱 <b>Paridade:</b> {ativo_cand}\n"
                                 f"⏱ <b>Timeframe:</b> M{tf}\n"
                                 f"🧠 <b>Estratégia:</b> {nome_est_fmt}\n"
-                                f"📊 <b>Análise:</b> Padrão em formação, fique atento!\n"
-                                f"⏰ <b>Faltam aprox:</b> {seg_restantes}s para o fechamento da vela.\n\n"
-                                f"💡 <i>Prepare sua plataforma para possível entrada às {str_ent}!</i>"
+                                f"📊 <b>Análise:</b> Padrão em formação, prepare a corretora!\n"
+                                f"⏰ <b>Virada da Vela em:</b> {timer_fmt} ({seg_restantes}s)\n\n"
+                                f"💡 <i>Aguarde confirmação para entrada às {str_ent}!</i>"
                             )
                             enviar_telegram(msg_alerta, user_solicitante=user_email)
 
-                            st["ultimo_sinal"] = (
-                                f"<div class='system-console' style='color:#f59e0b;'>⚡ <b>POSSÍVEL SINAL EM FORMAÇÃO!</b><br>"
-                                f"<b>ATIVO:</b> {ativo_cand} | <b>ESTRATÉGIA:</b> {nome_est_fmt}<br>"
-                                f"<span style='color:#00f2fe;'>[AGUARDANDO CONFIRMAÇÃO DA VELA - RESTAM: {seg_restantes}s]</span></div>"
-                                f"<div class='tech-scanner'></div>"
-                            )
-
-                    # 2. EMISSÃO DE SINAL CONFIRMADO (1s a 5s FALTANDO PARA O FECHAMENTO)
+                    # 2. DISPARO ULTRARRÁPIDO DO SINAL (FALTANDO DE 1s A 5s PARA A VELA VIRAR - FOCO NOS 4s)
                     if 1 <= seg_restantes <= 5 and resultados:
                         melhor_sinal = max(resultados, key=lambda x: x["probabilidade"])
                         ativo = melhor_sinal["ativo"]
@@ -1562,11 +1560,73 @@ def bot_loop():
                         str_saida = horario_saida.strftime("%H:%M")
                         chave_unicidade = f"{ativo}_{str_entrada}"
 
-                        if not st["sinais_enviados"].get(chave_unicidade):
+                        sinal_ativo = st.get("sinal_ativo")
+
+                        # CASO A: Já existe um sinal em andamento, mas o robô achou uma oportunidade com MAIOR PORCENTAGEM
+                        if st.get("aguardando_confirmacao") and sinal_ativo:
+                            prob_anterior = sinal_ativo.get("probabilidade", 0)
+                            
+                            if prob > prob_anterior and (sinal_ativo.get("ativo") != ativo or sinal_ativo.get("sinal") != sinal):
+                                # Apaga a mensagem antiga no Telegram
+                                msg_id_ant = sinal_ativo.get("msg_id")
+                                if msg_id_ant:
+                                    deletar_mensagem_telegram(msg_id_ant)
+                                
+                                # Avisa o cancelamento e a substituição
+                                msg_cancelamento = (
+                                    f"⚠️ <b>SINAL ANTERIOR CANCELADO / SUBSTITUÍDO!</b> ⚠️\n\n"
+                                    f"Oportunidade em {sinal_ativo.get('ativo')} foi descartada.\n"
+                                    f"🔥 <b>NOVA CONFLUÊNCIA DETECTADA COM MAIOR ASSERTIVIDADE ({prob}% vs {prob_anterior}%)!</b>"
+                                )
+                                enviar_telegram(msg_cancelamento, auto_delete=8, user_solicitante=user_email)
+
+                                nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome, est_nome)
+
+                                # Envia o novo sinal imediato
+                                msg_sinal = (
+                                    f"🎯 <b>NOVO SINAL CONFIRMADO (MAIOR ASSERTIVIDADE)</b> 🎯\n\n"
+                                    f"💱 <b>Paridade:</b> {ativo}\n"
+                                    f"⏱ <b>Timeframe:</b> M{tf}\n"
+                                    f"↕️ <b>Direção:</b> {sinal}\n"
+                                    f"🧠 <b>Estratégia:</b> {nome_est_formatado}\n"
+                                    f"🔥 <b>Assertividade:</b> {prob}%\n\n"
+                                    f"⏰ <b>Entrada:</b> {str_entrada} | ⌛ <b>Expiração:</b> {str_saida}\n"
+                                    f"💡 <i>Faltam {seg_restantes}s para a virada! Execute a entrada imediatamente!</i>"
+                                )
+                                new_msg_id = enviar_telegram(msg_sinal, user_solicitante=user_email)
+
+                                st["sinal_ativo"] = {
+                                    "ativo": ativo,
+                                    "sinal": sinal,
+                                    "estrategia": est_nome,
+                                    "probabilidade": prob,
+                                    "msg_id": new_msg_id,
+                                    "str_entrada": str_entrada,
+                                    "str_saida": str_saida
+                                }
+
+                                st["sinal_permanente"] = (
+                                    f"<div class='status-box' style='border-color:#00f2fe; background:rgba(0,242,254,0.15);'>"
+                                    f"<h3 style='color:#00f2fe; margin-bottom:8px;'>🎯 SINAL ATUALIZADO (MAIOR CONFLUÊNCIA)!</h3>"
+                                    f"<b>ATIVO:</b> {ativo} | <b>DIREÇÃO:</b> <span style='color:{'#10b981' if sinal=='CALL' else '#ef4444'}; font-size:18px;'>{sinal}</span><br>"
+                                    f"<b>ESTRATÉGIA:</b> <span style='color:#38ef7d;'>{nome_est_formatado} ({prob}%)</span><br>"
+                                    f"<b>ENTRADA:</b> {str_entrada} | <b>EXPIRAÇÃO:</b> {str_saida}"
+                                    f"</div>"
+                                )
+                                registrar_sinal_bd(user_email, f"{ativo} | {sinal} | {nome_est_formatado} (Atualizado) | M{tf}")
+
+                                st["notificacao"] = {
+                                    "id": str(time.time()),
+                                    "titulo": f"🔄 SINAL ATUALIZADO ({prob}%): {ativo} ({sinal})",
+                                    "corpo": f"Substituído por maior assertividade! Entrada às {str_entrada}."
+                                }
+
+                        # CASO B: Não há sinal ativo e a entrada ainda não foi enviada neste ciclo
+                        elif not st.get("aguardando_confirmacao") and not st["sinais_enviados"].get(chave_unicidade):
                             st["sinais_enviados"][chave_unicidade] = True
                             nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome, est_nome)
 
-                            # Mensagem Oficial de Sinal para o Telegram
+                            # Mensagem Oficial de Sinal enviada faltando aproximadamente 4s para virada
                             msg_sinal = (
                                 f"🎯 <b>SINAL CONFIRMADO - ENTRADA AGORA!</b> 🎯\n\n"
                                 f"💱 <b>Paridade:</b> {ativo}\n"
@@ -1575,11 +1635,20 @@ def bot_loop():
                                 f"🧠 <b>Estratégia:</b> {nome_est_formatado}\n"
                                 f"🔥 <b>Assertividade:</b> {prob}%\n\n"
                                 f"⏰ <b>Entrada:</b> {str_entrada} | ⌛ <b>Expiração:</b> {str_saida}\n"
-                                f"💡 <i>Entre na virada da vela!</i>"
+                                f"💡 <i>Faltam {seg_restantes}s para virar a vela! Prepare e ordene a entrada!</i>"
                             )
-                            enviar_telegram(msg_sinal, user_solicitante=user_email)
+                            msg_id_enviada = enviar_telegram(msg_sinal, user_solicitante=user_email)
 
-                            # Atualização no Painel WEB
+                            st["sinal_ativo"] = {
+                                "ativo": ativo,
+                                "sinal": sinal,
+                                "estrategia": est_nome,
+                                "probabilidade": prob,
+                                "msg_id": msg_id_enviada,
+                                "str_entrada": str_entrada,
+                                "str_saida": str_saida
+                            }
+
                             st["sinal_permanente"] = (
                                 f"<div class='status-box' style='border-color:#00f2fe; background:rgba(0,242,254,0.15);'>"
                                 f"<h3 style='color:#00f2fe; margin-bottom:8px;'>🎯 SINAL CONFIRMADO!</h3>"
@@ -1598,18 +1667,25 @@ def bot_loop():
                                 "corpo": f"Entrada às {str_entrada} (M{tf}) - {nome_est_formatado} ({prob}%)."
                             }
 
-                    # Se nenhuma confirmação ocorreu no momento, mantém a tela rodando os ativos dinamicamente
-                    if not st.get("aguardando_confirmacao") and not (10 <= seg_restantes <= 25 and resultados):
+                    # EXIBIÇÃO DO PAINEL WEB COM O CRONÔMETRO CONTINUO
+                    if st.get("aguardando_confirmacao") and st.get("sinal_permanente"):
+                        st["ultimo_sinal"] = (
+                            f"{st['sinal_permanente']}"
+                            f"<div style='margin-top:8px; font-size:12px; color:#f59e0b; font-weight:bold; font-family:\"JetBrains Mono\", monospace; text-align:center;'>"
+                            f"⏱️ FECHAMENTO DA VELA M{tf}: <span style='color:#00f2fe;'>{timer_fmt} ({seg_restantes}s)</span> | CONTINUA VARRENDO..."
+                            f"</div>"
+                        )
+                    else:
                         st["ultimo_sinal"] = (
                             f"<div class='system-console'>🔍 ANALISANDO MERCADO: <b style='color:#00f2fe;'>{st['ativo_atual']}</b> (M{tf})<br>"
-                            f"<span style='color:#38ef7d;'>[VARREDURA EM TEMPO REAL - VELA M{tf}: RESTAM {seg_restantes}s]</span></div>"
+                            f"<span style='color:#38ef7d;'>[VARREDURA EM TEMPO REAL] ⏱️ VIRADA M{tf} EM: <b style='color:#00f2fe;'>{timer_fmt}</b> ({seg_restantes}s)</span></div>"
                             f"<div class='tech-scanner'></div>"
                         )
 
                 except Exception as e_usr:
                     print(f"Erro no loop do usuario {user_email}: {e_usr}")
 
-            time.sleep(0.3)
+            time.sleep(0.2)
         except Exception as err:
             print(f"Erro no loop global do bot: {err}")
             time.sleep(1)
