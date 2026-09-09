@@ -47,6 +47,7 @@ def get_user_state(email):
             "timeframe": 5,
             "tipo_mercado": "TODOS",
             "estrategia": "TODAS",
+            "ativos_selecionados": "TODOS", # Lista de ativos filtrados ou "TODOS"
             "bot_iniciado": False,
             "bot_pausado": True,
             "aguardando_confirmacao": False,
@@ -57,7 +58,9 @@ def get_user_state(email):
             "sinais_enviados": {},
             "alerta_ativo": None,  # Guarda informações do alerta ativo no ciclo
             "notificacao": None,
-            "notificacao_ultima_hora": 0.0
+            "notificacao_ultima_hora": 0.0,
+            "catalogando": False,
+            "catalogacao_resultado": None
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -395,6 +398,17 @@ HTML_INDEX = """
 
         .btn-notify { width: 100%; padding: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; }
         .btn-notify:hover { background: rgba(16, 185, 129, 0.3); }
+
+        /* ESTILOS DE CATALOGAÇÃO */
+        .btn-catalog { width: 100%; padding: 12px; background: linear-gradient(135deg, #00c6ff, #0072ff); border: none; color: white; font-weight: 800; font-size: 11px; border-radius: 10px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; box-shadow: 0 4px 15px rgba(0, 198, 255, 0.3); }
+        .btn-catalog:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0, 198, 255, 0.5); }
+        .catalog-card { background: #0b1120; border: 1px solid #00f2fe; border-radius: 16px; padding: 15px; margin-bottom: 16px; font-size: 12px; }
+        .catalog-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
+        .catalog-table th, .catalog-table td { padding: 8px; text-align: left; border-bottom: 1px solid #1e293b; }
+        .catalog-table th { color: #00f2fe; font-weight: 800; text-transform: uppercase; }
+        .asset-chip { display: inline-block; padding: 3px 8px; border-radius: 6px; background: rgba(0, 242, 254, 0.1); border: 1px solid rgba(0, 242, 254, 0.3); font-size: 10px; margin: 2px; font-weight: bold; }
+        .asset-checkbox-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; max-height: 120px; overflow-y: auto; padding: 6px; background: #0f172a; border-radius: 8px; border: 1px solid #1e293b; margin-top: 5px; }
+        .asset-checkbox-item { font-size: 11px; display: flex; align-items: center; gap: 6px; }
     </style>
 </head>
 <body>
@@ -405,7 +419,23 @@ HTML_INDEX = """
         </div>
 
         <button class="btn-notify" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
+        <button class="btn-catalog" onclick="sendCommand('fazer_catalogacao')">📊 REALIZAR VARREDURA SILENCIOSA (60 VELAS)</button>
         <button class="btn-test-tg" onclick="sendCommand('test_telegram')">🧪 TESTAR CONEXÃO TELEGRAM</button>
+
+        <!-- RESULTADO DA CATALOGAÇÃO DAS 60 VELAS -->
+        <div id="catalog-box" class="catalog-card" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #1e293b; padding-bottom:8px; margin-bottom:10px;">
+                <span style="font-weight:800; color:#00f2fe; font-size:12px;">🔥 VARREDURA & CATALOGAÇÃO (60 VELAS)</span>
+                <button onclick="document.getElementById('catalog-box').style.display='none'" style="background:none; border:none; color:#ef4444; font-weight:bold; cursor:pointer;">✖ FECHAR</button>
+            </div>
+            
+            <div id="catalog-loader" style="text-align:center; padding:15px; display:none;">
+                <div class="tech-scanner"></div>
+                <p style="font-size:11px; color:#00f2fe; margin-top:10px;">Varrendo silenciosamente as últimas 60 velas em todos os ativos...</p>
+            </div>
+
+            <div id="catalog-content"></div>
+        </div>
 
         <div class="placar-card">
             <div class="placar-grid">
@@ -432,7 +462,8 @@ HTML_INDEX = """
 
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
             MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
-            ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
+            ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b><br>
+            <span style="font-size:10px; color:#94a3b8;">FILTRO DE ATIVOS: <b id="ativos-badge" style="color:#f59e0b;">TODOS</b></span>
         </div>
 
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
@@ -486,7 +517,7 @@ HTML_INDEX = """
                 <div class="setting-group">
                     <label>ESTRATÉGIA OPERACIONAL</label>
                     <div class="select-wrapper">
-                        <select class="modern-select" onchange="sendCommand('set_est_' + this.value)">
+                        <select id="select-est" class="modern-select" onchange="sendCommand('set_est_' + this.value)">
                             <option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS (Analisar Todas as Estratégias)</option>
                             <option value="LOGICA_DO_PRECO" {% if estrat == 'LOGICA_DO_PRECO' %}selected{% endif %}>Lógica do Preço</option>
                             <option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + Cruzamento MACD + MA</option>
@@ -523,7 +554,6 @@ HTML_INDEX = """
         let lastNotifId = null;
         const NATIVE_NOTIFICATION_COOLDOWN_MS = 60000;
 
-        // Registra o Service Worker, mas não dispara nenhuma notificação automaticamente.
         if ('serviceWorker' in navigator && 'Notification' in window) {
             navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
                 .then(() => console.log('Service Worker de notificações registrado.'))
@@ -542,9 +572,6 @@ HTML_INDEX = """
                     btn.innerText = "✅ NOTIFICAÇÕES NATIVAS ATIVADAS!";
                     btn.style.borderColor = "#10b981";
                     btn.style.color = "#10b981";
-
-                    // Não envia uma notificação de teste imediatamente após a permissão.
-                    // Isso evita uma notificação desnecessária no momento da ativação.
                 } else {
                     alert('Permissão de Notificação Recusada.');
                 }
@@ -557,7 +584,6 @@ HTML_INDEX = """
             const id = String(notifId || '');
             const agora = Date.now();
 
-            // Evita repetir a mesma notificação após recarregar/consultar o painel.
             const ultimoId = localStorage.getItem('vision_last_notif_id') || '';
             const ultimaHora = Number(localStorage.getItem('vision_last_notif_at') || '0');
 
@@ -567,10 +593,8 @@ HTML_INDEX = """
             try {
                 if ('serviceWorker' in navigator) {
                     const reg = await navigator.serviceWorker.ready;
-
                     await reg.showNotification(titulo, {
                         body: corpo,
-                        // Sem vibração repetitiva e sem renotify: comportamento menos intrusivo.
                         tag: 'vision-signal',
                         renotify: false,
                         requireInteraction: false
@@ -599,17 +623,95 @@ HTML_INDEX = """
 
         function toggleHistorico() {
             const box = document.getElementById('box-historico');
-            if (box.style.display === 'block') {
-                box.style.display = 'none';
-            } else {
-                box.style.display = 'block';
-            }
+            box.style.display = (box.style.display === 'block') ? 'none' : 'block';
         }
 
         function sendCommand(cmd) {
             fetch('/command/' + cmd).then(r => r.json()).then(data => {
                 if(data.redirect) window.location.href = data.redirect;
             });
+        }
+
+        async function aplicarConfigOperacional(est, ativoSelecionado) {
+            let bodyData = {};
+            if(est) bodyData.estrategia = est;
+            if(ativoSelecionado) bodyData.ativos = ativoSelecionado;
+
+            await fetch('/salvar_config_operacional', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(bodyData)
+            });
+
+            alert('✅ Configurações salvas! O robô agora operará com os parâmetros escolhidos.');
+        }
+
+        function renderizarCatalogacao(catalogData) {
+            const container = document.getElementById('catalog-content');
+            if(!catalogData || catalogData.length === 0) {
+                container.innerHTML = "<p style='color:#ef4444; font-size:11px; text-align:center;'>Nenhum dado catalogado nas últimas 60 velas.</p>";
+                return;
+            }
+
+            const maisForte = catalogData[0]; // Ordenado por assertividade
+            let html = `
+                <div style="background:rgba(16,185,129,0.1); border:1px solid #10b981; padding:10px; border-radius:10px; margin-bottom:12px;">
+                    <div style="font-size:10px; color:#10b981; font-weight:800; text-transform:uppercase;">🔥 ESTRATÉGIA MAIS FORTE DO MOMENTO</div>
+                    <div style="font-size:15px; font-weight:900; color:#fff; margin:2px 0;">${maisForte.nome_display} (${maisForte.winrate}%)</div>
+                    <div style="font-size:11px; color:#94a3b8;">Wins: <b style="color:#10b981">${maisForte.wins}</b> | Losses: <b style="color:#ef4444">${maisForte.losses}</b></div>
+                </div>
+
+                <div style="margin-bottom:12px;">
+                    <div style="font-size:10px; color:#00f2fe; font-weight:800; margin-bottom:4px;">⭐ MELHORES ATIVOS PARA A ESTRATÉGIA TOP</div>
+                    <div>`;
+            
+            if(maisForte.melhores_ativos && maisForte.melhores_ativos.length > 0) {
+                maisForte.melhores_ativos.forEach(atv => {
+                    html += `<span class="asset-chip">${atv.ativo} <b>${atv.winrate}%</b> (${atv.wins}W/${atv.losses}L)</span>`;
+                });
+            } else {
+                html += `<span style="font-size:10px; color:#64748b;">Nenhum ativo de alto padrão no momento.</span>`;
+            }
+
+            html += `</div></div>
+
+                <div style="font-size:10px; color:#64748b; font-weight:800; text-transform:uppercase; margin-bottom:4px;">📊 RANKING COMPLETO DAS ESTRATÉGIAS (60 VELAS)</div>
+                <table class="catalog-table">
+                    <thead>
+                        <tr>
+                            <th>Estratégia</th>
+                            <th>Wins</th>
+                            <th>Loss</th>
+                            <th>Winrate</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+
+            catalogData.forEach(item => {
+                html += `<tr>
+                    <td><b>${item.nome_display}</b></td>
+                    <td style="color:#10b981; font-weight:bold;">${item.wins}</td>
+                    <td style="color:#ef4444; font-weight:bold;">${item.losses}</td>
+                    <td style="color:#00f2fe; font-weight:bold;">${item.winrate}%</td>
+                </tr>`;
+            });
+
+            html += `</tbody></table>
+
+                <div style="margin-top:15px; border-top:1px solid #1e293b; padding-top:10px;">
+                    <div style="font-size:11px; font-weight:800; color:#00f2fe; margin-bottom:8px;">⚙️ APLICAR E OPERAR AGORA</div>
+                    
+                    <button onclick="aplicarConfigOperacional('${maisForte.estrategia}', 'TODOS')" style="width:100%; padding:10px; background:linear-gradient(135deg, #10b981, #059669); border:none; color:white; font-weight:bold; font-size:11px; border-radius:8px; cursor:pointer; margin-bottom:6px;">
+                        🎯 OPERAR APENAS COM A MAIS FORTE (${maisForte.nome_display})
+                    </button>
+
+                    <button onclick="aplicarConfigOperacional('TODAS', 'TODOS')" style="width:100%; padding:10px; background:#1e293b; border:1px solid #334155; color:white; font-weight:bold; font-size:11px; border-radius:8px; cursor:pointer;">
+                        🌐 OPERAR COM TODAS AS ESTRATÉGIAS
+                    </button>
+                </div>
+            `;
+
+            container.innerHTML = html;
         }
 
         async function atualizarPainel() {
@@ -625,11 +727,30 @@ HTML_INDEX = """
                 if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
                 
                 if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
+                if(document.getElementById('ativos-badge')) {
+                    const atvs = data.ativos_selecionados;
+                    document.getElementById('ativos-badge').innerText = Array.isArray(atvs) ? atvs.join(", ") : atvs;
+                }
+
                 if(document.getElementById('current-asset')) {
                     if(data.rodando) {
                         document.getElementById('current-asset').innerText = data.ativo_atual || "VARRENDO...";
                     } else {
                         document.getElementById('current-asset').innerText = "SISTEMA PAUSADO";
+                    }
+                }
+
+                // Gerenciamento da varredura/catalogação das 60 velas
+                const catalogBox = document.getElementById('catalog-box');
+                const catalogLoader = document.getElementById('catalog-loader');
+                if(data.catalogando) {
+                    catalogBox.style.display = 'block';
+                    catalogLoader.style.display = 'block';
+                    document.getElementById('catalog-content').innerHTML = '';
+                } else if(data.catalogacao) {
+                    catalogLoader.style.display = 'none';
+                    if(catalogBox.style.display === 'block' && document.getElementById('catalog-content').innerHTML === '') {
+                        renderizarCatalogacao(data.catalogacao);
                     }
                 }
 
@@ -651,7 +772,6 @@ HTML_INDEX = """
             } catch (err) {
                 console.warn('Falha ao atualizar o painel:', err);
             } finally {
-                // Nova consulta 250ms após a resposta, sem acumular requisições.
                 setTimeout(atualizarPainel, 250);
             }
         }
@@ -963,8 +1083,9 @@ for par in ATIVOS_BASE["CRIPTO_ABERTO"]: MAPA_TICKERS[par] = par.replace("USD", 
 for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X")
 for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
-# ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
-def get_data_v2(ticker, tf, velas_minimas=30):
+# ================= MOTOR DE ANÁLISE REAL DE VELAS =================
+def get_data_v2(ticker, tf, velas_minimas=60):
+    """Busca dados reais OHLC e garante o mínimo de velas exigido (Padrão 60)."""
     try:
         base_ticker = ticker
         headers = {
@@ -998,7 +1119,7 @@ def get_data_v2(ticker, tf, velas_minimas=30):
 
         if "-USD" in base_ticker or "USD" in ticker:
             crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
-            url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=100&aggregate={tf}"
+            url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=120&aggregate={tf}"
             r_alt = requests.get(url_alt, timeout=5.0).json()
             
             if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
@@ -1050,7 +1171,7 @@ def calcular_ema(dados, periodo):
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
     
-    if len(c) < 30: 
+    if len(c) < 25: 
         return None, 0
         
     sinal = None
@@ -1104,29 +1225,30 @@ def analisar_estrategia(data, estrategia, i=-1):
                 probabilidade = int(83 + (rsi - 65) * 0.5)
 
     elif estrategia == "MHI1":
-        cores = []
-        for j in range(i-2, i+1):
-            if c[j] > o[j]: cores.append("G")
-            elif c[j] < o[j]: cores.append("R")
-            else: cores.append("D") 
-            
-        if "D" not in cores:
-            qtd_g = cores.count("G")
-            qtd_r = cores.count("R")
-            
-            ema20 = np.mean(c[-20:])
-            if qtd_g == 2 and qtd_r == 1 and c[i] <= ema20:
-                sinal = "PUT"
-                probabilidade = 84
-            elif qtd_r == 2 and qtd_g == 1 and c[i] >= ema20:
-                sinal = "CALL"
-                probabilidade = 84
-            elif qtd_g == 3:
-                sinal = "PUT"
-                probabilidade = 88
-            elif qtd_r == 3:
-                sinal = "CALL"
-                probabilidade = 88
+        if abs(i) + 2 < len(c):
+            cores = []
+            for j in range(i-2, i+1):
+                if c[j] > o[j]: cores.append("G")
+                elif c[j] < o[j]: cores.append("R")
+                else: cores.append("D") 
+                
+            if "D" not in cores:
+                qtd_g = cores.count("G")
+                qtd_r = cores.count("R")
+                
+                ema20 = np.mean(c[-20:])
+                if qtd_g == 2 and qtd_r == 1 and c[i] <= ema20:
+                    sinal = "PUT"
+                    probabilidade = 84
+                elif qtd_r == 2 and qtd_g == 1 and c[i] >= ema20:
+                    sinal = "CALL"
+                    probabilidade = 84
+                elif qtd_g == 3:
+                    sinal = "PUT"
+                    probabilidade = 88
+                elif qtd_r == 3:
+                    sinal = "CALL"
+                    probabilidade = 88
 
     elif estrategia in ["REVERSAO", "RETRACAO"]:
         std = np.std(c[-20:])
@@ -1145,6 +1267,98 @@ def analisar_estrategia(data, estrategia, i=-1):
 
     probabilidade = min(98, max(75, probabilidade)) if sinal else 0
     return sinal, probabilidade
+
+# ================= MOTOR DE CATALOGAÇÃO COMPLETA DAS 60 VELAS =================
+def executar_catalogacao_60_velas(user_email):
+    """
+    Executa uma varredura silenciosa nas últimas 60 velas de todo o mercado.
+    Mede assertividade, wins, erros e identifica a estratégia e os ativos mais fortes.
+    """
+    st = get_user_state(user_email)
+    if not st: return
+    
+    st["catalogando"] = True
+    st["catalogacao_resultado"] = None
+
+    mkt = st.get("tipo_mercado", "TODOS")
+    tf = st.get("timeframe", 5)
+
+    if mkt == "TODOS":
+        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+    elif mkt == "ABERTO_TODOS":
+        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
+    elif mkt == "OTC_TODOS":
+        ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+    else:
+        ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
+
+    resultados_est = {est: {"wins": 0, "losses": 0, "ativos": {}} for est in LISTA_ESTRATEGIAS}
+
+    for ativo in ativos:
+        ticker = MAPA_TICKERS.get(ativo, ativo)
+        data = get_data_v2(ticker, tf, velas_minimas=60)
+        if not data or len(data["close"]) < 60:
+            continue
+
+        n = len(data["close"])
+        for est in LISTA_ESTRATEGIAS:
+            if ativo not in resultados_est[est]["ativos"]:
+                resultados_est[est]["ativos"][ativo] = {"wins": 0, "losses": 0}
+
+            # Simula entrada vela a vela no gráfico de 60 velas
+            for i in range(25, n - 1):
+                data_sub = {
+                    "time": data["time"][:i+1],
+                    "open": data["open"][:i+1],
+                    "high": data["high"][:i+1],
+                    "low": data["low"][:i+1],
+                    "close": data["close"][:i+1]
+                }
+                sinal, prob = analisar_estrategia(data_sub, est, -1)
+                if sinal:
+                    c_next = data["close"][i+1]
+                    o_next = data["open"][i+1]
+                    is_win = (sinal == "CALL" and c_next > o_next) or (sinal == "PUT" and c_next < o_next)
+                    
+                    if is_win:
+                        resultados_est[est]["wins"] += 1
+                        resultados_est[est]["ativos"][ativo]["wins"] += 1
+                    else:
+                        resultados_est[est]["losses"] += 1
+                        resultados_est[est]["ativos"][ativo]["losses"] += 1
+
+    resumo = []
+    for est, stats in resultados_est.items():
+        tot = stats["wins"] + stats["losses"]
+        wr = round((stats["wins"] / tot) * 100, 1) if tot > 0 else 0.0
+
+        top_ativos = []
+        for atv, atv_stats in stats["ativos"].items():
+            atv_tot = atv_stats["wins"] + atv_stats["losses"]
+            if atv_tot > 0:
+                atv_wr = round((atv_stats["wins"] / atv_tot) * 100, 1)
+                top_ativos.append({
+                    "ativo": atv,
+                    "winrate": atv_wr,
+                    "wins": atv_stats["wins"],
+                    "losses": atv_stats["losses"]
+                })
+        top_ativos.sort(key=lambda x: (x["winrate"], x["wins"]), reverse=True)
+
+        resumo.append({
+            "estrategia": est,
+            "nome_display": NOME_ESTRATEGIAS_DISPLAY.get(est, est),
+            "wins": stats["wins"],
+            "losses": stats["losses"],
+            "total": tot,
+            "winrate": wr,
+            "melhores_ativos": top_ativos[:5]
+        })
+
+    # Ordena as estratégias da mais forte para a mais fraca
+    resumo.sort(key=lambda x: (x["winrate"], x["wins"]), reverse=True)
+    st["catalogacao_resultado"] = resumo
+    st["catalogando"] = False
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
 @app.route('/sw.js')
@@ -1315,6 +1529,30 @@ def index():
     st = get_user_state(user)
     return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL)
 
+@app.route('/salvar_config_operacional', methods=['POST'])
+def salvar_config_operacional():
+    user = session.get('user')
+    if not user:
+        return jsonify({"ok": False, "erro": "Usuário não autenticado."})
+    st = get_user_state(user)
+    data = request.get_json(silent=True) or request.form
+    
+    est = data.get('estrategia')
+    ativos = data.get('ativos')
+    
+    if est:
+        st["estrategia"] = est
+    if ativos is not None:
+        if isinstance(ativos, list):
+            st["ativos_selecionados"] = ativos if len(ativos) > 0 else "TODOS"
+        elif isinstance(ativos, str):
+            if ativos.strip().upper() in ["TODOS", ""]:
+                st["ativos_selecionados"] = "TODOS"
+            else:
+                st["ativos_selecionados"] = [a.strip() for a in ativos.split(",") if a.strip()]
+                
+    return jsonify({"ok": True, "estrategia": st["estrategia"], "ativos": st["ativos_selecionados"]})
+
 @app.route('/status')
 def status():
     user = session.get('user')
@@ -1338,7 +1576,10 @@ def status():
         "ativo_atual": st["ativo_atual"],
         "mercado": st["tipo_mercado"],
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
-        "notificacao": st["notificacao"]
+        "notificacao": st["notificacao"],
+        "catalogando": st.get("catalogando", False),
+        "catalogacao": st.get("catalogacao_resultado"),
+        "ativos_selecionados": st.get("ativos_selecionados", "TODOS")
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -1352,7 +1593,11 @@ def command(cmd):
     
     st = get_user_state(user)
 
-    if cmd == "test_telegram":
+    if cmd == "fazer_catalogacao":
+        threading.Thread(target=executar_catalogacao_60_velas, args=(user,), daemon=True).start()
+        return jsonify({"ok": True})
+
+    elif cmd == "test_telegram":
         msg_teste = (
             f"🧪 <b>TESTE DE COMUNICAÇÃO - VISION PRO V3</b>\n\n"
             f"✅ Conexão estabelecida com sucesso com o Telegram!\n"
@@ -1380,7 +1625,7 @@ def command(cmd):
         
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
-            f"🟢 <b>Status:</b> Análise de 30 velas ativada\n"
+            f"🟢 <b>Status:</b> Análise de 60 velas ativada\n"
             f"👤 <b>Usuário:</b> {user}\n"
             f"📊 <b>Timeframe:</b> M{st['timeframe']}\n"
             f"🌐 <b>Mercado:</b> {st['tipo_mercado']}\n"
@@ -1393,7 +1638,7 @@ def command(cmd):
     elif cmd == "pause_bot":
         st["bot_pausado"] = not st["bot_pausado"]
         status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if st["bot_pausado"] else f"🔍 ANALISANDO: {st['ativo_atual']} (M{st['timeframe']})"
-        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO 30 VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
+        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO 60 VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
         msg_pause = "⏸ <b>SISTEMA PAUSADO</b>" if st["bot_pausado"] else "▶️ <b>SISTEMA RETOMADO!</b>"
         enviar_telegram(msg_pause, user_solicitante=user)
         return jsonify({"ok": True})
@@ -1461,8 +1706,6 @@ def enviar_telegram_em_background(mensagem, user_email, alert_id=None, deletar_m
                     deletar_mensagem_telegram(deletar_msg_id)
                 except Exception as e:
                     print(f"⚠️ Falha ao deletar alerta antigo no Telegram: {e}")
-            # Se o alerta já foi substituído enquanto o Telegram estava processando,
-            # não envia a mensagem antiga.
             if st is not None and alert_id is not None:
                 atual = st.get("alerta_ativo")
                 if atual and atual.get("alert_id") != alert_id:
@@ -1493,7 +1736,6 @@ def bot_loop():
             agora_scan = agora_brasilia()
             now_ts = time.time()
 
-            # Limpeza do cache de dados OHLC a cada 5 segundos
             ohlc_cache = {k: v for k, v in ohlc_cache.items() if now_ts - v["time"] < 5}
 
             for user_email, st in usuarios_ativos:
@@ -1507,13 +1749,11 @@ def bot_loop():
                     tf = st.get("timeframe", 5)
                     mkt = st.get("tipo_mercado", "TODOS")
                     user_est = st.get("estrategia", "TODAS")
+                    sel_ativos = st.get("ativos_selecionados", "TODOS")
 
-                    # -------------------------------------------------------------
                     # 1. VERIFICA SE HÁ UM PRÉ-ALERTA AGUARDANDO FECHAMENTO DA VELA
-                    # -------------------------------------------------------------
                     alerta = st.get("alerta_ativo")
                     if alerta:
-                        # Confirma 5 segundos antes da virada da vela.
                         momento_confirmacao = alerta.get(
                             "momento_confirmacao",
                             alerta["prox_minuto_entrada"] - timedelta(seconds=5)
@@ -1526,7 +1766,6 @@ def bot_loop():
                             str_saida = alerta["str_saida"]
                             prob = alerta["probabilidade"]
 
-                            # Atualiza o painel primeiro. Telegram e banco não podem atrasar a tela.
                             st["sinal_permanente"] = (
                                 f"<div class='status-box' style='border-color:#00f2fe; background:rgba(0,242,254,0.1);'>"
                                 f"<h3 style='color:#00f2fe; margin-bottom:8px;'>🎯 SINAL CONFIRMADO!</h3>"
@@ -1572,19 +1811,23 @@ def bot_loop():
 
                     bloquear_novos_alertas = st.get("aguardando_confirmacao", False)
 
-                    # -------------------------------------------------------------
-                    # 2. VARREDURA DINÂMICA DE TODOS OS ATIVOS DO MERCADO
-                    # -------------------------------------------------------------
+                    # 2. SELEÇÃO E FILTRAGEM DE ATIVOS DO MERCADO
                     if mkt == "TODOS":
-                        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+                        ativos_base = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
                     elif mkt == "ABERTO_TODOS":
-                        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
+                        ativos_base = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
                     elif mkt == "OTC_TODOS":
-                        ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+                        ativos_base = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
                     else:
-                        ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
+                        ativos_base = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
 
-                    ativos_scan = ativos.copy()
+                    # Aplica o filtro de ativos escolhidos pelo usuário
+                    if sel_ativos != "TODOS" and isinstance(sel_ativos, list) and len(sel_ativos) > 0:
+                        ativos_scan = [a for a in ativos_base if a in sel_ativos]
+                        if not ativos_scan: ativos_scan = ativos_base.copy()
+                    else:
+                        ativos_scan = ativos_base.copy()
+
                     random.shuffle(ativos_scan)
 
                     for ativo in ativos_scan:
@@ -1595,13 +1838,13 @@ def bot_loop():
                         ticker = MAPA_TICKERS.get(ativo, ativo)
 
                         if not alerta and not st.get("aguardando_confirmacao"):
-                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
+                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 60 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
 
                         cache_key = f"{ticker}_{tf}"
                         if cache_key in ohlc_cache:
                             data = ohlc_cache[cache_key]["data"]
                         else:
-                            data = get_data_v2(ticker, tf, velas_minimas=30)
+                            data = get_data_v2(ticker, tf, velas_minimas=60)
                             if data:
                                 ohlc_cache[cache_key] = {"data": data, "time": time.time()}
 
@@ -1637,7 +1880,6 @@ def bot_loop():
                             total_seg = tf * 60
                             seg_restantes = total_seg - seg_pass
 
-                            # A janela de decisão fecha 5 segundos antes da virada.
                             if seg_restantes <= 5:
                                 continue
 
@@ -1645,13 +1887,11 @@ def bot_loop():
                             momento_confirmacao = prox_minuto_entrada - timedelta(seconds=5)
                             horario_saida = prox_minuto_entrada + timedelta(minutes=tf)
 
-                            # Horário em que o painel/Telegram confirmam a entrada.
                             str_entrada = momento_confirmacao.strftime("%H:%M:%S")
                             str_saida = horario_saida.strftime("%H:%M")
 
                             nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
 
-                            # Substituição se houver um sinal com probabilidade superior no mesmo ciclo
                             if alerta:
                                 if maior_prob > alerta.get("probabilidade", 0):
                                     msg_antigo_id = alerta.get("msg_id")
@@ -1666,7 +1906,6 @@ def bot_loop():
                                         f"👉 <i>Alerta anterior cancelado. Abra o ativo {ativo} na corretora!</i>"
                                     )
 
-                                    # Troca o alerta no painel imediatamente.
                                     st["alerta_ativo"] = {
                                         "ativo": ativo,
                                         "sinal": sinal_encontrado,
