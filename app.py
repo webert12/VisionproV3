@@ -399,7 +399,7 @@ HTML_INDEX = """
         .btn-notify { width: 100%; padding: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; }
         .btn-notify:hover { background: rgba(16, 185, 129, 0.3); }
 
-        /* ESTILOS DE CATALOGAÇÃO */
+        /* ESTILOS DE CATALOGAÇÃO E SELEÇÃO DE ATIVOS */
         .btn-catalog { width: 100%; padding: 12px; background: linear-gradient(135deg, #00c6ff, #0072ff); border: none; color: white; font-weight: 800; font-size: 11px; border-radius: 10px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; box-shadow: 0 4px 15px rgba(0, 198, 255, 0.3); }
         .btn-catalog:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0, 198, 255, 0.5); }
         .catalog-card { background: #0b1120; border: 1px solid #00f2fe; border-radius: 16px; padding: 15px; margin-bottom: 16px; font-size: 12px; }
@@ -407,8 +407,9 @@ HTML_INDEX = """
         .catalog-table th, .catalog-table td { padding: 8px; text-align: left; border-bottom: 1px solid #1e293b; }
         .catalog-table th { color: #00f2fe; font-weight: 800; text-transform: uppercase; }
         .asset-chip { display: inline-block; padding: 3px 8px; border-radius: 6px; background: rgba(0, 242, 254, 0.1); border: 1px solid rgba(0, 242, 254, 0.3); font-size: 10px; margin: 2px; font-weight: bold; }
-        .asset-checkbox-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; max-height: 120px; overflow-y: auto; padding: 6px; background: #0f172a; border-radius: 8px; border: 1px solid #1e293b; margin-top: 5px; }
-        .asset-checkbox-item { font-size: 11px; display: flex; align-items: center; gap: 6px; }
+        .asset-checkbox-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; max-height: 140px; overflow-y: auto; padding: 8px; background: #0f172a; border-radius: 8px; border: 1px solid #1e293b; margin-top: 5px; }
+        .asset-checkbox-item { font-size: 11px; display: flex; align-items: center; gap: 6px; color: #cbd5e1; cursor: pointer; }
+        .asset-checkbox-item input { accent-color: #00f2fe; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -490,7 +491,7 @@ HTML_INDEX = """
                 <div class="setting-group">
                     <label>TIPO DE MERCADO</label>
                     <div class="select-wrapper">
-                        <select class="modern-select" onchange="sendCommand('mkt_' + this.value)">
+                        <select id="select-mkt" class="modern-select" onchange="sendCommand('mkt_' + this.value); atualizarListaAtivosSelecao(this.value);">
                             <option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>🌐 Todos os Mercados (Aberto + OTC)</option>
                             <option value="ABERTO_TODOS" {% if modo == 'ABERTO_TODOS' %}selected{% endif %}>🟢 Todo Mercado Aberto (Forex + Cripto)</option>
                             <option value="OTC_TODOS" {% if modo == 'OTC_TODOS' %}selected{% endif %}>🌙 Todo Mercado OTC (Forex + Cripto)</option>
@@ -528,6 +529,22 @@ HTML_INDEX = """
                 </div>
             </div>
 
+            <!-- SELETOR PERSONALIZADO DE ATIVOS -->
+            <div class="settings-grid full">
+                <div class="setting-group">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                        <label style="margin:0;">🎯 ATIVOS LIBERADOS PARA OPERAÇÃO</label>
+                        <div>
+                            <button type="button" onclick="marcarTodosAtivos(true)" style="background:none; border:none; color:#00f2fe; font-size:10px; cursor:pointer; font-weight:bold;">Marcar Todos</button> |
+                            <button type="button" onclick="marcarTodosAtivos(false)" style="background:none; border:none; color:#ef4444; font-size:10px; cursor:pointer; font-weight:bold;">Limpar</button>
+                        </div>
+                    </div>
+                    <div id="asset-checkbox-container" class="asset-checkbox-grid">
+                        <!-- Gerado via JavaScript -->
+                    </div>
+                </div>
+            </div>
+
             <span class="section-label" style="margin-top: 5px;">Plataformas de Operação</span>
             <div class="broker-flex">
                 <button class="btn-broker" onclick="openBroker('https://qxbroker.com')">🌐 Quotex</button>
@@ -553,6 +570,13 @@ HTML_INDEX = """
     <script>
         let lastNotifId = null;
         const NATIVE_NOTIFICATION_COOLDOWN_MS = 60000;
+
+        const ATIVOS_MAPEADOS = {
+            "FOREX_ABERTO": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCAD", "EURCHF"],
+            "CRIPTO_ABERTO": ["BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "ADAUSD", "AVAXUSD", "LINKUSD", "DOGEUSD", "DOTUSD", "MATICUSD", "LTCUSD", "SHIBUSD", "TRXUSD"],
+            "FOREX_OTC": ["EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC", "USDCAD-OTC", "USDCHF-OTC", "NZDUSD-OTC", "EURGBP-OTC", "EURJPY-OTC", "GBPJPY-OTC", "AUDJPY-OTC", "EURAUD-OTC", "EURCAD-OTC", "EURCHF-OTC"],
+            "CRIPTO_OTC": ["BTCUSD-OTC", "ETHUSD-OTC", "SOLUSD-OTC", "BNBUSD-OTC", "XRPUSD-OTC", "ADAUSD-OTC", "AVAXUSD-OTC", "LINKUSD-OTC", "DOGEUSD-OTC", "DOTUSD-OTC", "MATICUSD-OTC", "LTCUSD-OTC", "SHIBUSD-OTC", "TRXUSD-OTC"]
+        };
 
         if ('serviceWorker' in navigator && 'Notification' in window) {
             navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
@@ -646,6 +670,59 @@ HTML_INDEX = """
             alert('✅ Configurações salvas! O robô agora operará com os parâmetros escolhidos.');
         }
 
+        function atualizarListaAtivosSelecao(mktModo, ativosAtuais) {
+            let lista = [];
+            if (mktModo === "TODOS") {
+                lista = [...ATIVOS_MAPEADOS.FOREX_ABERTO, ...ATIVOS_MAPEADOS.CRIPTO_ABERTO, ...ATIVOS_MAPEADOS.FOREX_OTC, ...ATIVOS_MAPEADOS.CRIPTO_OTC];
+            } else if (mktModo === "ABERTO_TODOS") {
+                lista = [...ATIVOS_MAPEADOS.FOREX_ABERTO, ...ATIVOS_MAPEADOS.CRIPTO_ABERTO];
+            } else if (mktModo === "OTC_TODOS") {
+                lista = [...ATIVOS_MAPEADOS.FOREX_OTC, ...ATIVOS_MAPEADOS.CRIPTO_OTC];
+            } else if (ATIVOS_MAPEADOS[mktModo]) {
+                lista = ATIVOS_MAPEADOS[mktModo];
+            } else {
+                lista = ATIVOS_MAPEADOS.FOREX_ABERTO;
+            }
+
+            const container = document.getElementById('asset-checkbox-container');
+            if(!container) return;
+            
+            let html = '';
+            const todosMarcados = !ativosAtuais || ativosAtuais === "TODOS";
+            
+            lista.forEach(atv => {
+                const checado = todosMarcados || (Array.isArray(ativosAtuais) && ativosAtuais.includes(atv));
+                html += `
+                    <label class="asset-checkbox-item">
+                        <input type="checkbox" value="${atv}" ${checado ? 'checked' : ''} onchange="salvarSelecaoAtivos()">
+                        <span>${atv}</span>
+                    </label>
+                `;
+            });
+
+            container.innerHTML = html;
+        }
+
+        function marcarTodosAtivos(status) {
+            document.querySelectorAll('#asset-checkbox-container input[type="checkbox"]').forEach(chk => {
+                chk.checked = status;
+            });
+            salvarSelecaoAtivos();
+        }
+
+        async function salvarSelecaoAtivos() {
+            const marcados = [];
+            document.querySelectorAll('#asset-checkbox-container input[type="checkbox"]:checked').forEach(chk => {
+                marcados.push(chk.value);
+            });
+
+            await fetch('/salvar_config_operacional', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ativos: marcados.length > 0 ? marcados : "TODOS" })
+            });
+        }
+
         function renderizarCatalogacao(catalogData) {
             const container = document.getElementById('catalog-content');
             if(!catalogData || catalogData.length === 0) {
@@ -714,6 +791,8 @@ HTML_INDEX = """
             container.innerHTML = html;
         }
 
+        let listaAtivosInicializada = false;
+
         async function atualizarPainel() {
             try {
                 const r = await fetch('/status', { cache: 'no-store' });
@@ -730,6 +809,11 @@ HTML_INDEX = """
                 if(document.getElementById('ativos-badge')) {
                     const atvs = data.ativos_selecionados;
                     document.getElementById('ativos-badge').innerText = Array.isArray(atvs) ? atvs.join(", ") : atvs;
+                }
+
+                if(!listaAtivosInicializada && data.mercado) {
+                    atualizarListaAtivosSelecao(data.mercado, data.ativos_selecionados);
+                    listaAtivosInicializada = true;
                 }
 
                 if(document.getElementById('current-asset')) {
@@ -1720,7 +1804,6 @@ def enviar_telegram_em_background(mensagem, user_email, alert_id=None, deletar_m
             print(f"⚠️ Erro no envio Telegram em background: {e}")
     threading.Thread(target=worker, daemon=True).start()
 
-
 # ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT =================
 def bot_loop():
     ohlc_cache = {}
@@ -1736,6 +1819,7 @@ def bot_loop():
             agora_scan = agora_brasilia()
             now_ts = time.time()
 
+            # Limpa cache antigo a cada 5 segundos
             ohlc_cache = {k: v for k, v in ohlc_cache.items() if now_ts - v["time"] < 5}
 
             for user_email, st in usuarios_ativos:
@@ -1809,7 +1893,8 @@ def bot_loop():
 
                             threading.Thread(target=finalizar_confirmacao, daemon=True).start()
 
-                    bloquear_novos_alertas = st.get("aguardando_confirmacao", False)
+                    if st.get("aguardando_confirmacao", False):
+                        continue
 
                     # 2. SELEÇÃO E FILTRAGEM DE ATIVOS DO MERCADO
                     if mkt == "TODOS":
@@ -1859,162 +1944,76 @@ def bot_loop():
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
                             random.shuffle(estrategias_para_analisar)
                         elif "," in str(user_est):
-                            estrategias_para_analisar = [e.strip() for e in user_est.split(",") if e.strip() in LISTA_ESTRATEGIAS]
-                        elif user_est in LISTA_ESTRATEGIAS:
-                            estrategias_para_analisar = [user_est]
+                            estrategias_para_analisar = [e.strip() for e in user_est.split(",") if e.strip()]
                         else:
-                            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+                            estrategias_para_analisar = [user_est]
 
-                        for est_nome in estrategias_para_analisar:
-                            sinal_test, prob_test = analisar_estrategia(data, est_nome)
-                            if sinal_test and prob_test > maior_prob:
-                                sinal_encontrado = sinal_test
-                                est_nome_encontrada = est_nome
-                                maior_prob = prob_test
+                        for est_item in estrategias_para_analisar:
+                            s, p = analisar_estrategia(data, est_item, -1)
+                            if s and p > maior_prob:
+                                sinal_encontrado = s
+                                est_nome_encontrada = est_item
+                                maior_prob = p
 
-                        if sinal_encontrado and not bloquear_novos_alertas:
-                            agora = agora_brasilia()
-                            
-                            min_pass = agora.minute % tf
-                            seg_pass = min_pass * 60 + agora.second
-                            total_seg = tf * 60
-                            seg_restantes = total_seg - seg_pass
-
-                            if seg_restantes <= 5:
+                        # 3. SE ENCONTROU SINAL VÁLIDO
+                        if sinal_encontrado and maior_prob >= 75:
+                            chave_sinal = f"{ativo}_{sinal_encontrado}_{agora_scan.strftime('%Y%m%d_%H%M')}"
+                            if chave_sinal in st["sinais_enviados"]:
                                 continue
 
-                            prox_minuto_entrada = agora + timedelta(seconds=seg_restantes)
-                            momento_confirmacao = prox_minuto_entrada - timedelta(seconds=5)
-                            horario_saida = prox_minuto_entrada + timedelta(minutes=tf)
+                            min_atual = agora_scan.minute
+                            prox_min = (min_atual + (tf - (min_atual % tf))) % 60
+                            add_horas = (min_atual + (tf - (min_atual % tf))) // 60
+                            hora_entrada = agora_scan.replace(hour=(agora_scan.hour + add_horas) % 24, minute=prox_min, second=0, microsecond=0)
+                            hora_saida = hora_entrada + timedelta(minutes=tf)
 
-                            str_entrada = momento_confirmacao.strftime("%H:%M:%S")
-                            str_saida = horario_saida.strftime("%H:%M")
+                            str_entrada = hora_entrada.strftime("%H:%M")
+                            str_saida = hora_saida.strftime("%H:%M")
+                            est_fmt = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
 
-                            nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
+                            st["sinais_enviados"][chave_sinal] = True
 
-                            if alerta:
-                                if maior_prob > alerta.get("probabilidade", 0):
-                                    msg_antigo_id = alerta.get("msg_id")
-                                    novo_alert_id = str(time.time_ns())
+                            st["alerta_ativo"] = {
+                                "alert_id": chave_sinal,
+                                "ativo": ativo,
+                                "sinal": sinal_encontrado,
+                                "estrategia_fmt": est_fmt,
+                                "probabilidade": maior_prob,
+                                "prox_minuto_entrada": hora_entrada,
+                                "momento_confirmacao": hora_entrada - timedelta(seconds=5),
+                                "str_entrada": str_entrada,
+                                "str_saida": str_saida
+                            }
 
-                                    msg_pre_alerta = (
-                                        f"⚡ <b>ALERTA ATUALIZADO: MAIOR PROBABILIDADE DETECTADA!</b> ⚡\n\n"
-                                        f"<b>Ativo:</b> {ativo} ({maior_prob}% de Assertividade)\n"
-                                        f"<b>Timeframe:</b> M{tf}\n"
-                                        f"<b>Estratégia:</b> {nome_est_formatado}\n"
-                                        f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
-                                        f"👉 <i>Alerta anterior cancelado. Abra o ativo {ativo} na corretora!</i>"
-                                    )
+                            st["notificacao"] = {
+                                "id": chave_sinal,
+                                "titulo": f"⚡ PRÉ-ALERTA: {ativo}",
+                                "corpo": f"Entrada {sinal_encontrado} para às {str_entrada} via {est_fmt}"
+                            }
 
-                                    st["alerta_ativo"] = {
-                                        "ativo": ativo,
-                                        "sinal": sinal_encontrado,
-                                        "estrategia": est_nome_encontrada,
-                                        "estrategia_fmt": nome_est_formatado,
-                                        "probabilidade": maior_prob,
-                                        "msg_id": None,
-                                        "str_entrada": str_entrada,
-                                        "str_saida": str_saida,
-                                        "prox_minuto_entrada": prox_minuto_entrada,
-                                        "momento_confirmacao": momento_confirmacao,
-                                        "alert_id": novo_alert_id,
-                                        "tf": tf
-                                    }
+                            msg_pre = (
+                                f"⚠️ <b>PRÉ-ALERTA DE OPERAÇÃO</b> ⚠️\n\n"
+                                f"💱 <b>Paridade:</b> {ativo}\n"
+                                f"⏱ <b>Timeframe:</b> M{tf}\n"
+                                f"🧠 <b>Estratégia:</b> {est_fmt}\n"
+                                f"📊 <b>Assertividade Estimada:</b> {maior_prob}%\n"
+                                f"⏰ <b>Horário Previsto de Entrada:</b> {str_entrada}\n\n"
+                                f"<i>Aguardando confirmação de fechamento da vela aos 5s finais...</i>"
+                            )
 
-                                    enviar_telegram_em_background(
-                                        msg_pre_alerta,
-                                        user_email,
-                                        alert_id=novo_alert_id,
-                                        deletar_msg_id=msg_antigo_id,
-                                        st=st
-                                    )
+                            enviar_telegram_em_background(msg_pre, user_email, alert_id=chave_sinal, st=st)
+                            break
+                except Exception as e:
+                    print(f"Erro no loop do usuário {user_email}: {e}")
 
-                                    st["ultimo_sinal"] = (
-                                        f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
-                                        f"⚡ <b>ALERTA SUBSTITUÍDO (MAIOR PROBABILIDADE: {maior_prob}%)</b> ⚡<br>"
-                                        f"<b>NOVO ATIVO: {ativo}</b> | Entrada às <b>{str_entrada}</b> (M{tf})<br>"
-                                        f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span>"
-                                        f"</div>"
-                                    )
-                                    alerta = st["alerta_ativo"]
+        except Exception as e:
+            print(f"Erro no bot_loop principal: {e}")
 
-                            else:
-                                if st["sinais_enviados"].get(ativo) == str_entrada:
-                                    continue
+        time.sleep(1)
 
-                                st["sinais_enviados"][ativo] = str_entrada
-
-                                msg_pre_alerta = (
-                                    f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n"
-                                    f"<b>Ativo:</b> {ativo}\n"
-                                    f"<b>Timeframe:</b> M{tf}\n"
-                                    f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
-                                    f"<b>Assertividade Estimada:</b> {maior_prob}%\n"
-                                    f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
-                                    f"👉 <i>Abra o ativo na corretora e prepare-se!</i>"
-                                )
-                                
-                                novo_alert_id = str(time.time_ns())
-
-                                st["alerta_ativo"] = {
-                                    "ativo": ativo,
-                                    "sinal": sinal_encontrado,
-                                    "estrategia": est_nome_encontrada,
-                                    "estrategia_fmt": nome_est_formatado,
-                                    "probabilidade": maior_prob,
-                                    "msg_id": None,
-                                    "str_entrada": str_entrada,
-                                    "str_saida": str_saida,
-                                    "prox_minuto_entrada": prox_minuto_entrada,
-                                    "momento_confirmacao": momento_confirmacao,
-                                    "alert_id": novo_alert_id,
-                                    "tf": tf
-                                }
-
-                                enviar_telegram_em_background(
-                                    msg_pre_alerta,
-                                    user_email,
-                                    alert_id=novo_alert_id,
-                                    st=st
-                                )
-
-                                st["ultimo_sinal"] = (
-                                    f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
-                                    f"⚠️ <b>PREPARE O ATIVO: {ativo} ({maior_prob}%)</b> ⚠️<br>"
-                                    f"<span style='color:#fff;'>Entrada às <b>{str_entrada}</b> (M{tf})</span><br>"
-                                    f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span>"
-                                    f"</div>"
-                                )
-
-                                st["notificacao"] = {
-                                    "id": str(time.time()),
-                                    "titulo": f"⚠️ PREPARE-SE: {ativo}",
-                                    "corpo": f"Entrada às {str_entrada} (M{tf}) via {nome_est_formatado} ({maior_prob}%)."
-                                }
-                                alerta = st["alerta_ativo"]
-
-                except Exception as e_usr:
-                    print(f"Erro no loop do usuario {user_email}: {e_usr}")
-
-            time.sleep(0.5)
-        except Exception as err:
-            print(f"Erro no loop global do bot: {err}")
-            time.sleep(2)
-
-# ================= THREAD BACKGROUND =================
-thread_iniciada = False
-lock_thread = threading.Lock()
-
-@app.before_request
-def start_background_loop():
-    global thread_iniciada
-    if not thread_iniciada:
-        with lock_thread:
-            if not thread_iniciada:
-                threading.Thread(target=bot_loop, daemon=True).start()
-                thread_iniciada = True
+# Inicia o motor principal do robô em segundo plano
+threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == '__main__':
-    start_background_loop()
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.getenv("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
