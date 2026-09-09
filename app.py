@@ -1386,12 +1386,8 @@ def analisar_estrategia(data, estrategia, i=-1):
     probabilidade = min(98, max(75, probabilidade)) if sinal else 0
     return sinal, probabilidade
 
-# ================= MOTOR DE CATALOGAÇÃO COMPLETA DAS 60 VELAS (VARREDURA PRÉ-OPERACIONAL) =================
+# ================= MOTOR DE CATALOGAÇÃO COMPLETA DAS 60 VELAS =================
 def executar_catalogacao_60_velas(user_email):
-    """
-    Executa uma varredura nas últimas 60 velas de todo o mercado antes de iniciar o bot.
-    Identifica a melhor estratégia, os melhores ativos e carrega a análise pronta no painel e Telegram.
-    """
     st = get_user_state(user_email)
     if not st: return
     
@@ -1578,7 +1574,9 @@ def loop_varredura_principal():
                     if not st.get("bot_iniciado") or st.get("bot_pausado") or st.get("aguardando_confirmacao"):
                         break
 
+                    # Atualiza ativamente o ativo em verificação
                     st["ativo_atual"] = ativo
+
                     ticker = MAPA_TICKERS.get(ativo, ativo)
                     data = get_data_v2(ticker, tf, velas_minimas=30)
 
@@ -1654,6 +1652,10 @@ def loop_varredura_principal():
             print(f"Erro no loop de varredura: {e}")
         time.sleep(2)
 
+# Inicializa a Thread em segundo plano
+t_varredura = threading.Thread(target=loop_varredura_principal, daemon=True)
+t_varredura.start()
+
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
 @app.route('/sw.js')
 def service_worker():
@@ -1690,26 +1692,6 @@ def service_worker():
 @app.route('/health')
 def health():
     return jsonify({"status": "ok"}), 200
-
-@app.route('/')
-def index():
-    if 'user' not in session:
-        return redirect('/login')
-    
-    user = session['user']
-    st = get_user_state(user)
-    usuarios = carregar_usuarios()
-    
-    if user not in usuarios and user != ADMIN_EMAIL:
-        session.pop('user', None)
-        return redirect('/login')
-
-    return render_template_string(HTML_INDEX, 
-                                  user=user, 
-                                  admin=ADMIN_EMAIL,
-                                  modo=st.get("tipo_mercado", "TODOS"),
-                                  tf=st.get("timeframe", 5),
-                                  estrat=st.get("estrategia", "TODAS"))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -1759,209 +1741,225 @@ def register():
     if request.method == 'POST':
         e = request.form.get('email', '').strip().lower()
         s = request.form.get('password', '').strip()
+        ip_cliente = get_client_ip()
         
         if not e or not s:
-            return render_template_string(HTML_REGISTER, erro="Preencha todos os campos obrigatórios.")
-            
-        usuarios = carregar_usuarios()
-        if e in usuarios:
-            return render_template_string(HTML_REGISTER, erro="Este e-mail já está cadastrado. Vá para a página de Login.")
+            return render_template_string(HTML_REGISTER, erro="Preencha todos os campos.")
             
         try:
-            ip_cliente = get_client_ip()
-            salvar_usuario(e, s, agora_brasilia().strftime("%Y-%m-%d"), ip_inicial=ip_cliente)
-            return redirect('/login')
+            salvar_usuario(e, s, ip_inicial=ip_cliente)
+            session['user'] = e
+            USUARIOS_ONLINE[e] = time.time()
+            get_user_state(e)
+            return redirect('/')
         except Exception as err:
-            return render_template_string(HTML_REGISTER, erro=f"Erro durante o cadastro: {err}")
-            
+            return render_template_string(HTML_REGISTER, erro=f"Erro ao salvar: {err}")
+
     return render_template_string(HTML_REGISTER)
 
 @app.route('/logout')
 def logout():
-    session.pop('user', None)
+    user = session.get('user')
+    if user in USUARIOS_ONLINE: del USUARIOS_ONLINE[user]
+    session.clear()
     return redirect('/login')
 
 @app.route('/termos')
 def termos():
     return render_template_string(HTML_TERMOS)
 
-# ================= ROTAS DE CONTROLE E COMANDOS =================
-@app.route('/status')
-def status():
-    user = session.get('user')
-    if not user:
-        return jsonify({"error": "unauthorized"}), 401
-        
-    USUARIOS_ONLINE[user] = time.time()
-    st = get_user_state(user)
-    
-    usuarios = carregar_usuarios()
-    user_db = usuarios.get(user, {})
-    wins = user_db.get('wins', 0)
-    reds = user_db.get('reds', 0)
-    winrate = user_db.get('winrate', 0.0)
-    historico = buscar_historico_bd(user)
-    
-    return jsonify({
-        "html": st.get("sinal_permanente") if st.get("aguardando_confirmacao") else st.get("ultimo_sinal"),
-        "aguardando": st.get("aguardando_confirmacao"),
-        "wins": wins,
-        "reds": reds,
-        "winrate": winrate,
-        "mercado": st.get("tipo_mercado"),
-        "ativos_selecionados": st.get("ativos_selecionados"),
-        "rodando": st.get("bot_iniciado") and not st.get("bot_pausado"),
-        "ativo_atual": st.get("ativo_atual"),
-        "catalogando": st.get("catalogando"),
-        "catalogacao": st.get("catalogacao_resultado"),
-        "historico": historico,
-        "notificacao": st.get("notificacao")
-    })
-
-@app.route('/command/<cmd>')
-def command(cmd):
-    user = session.get('user')
-    if not user: 
-        return jsonify({"error": "unauthorized"}), 401
-        
-    st = get_user_state(user)
-
-    if cmd == "start_bot":
-        st["bot_iniciado"] = True
-        st["bot_pausado"] = False
-        st["aguardando_confirmacao"] = False
-        st["inicio_varredura"] = time.time() + 2
-        st["ultimo_sinal"] = "SISTEMA INICIADO! Varrendo ativos no mercado selecionado..."
-        st["notificacao"] = {"id": int(time.time()), "titulo": "▶️ BOT INICIADO", "corpo": "A varredura de sinais começou."}
-    elif cmd == "pause_bot":
-        st["bot_pausado"] = True
-        st["ultimo_sinal"] = "Bot Pausado pelo Usuário."
-    elif cmd == "stop_bot":
-        st["bot_iniciado"] = False
-        st["bot_pausado"] = True
-        st["aguardando_confirmacao"] = False
-        st["ultimo_sinal"] = "Bot Parado."
-    elif cmd.startswith("mkt_"):
-        st["tipo_mercado"] = cmd.split("mkt_")[1]
-    elif cmd.startswith("tf_"):
-        st["timeframe"] = int(cmd.split("tf_")[1])
-    elif cmd.startswith("set_est_"):
-        st["estrategia"] = cmd.split("set_est_")[1]
-    elif cmd == "fazer_catalogacao":
-        threading.Thread(target=executar_catalogacao_60_velas, args=(user,)).start()
-    elif cmd == "test_telegram":
-        enviar_telegram("🧪 <b>TESTE DE CONEXÃO</b>\nO Vision Pro V3 está sincronizado com o Telegram com sucesso!", user_solicitante=user)
-    
-    return jsonify({"status": "ok"})
-
-@app.route('/resultado/<res>')
-def resultado(res):
-    user = session.get('user')
-    if not user: 
-        return jsonify({"error": "unauthorized"}), 401
-        
-    st = get_user_state(user)
-
-    if not st.get("aguardando_confirmacao"):
-        return jsonify({"status": "ignorado"})
-
-    st["aguardando_confirmacao"] = False
-    msg_res = ""
-    is_win = False
-
-    if res == "win":
-        is_win = True
-        msg_res = "✅ Win Direto"
-    elif res == "g1":
-        is_win = True
-        msg_res = "✅ Win no G1"
-    elif res == "red":
-        msg_res = "❌ Red"
-    elif res == "pular":
-        msg_res = "⏭️ Sinal Ignorado"
-        
-    if res in ["win", "g1", "red"]:
-        atualizar_estatisticas_usuario(user, is_win)
-        atualizar_ultimo_sinal_bd(user, msg_res)
-        
-    st["ultimo_sinal"] = f"Resultado Registrado: {msg_res}. Retomando varredura em 5 segundos..."
-    st["inicio_varredura"] = time.time() + 5
-    
-    return jsonify({"status": "ok"})
-
-@app.route('/salvar_config_operacional', methods=['POST'])
-def salvar_config_operacional():
-    user = session.get('user')
-    if not user: 
-        return jsonify({"error": "unauthorized"}), 401
-        
-    st = get_user_state(user)
-    data = request.json
-    
-    if data and 'estrategia' in data:
-        st['estrategia'] = data['estrategia']
-    if data and 'ativos' in data:
-        st['ativos_selecionados'] = data['ativos']
-        
-    return jsonify({"status": "ok"})
-
-# ================= ROTAS ADMINISTRATIVAS =================
 @app.route('/admin_panel')
 def admin_panel():
-    if session.get('user') != ADMIN_EMAIL:
-        abort(403)
-        
-    usuarios = carregar_usuarios()
-    online_list = [k for k, v in USUARIOS_ONLINE.items() if time.time() - v < 300]
-    
-    return render_template_string(HTML_ADM, 
-                                  lista=usuarios, 
-                                  online_count=len(online_list), 
-                                  online_list=online_list, 
-                                  admin=ADMIN_EMAIL)
-
-@app.route('/adm/editar', methods=['POST'])
-def adm_editar():
-    if session.get('user') != ADMIN_EMAIL: 
-        abort(403)
-        
-    email_orig = request.form.get('email_original')
-    nova_senha = request.form.get('nova_senha')
-    
-    if nova_senha:
-        salvar_usuario(email_orig, nova_senha, None)
-        
-    return redirect('/admin_panel')
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
+    now = time.time()
+    for u in list(USUARIOS_ONLINE.keys()):
+        if now - USUARIOS_ONLINE[u] > 60: del USUARIOS_ONLINE[u]
+    return render_template_string(HTML_ADM, lista=carregar_usuarios(), admin=ADMIN_EMAIL, online_count=len(USUARIOS_ONLINE), online_list=USUARIOS_ONLINE.keys())
 
 @app.route('/adm/renovar/<email>')
 def adm_renovar(email):
-    if session.get('user') != ADMIN_EMAIL: 
-        abort(403)
-        
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
     renovar_usuario_db(email)
-    return redirect('/admin_panel')
-
-@app.route('/adm/excluir/<email>')
-def adm_excluir(email):
-    if session.get('user') != ADMIN_EMAIL: 
-        abort(403)
-        
-    excluir_usuario_db(email)
     return redirect('/admin_panel')
 
 @app.route('/adm/liberar_ip/<email>')
 def adm_liberar_ip(email):
-    if session.get('user') != ADMIN_EMAIL: 
-        abort(403)
-        
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
     liberar_ip_usuario_db(email)
     return redirect('/admin_panel')
 
-# ================= INICIALIZAÇÃO DA APLICAÇÃO =================
-if __name__ == '__main__':
-    # Inicia a thread responsável pela varredura em segundo plano (em todos os mercados simultaneamente)
-    threading.Thread(target=loop_varredura_principal, daemon=True).start()
+@app.route('/adm/editar', methods=['POST'])
+def adm_editar():
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
+    original = request.form.get('email_original', '').strip().lower()
+    novo_email = request.form.get('novo_email', '').strip().lower()
+    nova_senha = request.form.get('nova_senha', '').strip()
     
-    # Executa a aplicação Flask
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        if nova_senha:
+            hash_senha = generate_password_hash(nova_senha)
+            cur.execute("UPDATE usuarios SET email = %s, senha = %s WHERE email = %s;", (novo_email, hash_senha, original))
+        else:
+            cur.execute("UPDATE usuarios SET email = %s WHERE email = %s;", (novo_email, original))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception:
+        pass
+        
+    return redirect('/admin_panel')
+
+@app.route('/adm/excluir/<email>')
+def adm_excluir(email):
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
+    excluir_usuario_db(email)
+    return redirect('/admin_panel')
+
+@app.route('/')
+def index():
+    if 'user' not in session: return redirect('/login')
+    user = session['user']
+    USUARIOS_ONLINE[user] = time.time()
+    st = get_user_state(user)
+    return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL)
+
+@app.route('/salvar_config_operacional', methods=['POST'])
+def salvar_config_operacional():
+    user = session.get('user')
+    if not user:
+        return jsonify({"ok": False, "erro": "Usuário não autenticado."})
+    st = get_user_state(user)
+    data = request.get_json(silent=True) or request.form
+    
+    if 'estrategia' in data:
+        st['estrategia'] = data.get('estrategia')
+    if 'ativos' in data:
+        st['ativos_selecionados'] = data.get('ativos')
+        
+    return jsonify({"ok": True, "estrategia": st['estrategia'], "ativos": st['ativos_selecionados']})
+
+@app.route('/command/<cmd>')
+def processar_comando(cmd):
+    user = session.get('user')
+    if not user:
+        return jsonify({"redirect": "/login"})
+        
+    st = get_user_state(user)
+    
+    if cmd == 'start_bot':
+        st['bot_iniciado'] = True
+        st['bot_pausado'] = False
+        st['aguardando_confirmacao'] = False
+        st['sinal_permanente'] = None
+        st['inicio_varredura'] = time.time()
+        st['ativo_atual'] = "INICIANDO VARREDURA..."
+        
+    elif cmd == 'pause_bot':
+        st['bot_pausado'] = True
+        st['ativo_atual'] = "PAUSADO"
+        
+    elif cmd == 'stop_bot':
+        st['bot_iniciado'] = False
+        st['bot_pausado'] = True
+        st['aguardando_confirmacao'] = False
+        st['sinal_permanente'] = None
+        st['ativo_atual'] = "PARADO"
+        
+    elif cmd == 'fazer_catalogacao':
+        threading.Thread(target=executar_catalogacao_60_velas, args=(user,), daemon=True).start()
+        
+    elif cmd == 'test_telegram':
+        enviar_telegram("🧪 <b>TESTE DE COMUNICAÇÃO:</b> Telegram Operando Corretamente!", user_solicitante=user)
+        
+    elif cmd.startswith('mkt_'):
+        st['tipo_mercado'] = cmd.replace('mkt_', '')
+        st['ativos_selecionados'] = "TODOS"
+        
+    elif cmd.startswith('tf_'):
+        try:
+            st['timeframe'] = int(cmd.replace('tf_', ''))
+        except ValueError:
+            pass
+            
+    elif cmd.startswith('set_est_'):
+        st['estrategia'] = cmd.replace('set_est_', '')
+
+    return jsonify({"ok": True})
+
+@app.route('/status')
+def status():
+    user = session.get('user')
+    if not user:
+        return jsonify({"html": "Sessão expirada."})
+        
+    st = get_user_state(user)
+    USUARIOS_ONLINE[user] = time.time()
+
+    usuarios = carregar_usuarios()
+    info_u = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
+
+    if st['aguardando_confirmacao'] and st['sinal_permanente']:
+        html_status = st['sinal_permanente']
+    elif st['bot_iniciado'] and not st['bot_pausado']:
+        ativo_str = st.get('ativo_atual', 'VARRENDO ATIVOS...')
+        html_status = f"""
+        <div class='system-console'>
+            <div style='display:flex; align-items:center; justify-content:center; gap:8px;'>
+                <div class='tech-scanner'></div>
+                <span>SISTEMA ATIVO - ANALISANDO AGORA: <b style='color:#00f2fe;'>{ativo_str}</b></span>
+            </div>
+        </div>
+        """
+    elif st['bot_pausado'] and st['bot_iniciado']:
+        html_status = "<span style='color:#f59e0b;'>⏸ SISTEMA PAUSADO</span>"
+    else:
+        html_status = st.get('ultimo_sinal', 'Aguardando Comando...')
+
+    historico = buscar_historico_bd(user)
+
+    return jsonify({
+        "html": html_status,
+        "wins": info_u.get("wins", 0),
+        "reds": info_u.get("reds", 0),
+        "winrate": info_u.get("winrate", 0.0),
+        "aguardando": st['aguardando_confirmacao'],
+        "mercado": st['tipo_mercado'],
+        "ativos_selecionados": st['ativos_selecionados'],
+        "ativo_atual": st['ativo_atual'],
+        "rodando": st['bot_iniciado'] and not st['bot_pausado'],
+        "catalogando": st.get('catalogando', False),
+        "catalogacao": st.get('catalogacao_resultado'),
+        "notificacao": st.get('notificacao'),
+        "historico": historico
+    })
+
+@app.route('/resultado/<res>')
+def registrar_resultado(res):
+    user = session.get('user')
+    if not user:
+        return jsonify({"ok": False})
+
+    st = get_user_state(user)
+    st['aguardando_confirmacao'] = False
+    st['sinal_permanente'] = None
+
+    if res in ['win', 'g1']:
+        atualizar_estatisticas_usuario(user, is_win=True)
+        atualizar_ultimo_sinal_bd(user, "WIN ✅" if res == 'win' else "WIN (G1) ✅")
+        st['ultimo_sinal'] = "<span style='color:#10b981; font-weight:bold;'>✅ ÚLTIMO SINAL: WIN! AGUARDANDO PRÓXIMO...</span>"
+    elif res == 'red':
+        atualizar_estatisticas_usuario(user, is_win=False)
+        atualizar_ultimo_sinal_bd(user, "RED ❌")
+        st['ultimo_sinal'] = "<span style='color:#ef4444; font-weight:bold;'>❌ ÚLTIMO SINAL: RED! AGUARDANDO PRÓXIMO...</span>"
+    else:
+        atualizar_ultimo_sinal_bd(user, "PULADO ⚪")
+        st['ultimo_sinal'] = "<span style='color:#94a3b8;'>⚪ SINAL PULADO! AGUARDANDO PRÓXIMO...</span>"
+
+    st['inicio_varredura'] = time.time() + 5
+    return jsonify({"ok": True})
+
+if __name__ == '__main__':
+    port = int(os.getenv("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
