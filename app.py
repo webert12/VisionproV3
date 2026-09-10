@@ -1571,7 +1571,7 @@ def loop_varredura_principal():
                         break
 
                     st["ativo_atual"] = ativo
-                    time.sleep(0.5)
+                    time.sleep(0.3)
 
                     ticker = MAPA_TICKERS.get(ativo, ativo)
                     data = get_data_v2(ticker, tf, velas_minimas=30)
@@ -1641,7 +1641,7 @@ def loop_varredura_principal():
                             break
 
                 if not sinal_encontrado and not st.get("aguardando_confirmacao"):
-                    time.sleep(1)
+                    time.sleep(0.5)
 
         except Exception as e:
             print(f"Erro no loop de varredura: {e}")
@@ -1680,6 +1680,61 @@ def service_worker():
     response = Response(sw_code, mimetype='application/javascript')
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     return response
+
+# ================= ROTAS DE AUTENTICAÇÃO =================
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        password = request.form.get('password', '').strip()
+        
+        usuarios = carregar_usuarios()
+        u = usuarios.get(email)
+        
+        if u and check_password_hash(u.get('senha', ''), password):
+            ip_cliente = get_client_ip()
+            adicionar_ip_usuario(email, ip_cliente)
+            
+            valido, dias = verificar_assinatura(email)
+            if not valido:
+                return render_template_string(HTML_LOGIN, erro="Sua assinatura expirou. Entre em contato com o suporte.")
+                
+            session['user'] = email
+            get_user_state(email)
+            return redirect('/')
+        return render_template_string(HTML_LOGIN, erro="E-mail ou senha incorretos.")
+        
+    return render_template_string(HTML_LOGIN, erro=None)
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        password = request.form.get('password', '').strip()
+        
+        if not email or not password:
+            return render_template_string(HTML_REGISTER, erro="Preencha todos os campos.")
+            
+        usuarios = carregar_usuarios()
+        if email in usuarios:
+            return render_template_string(HTML_REGISTER, erro="E-mail já cadastrado.")
+            
+        ip_cliente = get_client_ip()
+        salvar_usuario(email, password, ip_inicial=ip_cliente)
+        session['user'] = email
+        get_user_state(email)
+        return redirect('/')
+        
+    return render_template_string(HTML_REGISTER, erro=None)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/login')
+
+@app.route('/termos')
+def termos():
+    return render_template_string(HTML_TERMOS)
 
 # ================= ROTAS DO PAINEL E COMANDOS =================
 @app.route('/')
@@ -1818,146 +1873,80 @@ def resultado(res):
     if res in ["win", "g1"]:
         atualizar_estatisticas_usuario(user, is_win=True)
         atualizar_ultimo_sinal_bd(user, f"WIN ({res.upper()})")
-        st["ultimo_sinal"] = f"<div style='color:#10b981; font-weight:bold; font-size:16px;'>🟢 VITÓRIA REGISTRADA ({res.upper()})!</div>"
+        st["ultimo_sinal"] = f"<div style='color:#10b981; font-weight:bold;'>✅ OPERAÇÃO FINALIZADA COM WIN ({res.upper()})!</div>"
     elif res == "red":
         atualizar_estatisticas_usuario(user, is_win=False)
         atualizar_ultimo_sinal_bd(user, "RED")
-        st["ultimo_sinal"] = "<div style='color:#ef4444; font-weight:bold; font-size:16px;'>🔴 RED REGISTRADO!</div>"
+        st["ultimo_sinal"] = "<div style='color:#ef4444; font-weight:bold;'>❌ OPERAÇÃO FINALIZADA COM RED.</div>"
     else:
         atualizar_ultimo_sinal_bd(user, "PULADO")
-        st["ultimo_sinal"] = "<div style='color:#cbd5e1; font-weight:bold;'>⚪ Sinal Pulado.</div>"
+        st["ultimo_sinal"] = "<div style='color:#94a3b8; font-weight:bold;'>⏭️ SINAL IGNORADO / PULADO.</div>"
 
     return jsonify({"status": "ok"})
 
-# ================= ROTAS DE NAVEGAÇÃO SECUNDÁRIAS =================
-@app.route('/health')
-def health():
-    return jsonify({"status": "ok"}), 200
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        e = request.form.get('email', '').strip().lower()
-        s = request.form.get('password', '').strip()
-        ip_cliente = get_client_ip()
-
-        if not e or not s:
-            return render_template_string(HTML_LOGIN, erro="Preencha todos os campos.")
-
-        if e == ADMIN_EMAIL:
-            try:
-                salvar_usuario(e, s, agora_brasilia().strftime("%Y-%m-%d"), ip_inicial=None)
-            except Exception as err:
-                return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM: {err}")
-
-        usuarios = carregar_usuarios()
-        if e not in usuarios:
-            return render_template_string(HTML_LOGIN, erro=f"Usuário não cadastrado ({e}). Faça o cadastro.")
-
-        user_db = usuarios[e]
-        if not check_password_hash(user_db['senha'], s):
-            return render_template_string(HTML_LOGIN, erro="Senha Incorreta.")
-
-        if e != ADMIN_EMAIL:
-            ips_cadastrados = user_db.get('ips_list', [])
-            if ip_cliente not in ips_cadastrados:
-                if len(ips_cadastrados) < 2:
-                    adicionar_ip_usuario(e, ip_cliente)
-                else:
-                    return render_template_string(HTML_LOGIN, erro="🚫 ACESSO BLOQUEADO: Limite de 2 IPs/dispositivos atingido.")
-
-        ativo, dias = verificar_assinatura(e)
-        if not ativo:
-            return render_template_string(HTML_LOGIN, erro=f"Assinatura expirada (Dias: {dias}).")
-
-        session['user'] = e
-        USUARIOS_ONLINE[e] = time.time()
-        get_user_state(e)
-        return redirect('/')
-
-    return render_template_string(HTML_LOGIN)
-
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    if request.method == 'POST':
-        e = request.form.get('email', '').strip().lower()
-        s = request.form.get('password', '').strip()
-        ip_cliente = get_client_ip()
-        
-        if not e or not s:
-            return render_template_string(HTML_REGISTER, erro="Preencha todos os campos.")
-            
-        try:
-            salvar_usuario(e, s, ip_inicial=ip_cliente)
-            session['user'] = e
-            USUARIOS_ONLINE[e] = time.time()
-            get_user_state(e)
-            return redirect('/')
-        except Exception as err:
-            return render_template_string(HTML_REGISTER, erro=f"Erro ao salvar: {err}")
-
-    return render_template_string(HTML_REGISTER)
-
-@app.route('/logout')
-def logout():
-    user = session.get('user')
-    if user in USUARIOS_ONLINE: del USUARIOS_ONLINE[user]
-    session.clear()
-    return redirect('/login')
-
-@app.route('/termos')
-def termos():
-    return render_template_string(HTML_TERMOS)
-
+# ================= PAINEL ADMINISTRATIVO =================
 @app.route('/admin_panel')
 def admin_panel():
-    if session.get('user') != ADMIN_EMAIL: return abort(403)
-    now = time.time()
-    for u in list(USUARIOS_ONLINE.keys()):
-        if now - USUARIOS_ONLINE[u] > 60: del USUARIOS_ONLINE[u]
-    return render_template_string(HTML_ADM, lista=carregar_usuarios(), admin=ADMIN_EMAIL, online_count=len(USUARIOS_ONLINE), online_list=USUARIOS_ONLINE.keys())
+    user = session.get('user')
+    if user != ADMIN_EMAIL:
+        return redirect('/')
+
+    agora = time.time()
+    online_list = [usr for usr, t in USUARIOS_ONLINE.items() if agora - t < 15]
+    usuarios = carregar_usuarios()
+
+    return render_template_string(
+        HTML_ADM,
+        lista=usuarios,
+        online_list=online_list,
+        online_count=len(online_list),
+        admin=ADMIN_EMAIL
+    )
+
+@app.route('/adm/editar', methods=['POST'])
+def adm_editar():
+    user = session.get('user')
+    if user != ADMIN_EMAIL: return redirect('/')
+
+    email_orig = request.form.get('email_original')
+    novo_email = request.form.get('novo_email')
+    nova_senha = request.form.get('nova_senha')
+
+    if email_orig and novo_email:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            if nova_senha and nova_senha.strip():
+                hash_s = generate_password_hash(nova_senha.strip())
+                cur.execute("UPDATE usuarios SET email=%s, senha=%s WHERE email=%s;", (novo_email.strip().lower(), hash_s, email_orig.strip().lower()))
+            else:
+                cur.execute("UPDATE usuarios SET email=%s WHERE email=%s;", (novo_email.strip().lower(), email_orig.strip().lower()))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"Erro ao editar usuário: {e}")
+
+    return redirect('/admin_panel')
 
 @app.route('/adm/renovar/<email>')
 def adm_renovar(email):
-    if session.get('user') != ADMIN_EMAIL: return abort(403)
-    renovar_usuario_db(email)
+    if session.get('user') == ADMIN_EMAIL:
+        renovar_usuario_db(email)
     return redirect('/admin_panel')
 
 @app.route('/adm/liberar_ip/<email>')
 def adm_liberar_ip(email):
-    if session.get('user') != ADMIN_EMAIL: return abort(403)
-    liberar_ip_usuario_db(email)
-    return redirect('/admin_panel')
-
-@app.route('/adm/editar', methods=['POST'])
-def adm_editar():
-    if session.get('user') != ADMIN_EMAIL: return abort(403)
-    original = request.form.get('email_original', '').strip().lower()
-    novo_email = request.form.get('novo_email', '').strip().lower()
-    nova_senha = request.form.get('nova_senha', '').strip()
-    
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        if nova_senha:
-            hash_senha = generate_password_hash(nova_senha)
-            cur.execute("UPDATE usuarios SET email = %s, senha = %s WHERE email = %s;", (novo_email, hash_senha, original))
-        else:
-            cur.execute("UPDATE usuarios SET email = %s WHERE email = %s;", (novo_email, original))
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception:
-        pass
-        
+    if session.get('user') == ADMIN_EMAIL:
+        liberar_ip_usuario_db(email)
     return redirect('/admin_panel')
 
 @app.route('/adm/excluir/<email>')
 def adm_excluir(email):
-    if session.get('user') != ADMIN_EMAIL: return abort(403)
-    excluir_usuario_db(email)
+    if session.get('user') == ADMIN_EMAIL:
+        excluir_usuario_db(email)
     return redirect('/admin_panel')
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    port = int(os.getenv("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
