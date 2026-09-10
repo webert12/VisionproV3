@@ -399,12 +399,14 @@ HTML_INDEX = """
         .btn-notify { width: 100%; padding: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; }
         .btn-notify:hover { background: rgba(16, 185, 129, 0.3); }
 
+        /* ESTILOS DE CATALOGAÇÃO E SELEÇÃO DE ATIVOS */
         .btn-catalog { width: 100%; padding: 13px; background: linear-gradient(135deg, #00c6ff, #0072ff); border: none; color: white; font-weight: 800; font-size: 12px; border-radius: 12px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; box-shadow: 0 4px 15px rgba(0, 198, 255, 0.3); letter-spacing: 0.5px; }
         .btn-catalog:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0, 198, 255, 0.5); }
         .catalog-card { background: #0b1120; border: 1px solid #00f2fe; border-radius: 16px; padding: 15px; margin-bottom: 16px; font-size: 12px; }
         .catalog-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
         .catalog-table th, .catalog-table td { padding: 8px; text-align: left; border-bottom: 1px solid #1e293b; }
         .catalog-table th { color: #00f2fe; font-weight: 800; text-transform: uppercase; }
+        .asset-chip { display: inline-block; padding: 3px 8px; border-radius: 6px; background: rgba(0, 242, 254, 0.1); border: 1px solid rgba(0, 242, 254, 0.3); font-size: 10px; margin: 2px; font-weight: bold; }
         .asset-checkbox-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; max-height: 160px; overflow-y: auto; padding: 8px; background: #0f172a; border-radius: 8px; border: 1px solid #1e293b; margin-top: 5px; }
         .asset-checkbox-item { font-size: 11px; display: flex; align-items: center; gap: 6px; color: #cbd5e1; cursor: pointer; }
         .asset-checkbox-item input { accent-color: #00f2fe; cursor: pointer; }
@@ -421,7 +423,6 @@ HTML_INDEX = """
         <button class="btn-catalog" onclick="sendCommand('fazer_catalogacao')">🔍 REALIZAR VARREDURA PRÉ-OPERACIONAL (60 VELAS)</button>
         <button class="btn-test-tg" onclick="sendCommand('test_telegram')">🧪 TESTAR CONEXÃO TELEGRAM</button>
 
-        <!-- RESULTADO DA CATALOGAÇÃO / VARREDURA -->
         <div id="catalog-box" class="catalog-card" style="display:none;">
             <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #1e293b; padding-bottom:8px; margin-bottom:10px;">
                 <span style="font-weight:800; color:#00f2fe; font-size:12px;">📊 RELATÓRIO DA VARREDURA (60 VELAS)</span>
@@ -527,7 +528,6 @@ HTML_INDEX = """
                 </div>
             </div>
 
-            <!-- SELETOR PERSONALIZADO DE ATIVOS -->
             <div class="settings-grid full">
                 <div class="setting-group">
                     <button type="button" onclick="toggleAssetSection()" id="btn-toggle-assets" style="width:100%; padding:11px; background:#0f172a; border:1px solid #1e293b; color:#00f2fe; border-radius:10px; font-size:11px; font-weight:800; cursor:pointer; text-align:left; display:flex; justify-content:space-between; align-items:center;">
@@ -572,6 +572,7 @@ HTML_INDEX = """
     <script>
         let lastNotifId = null;
         const NATIVE_NOTIFICATION_COOLDOWN_MS = 60000;
+        let current_mkt_state = "";
 
         const ATIVOS_MAPEADOS = {
             "FOREX_ABERTO": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCAD", "EURCHF"],
@@ -823,12 +824,11 @@ HTML_INDEX = """
             container.innerHTML = html;
         }
 
-        let listaAtivosInicializada = false;
-
         async function atualizarPainel() {
             try {
                 const r = await fetch('/status', { cache: 'no-store' });
                 const data = await r.json();
+                
                 const panel = document.getElementById('panel-text');
                 if(panel && data.html) panel.innerHTML = data.html;
                 if(document.getElementById('win-count')) document.getElementById('win-count').innerText = data.wins;
@@ -847,9 +847,15 @@ HTML_INDEX = """
                     }
                 }
 
-                if(!listaAtivosInicializada && data.mercado) {
+                // Sincroniza dinamicamente se o mercado mudar no backend
+                if(data.mercado && data.mercado !== current_mkt_state) {
                     atualizarListaAtivosSelecao(data.mercado, data.ativos_selecionados);
-                    listaAtivosInicializada = true;
+                    current_mkt_state = data.mercado;
+                    
+                    const dropdown = document.getElementById('select-mkt');
+                    if (dropdown && dropdown.value !== data.mercado) {
+                        dropdown.value = data.mercado;
+                    }
                 }
 
                 if(document.getElementById('current-asset')) {
@@ -891,6 +897,7 @@ HTML_INDEX = """
             } catch (err) {
                 console.warn('Falha ao atualizar o painel:', err);
             } finally {
+                // Fetch dynamic display very frequently
                 setTimeout(atualizarPainel, 1000);
             }
         }
@@ -1571,7 +1578,11 @@ def loop_varredura_principal():
                     if not st.get("bot_iniciado") or st.get("bot_pausado") or st.get("aguardando_confirmacao"):
                         break
 
+                    # ATUALIZA O ATIVO NO BACKEND
                     st["ativo_atual"] = ativo
+                    
+                    # DELAY VISUAL NO BACKEND PRA DAR TEMPO DO FRONTEND MOSTRAR O ATIVO NA TELA (0.8s por ativo)
+                    time.sleep(0.8)
 
                     ticker = MAPA_TICKERS.get(ativo, ativo)
                     data = get_data_v2(ticker, tf, velas_minimas=30)
@@ -1600,7 +1611,6 @@ def loop_varredura_principal():
                             st["sinais_enviados"][chave_sinal] = time.time()
                             st["aguardando_confirmacao"] = True
                             
-                            horario_exp = (agora_brasilia() + timedelta(minutes=tf)).strftime("%H:%M")
                             dir_emoji = "🟢 CALL (COMPRA)" if melhor_sinal == "CALL" else "🔴 PUT (VENDA)"
                             nome_est_display = NOME_ESTRATEGIAS_DISPLAY.get(melhor_est, melhor_est)
 
@@ -1610,7 +1620,7 @@ def loop_varredura_principal():
                                 <div style='font-size: 22px; font-weight: 900; color: #ffffff; margin: 6px 0;'>{ativo}</div>
                                 <div style='font-size: 18px; font-weight: 800; color: {"#10b981" if melhor_sinal == "CALL" else "#ef4444"};'>{dir_emoji}</div>
                                 <div style='font-size: 12px; color: #cbd5e1; margin-top: 6px;'>
-                                    ⏱ Expiração: <b>M{tf} ({horario_exp})</b> | 🎯 Probabilidade: <b style='color:#38ef7d;'>{melhor_prob}%</b><br>
+                                    ⏱ Expiração: <b>M{tf}</b> | 🎯 Probabilidade: <b style='color:#38ef7d;'>{melhor_prob}%</b><br>
                                     ⚙️ Estratégia: <b>{nome_est_display}</b>
                                 </div>
                             </div>
@@ -1619,7 +1629,7 @@ def loop_varredura_principal():
                             st["notificacao"] = {
                                 "id": int(time.time() * 1000),
                                 "titulo": f"🚨 OPORTUNIDADE: {ativo} ({melhor_sinal})",
-                                "corpo": f"Direção: {melhor_sinal} | Expirar: {horario_exp} (M{tf}) | Prob: {melhor_prob}%"
+                                "corpo": f"Direção: {melhor_sinal} | Expirar: M{tf} | Prob: {melhor_prob}%"
                             }
 
                             sinal_str = f"{ativo} | {melhor_sinal} | M{tf} | {nome_est_display} ({melhor_prob}%)"
@@ -1629,7 +1639,7 @@ def loop_varredura_principal():
                                 f"🚨 <b>SINAL DETECTADO - VISION PRO V3</b>\n\n"
                                 f"📊 <b>Ativo:</b> {ativo}\n"
                                 f"📈 <b>Direção:</b> {'🟢 CALL (COMPRA)' if melhor_sinal == 'CALL' else '🔴 PUT (VENDA)'}\n"
-                                f"⏱ <b>Timeframe:</b> M{tf} (Expiração às {horario_exp})\n"
+                                f"⏱ <b>Timeframe:</b> M{tf}\n"
                                 f"🎯 <b>Probabilidade Assertiva:</b> {melhor_prob}%\n"
                                 f"⚙️ <b>Estratégia:</b> {nome_est_display}\n\n"
                                 f"<i>Confirme o resultado no painel após o fechamento da vela!</i>"
