@@ -1012,7 +1012,7 @@ def get_data_v2(ticker, tf, velas_minimas=30):
             interval_map = {1: "1m", 5: "5m", 15: "15m"}
             bin_interval = interval_map.get(tf, "5m")
             url_binance = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={bin_interval}&limit=60"
-            r_bin = requests.get(url_binance, timeout=1.5)
+            r_bin = requests.get(url_binance, timeout=1.2)
             if r_bin.status_code == 200:
                 klines = r_bin.json()
                 if isinstance(klines, list) and len(klines) >= velas_minimas:
@@ -1025,10 +1025,10 @@ def get_data_v2(ticker, tf, velas_minimas=30):
         except Exception:
             pass
 
-    # 2. Yahoo Finance API com Timeout Curto (1.5s)
+    # 2. Yahoo Finance API com Timeout Curto (1.2s)
     try:
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=2d"
-        res = requests.get(url, headers=headers, timeout=1.5)
+        res = requests.get(url, headers=headers, timeout=1.2)
         if res.status_code == 200:
             data_json = res.json()
             chart_res = data_json.get('chart', {}).get('result')
@@ -1061,7 +1061,7 @@ def get_data_v2(ticker, tf, velas_minimas=30):
         try:
             crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
             url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=60&aggregate={tf}"
-            r_alt = requests.get(url_alt, timeout=1.5).json()
+            r_alt = requests.get(url_alt, timeout=1.2).json()
             if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
                 data_list = r_alt['Data']['Data']
                 closes = np.array([x['close'] for x in data_list], dtype=float)
@@ -1858,20 +1858,7 @@ def bot_loop():
                                 if st["sinais_enviados"].get(ativo) == str_entrada:
                                     continue
 
-                                st["sinais_enviados"][ativo] = str_entrada
-
-                                msg_pre_alerta = (
-                                    f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n"
-                                    f"<b>Ativo:</b> {ativo}\n"
-                                    f"<b>Timeframe:</b> M{tf}\n"
-                                    f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
-                                    f"<b>Assertividade Estimada:</b> {maior_prob}%\n"
-                                    f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
-                                    f"👉 <i>Abra o ativo na corretora e prepare-se!</i>"
-                                )
-                                
                                 novo_alert_id = str(time.time_ns())
-
                                 st["alerta_ativo"] = {
                                     "ativo": ativo,
                                     "sinal": sinal_encontrado,
@@ -1886,6 +1873,18 @@ def bot_loop():
                                     "alert_id": novo_alert_id,
                                     "tf": tf
                                 }
+                                st["sinais_enviados"][ativo] = str_entrada
+
+                                msg_pre_alerta = (
+                                    f"⚡ <b>PRÉ-ALERTA DETECTADO - FIQUE ATENTO!</b> ⚡\n\n"
+                                    f"💱 <b>Paridade:</b> {ativo}\n"
+                                    f"⏱ <b>Timeframe:</b> M{tf}\n"
+                                    f"↕️ <b>Possível Sinal:</b> {sinal_encontrado}\n"
+                                    f"🧠 <b>Estratégia:</b> {nome_est_formatado}\n"
+                                    f"🔥 <b>Assertividade Estimada:</b> {maior_prob}%\n"
+                                    f"⏰ <b>Horário Previsto de Entrada:</b> {str_entrada}\n\n"
+                                    f"👉 <i>Abra este ativo na corretora e aguarde a confirmação nos últimos 5 segundos!</i>"
+                                )
 
                                 enviar_telegram_em_background(
                                     msg_pre_alerta, user_email, alert_id=novo_alert_id, st=st
@@ -1893,30 +1892,29 @@ def bot_loop():
 
                                 st["ultimo_sinal"] = (
                                     f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
-                                    f"⚠️ <b>PREPARE O ATIVO: {ativo} ({maior_prob}%)</b> ⚠️<br>"
-                                    f"<span style='color:#fff;'>Entrada às <b>{str_entrada}</b> (M{tf})</span><br>"
-                                    f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span>"
+                                    f"⚡ <b>PRÉ-ALERTA ENCONTRADO ({maior_prob}%)</b> ⚡<br>"
+                                    f"<b>ATIVO: {ativo}</b> | Entrada prevista: <b>{str_entrada}</b> (M{tf})<br>"
+                                    f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b> | Aguardando confirmação...</span>"
                                     f"</div>"
                                 )
-
-                                st["notificacao"] = {
-                                    "id": str(time.time()),
-                                    "titulo": f"⚠️ PREPARE-SE: {ativo}",
-                                    "corpo": f"Entrada às {str_entrada} (M{tf}) via {nome_est_formatado} ({maior_prob}%)."
-                                }
                                 alerta = st["alerta_ativo"]
+                                break
 
-                        # Pequena pausa tática (0.05s) para permitir a atualização visual do painel em tempo real
                         time.sleep(0.05)
 
-                except Exception as e_usr:
-                    print(f"Erro no loop do usuario {user_email}: {e_usr}")
+                except Exception as e_user:
+                    print(f"⚠️ Erro no loop do usuário {user_email}: {e_user}")
 
-            time.sleep(0.1)
-        except Exception as main_e:
-            print(f"Erro Crítico no Bot Loop Principal: {main_e}")
+            time.sleep(0.5)
+
+        except Exception as e_main:
+            print(f"❌ Erro crítico no bot_loop: {e_main}")
             time.sleep(1)
 
+# ================= INICIALIZAÇÃO DA THREAD DO ROBÔ E FLASK =================
+bot_thread = threading.Thread(target=bot_loop, daemon=True)
+bot_thread.start()
+
 if __name__ == '__main__':
-    threading.Thread(target=bot_loop, daemon=True).start()
-    app.run(host='0.0.0.0', port=5000, threaded=True)
+    port = int(os.getenv("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
