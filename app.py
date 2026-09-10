@@ -433,7 +433,7 @@ HTML_INDEX = """
         </div>
 
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
-            MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
+            SELEÇÃO ATIVA: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b><br>
             ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
         </div>
 
@@ -460,7 +460,7 @@ HTML_INDEX = """
             <!-- PAINEL OCULTO DE ATIVOS -->
             <div id="hidden-asset-panel" style="display: none; background: #0b1120; border: 1px dashed #00f2fe; border-radius: 12px; padding: 15px; margin-top: 15px; margin-bottom: 15px;">
                 <span class="section-label" style="color: #00f2fe;">SELEÇÃO OCULTA DE ATIVOS</span>
-                <p style="font-size:10px; color:#94a3b8; margin-bottom:10px;">Selecione ativos específicos. Se algum for marcado, o bot ignorará a lista global e focará apenas neles.</p>
+                <p style="font-size:10px; color:#94a3b8; margin-bottom:10px;">Selecione um ou mais ativos específicos. Se marcar apenas 1, o robô analisará exclusivamente ele.</p>
                 <div style="max-height: 200px; overflow-y: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size:11px; margin-bottom:10px;">
                     {% for cat, lista in ativos_base.items() %}
                         <div style="grid-column: span 2; font-weight:800; color:#cbd5e1; margin-top:5px; border-bottom:1px solid #1e293b; padding-bottom:3px;">{{ cat.replace('_', ' ') }}</div>
@@ -480,7 +480,7 @@ HTML_INDEX = """
                 <div class="setting-group">
                     <label>TIPO DE MERCADO</label>
                     <div class="select-wrapper">
-                        <select class="modern-select" onchange="sendCommand('mkt_' + this.value)">
+                        <select class="modern-select" id="select-mercado" onchange="sendCommand('mkt_' + this.value)">
                             <option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>🌐 Todos os Mercados (Aberto + OTC)</option>
                             <option value="ABERTO_TODOS" {% if modo == 'ABERTO_TODOS' %}selected{% endif %}>🟢 Todo Mercado Aberto (Forex + Cripto)</option>
                             <option value="OTC_TODOS" {% if modo == 'OTC_TODOS' %}selected{% endif %}>🌙 Todo Mercado OTC (Forex + Cripto)</option>
@@ -613,11 +613,12 @@ HTML_INDEX = """
                 body: JSON.stringify({ativos: selecionados})
             }).then(r => r.json()).then(data => {
                 if(selecionados.length > 0) {
-                    alert('✅ Ativos específicos ativados! (' + selecionados.length + ' ativos). O mercado geral será ignorado.');
+                    alert('✅ Ativos específicos ativados! (' + selecionados.length + ' ativo(s): ' + selecionados.join(', ') + '). O robô focará nesses ativos.');
                 } else {
                     alert('🔄 Nenhum ativo específico marcado. Voltando a operar pela categoria do mercado selecionada.');
                 }
                 document.getElementById('hidden-asset-panel').style.display='none';
+                atualizarPainel();
             });
         }
 
@@ -634,16 +635,13 @@ HTML_INDEX = """
 
         function toggleHistorico() {
             const box = document.getElementById('box-historico');
-            if (box.style.display === 'block') {
-                box.style.display = 'none';
-            } else {
-                box.style.display = 'block';
-            }
+            box.style.display = box.style.display === 'block' ? 'none' : 'block';
         }
 
         function sendCommand(cmd) {
             fetch('/command/' + cmd).then(r => r.json()).then(data => {
                 if(data.redirect) window.location.href = data.redirect;
+                atualizarPainel();
             });
         }
 
@@ -659,7 +657,7 @@ HTML_INDEX = """
                 if(document.getElementById('wr-fill')) document.getElementById('wr-fill').style.width = data.winrate + "%";
                 if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
                 
-                if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
+                if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado_label || data.mercado || "TODOS";
                 if(document.getElementById('current-asset')) {
                     if(data.rodando) {
                         document.getElementById('current-asset').innerText = data.ativo_atual || "VARRENDO...";
@@ -686,7 +684,7 @@ HTML_INDEX = """
             } catch (err) {
                 console.warn('Falha ao atualizar o painel:', err);
             } finally {
-                setTimeout(atualizarPainel, 250);
+                setTimeout(atualizarPainel, 300);
             }
         }
 
@@ -1025,7 +1023,7 @@ def get_data_v2(ticker, tf, velas_minimas=30):
         except Exception:
             pass
 
-    # 2. Yahoo Finance API com Timeout Curto (1.2s)
+    # 2. Yahoo Finance API
     try:
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=2d"
         res = requests.get(url, headers=headers, timeout=1.2)
@@ -1502,6 +1500,16 @@ def status():
     
     display_texto = st["sinal_permanente"] if (st["aguardando_confirmacao"] and st["sinal_permanente"]) else st["ultimo_sinal"]
 
+    # Rótulo dinâmico para a interface exibir o mercado ou o ativo único/personalizado
+    if st.get("usar_customizados") and st.get("ativos_customizados"):
+        qtd = len(st["ativos_customizados"])
+        if qtd == 1:
+            mercado_label = f"1 ATIVO SELECIONADO ({st['ativos_customizados'][0]})"
+        else:
+            mercado_label = f"{qtd} ATIVOS PERSONALIZADOS ({', '.join(st['ativos_customizados'][:2])}...)"
+    else:
+        mercado_label = f"MERCADO: {st['tipo_mercado']}"
+
     response = jsonify({
         "html": display_texto, 
         "aguardando": st["aguardando_confirmacao"], 
@@ -1511,6 +1519,9 @@ def status():
         "historico": historico,
         "ativo_atual": st["ativo_atual"],
         "mercado": st["tipo_mercado"],
+        "mercado_label": mercado_label,
+        "ativos_customizados": st.get("ativos_customizados", []),
+        "usar_customizados": st.get("usar_customizados", False),
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
         "notificacao": st["notificacao"]
     })
@@ -1561,7 +1572,7 @@ def command(cmd):
         st["sinais_enviados"].clear() 
         
         st["ativo_atual"] = "INICIANDO VARREDURA..."
-        st["ultimo_sinal"] = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE DINÂMICA</b><br><span style='color:#00f2fe;'>[VARRENDO TODOS OS ATIVOS...]</span></div><div class='tech-scanner'></div>"
+        st["ultimo_sinal"] = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE DINÂMICA</b><br><span style='color:#00f2fe;'>[VARRENDO ATIVOS...]</span></div><div class='tech-scanner'></div>"
         
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
@@ -1609,6 +1620,8 @@ def command(cmd):
         st["timeframe"] = int(cmd.split('_')[1])
     elif cmd.startswith("mkt_"): 
         st["tipo_mercado"] = cmd.split('_', 1)[1] 
+        st["usar_customizados"] = False
+        st["ativos_customizados"] = []
     elif cmd.startswith("set_est_"): 
         st["estrategia"] = cmd.replace("set_est_", "")
     
@@ -1732,7 +1745,7 @@ def bot_loop():
                     bloquear_novos_alertas = st.get("aguardando_confirmacao", False)
 
                     # -------------------------------------------------------------
-                    # 2. VARREDURA DINÂMICA DE TODOS OS ATIVOS DO MERCADO
+                    # 2. SELEÇÃO DE ATIVOS (SE 1 FOR SELECIONADO, USA SOMENTE ELE)
                     # -------------------------------------------------------------
                     if st.get("usar_customizados") and st.get("ativos_customizados"):
                         ativos = st["ativos_customizados"]
@@ -1746,8 +1759,12 @@ def bot_loop():
                         else:
                             ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
 
+                    if not ativos:
+                        continue
+
                     ativos_scan = ativos.copy()
-                    random.shuffle(ativos_scan)
+                    if len(ativos_scan) > 1:
+                        random.shuffle(ativos_scan)
 
                     for ativo in ativos_scan:
                         if not st.get("bot_iniciado") or st.get("bot_pausado"):
@@ -1757,7 +1774,10 @@ def bot_loop():
                         ticker = MAPA_TICKERS.get(ativo, ativo)
 
                         if not alerta and not st.get("aguardando_confirmacao"):
-                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
+                            if len(ativos) == 1:
+                                st["ultimo_sinal"] = f"<div class='system-console'>🔍 ANALISANDO ATIVO ÚNICO: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[MONITORANDO ESTRATÉGIAS...]</span></div><div class='tech-scanner'></div>"
+                            else:
+                                st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
 
                         cache_key = f"{ticker}_{tf}"
                         if cache_key in ohlc_cache:
@@ -1873,48 +1893,43 @@ def bot_loop():
                                     "alert_id": novo_alert_id,
                                     "tf": tf
                                 }
-                                st["sinais_enviados"][ativo] = str_entrada
 
                                 msg_pre_alerta = (
-                                    f"⚡ <b>PRÉ-ALERTA DETECTADO - FIQUE ATENTO!</b> ⚡\n\n"
-                                    f"💱 <b>Paridade:</b> {ativo}\n"
-                                    f"⏱ <b>Timeframe:</b> M{tf}\n"
-                                    f"↕️ <b>Possível Sinal:</b> {sinal_encontrado}\n"
-                                    f"🧠 <b>Estratégia:</b> {nome_est_formatado}\n"
-                                    f"🔥 <b>Assertividade Estimada:</b> {maior_prob}%\n"
-                                    f"⏰ <b>Horário Previsto de Entrada:</b> {str_entrada}\n\n"
-                                    f"👉 <i>Abra este ativo na corretora e aguarde a confirmação nos últimos 5 segundos!</i>"
+                                    f"⚡ <b>OPORTUNIDADE DETECTADA (PRÉ-ALERTA)</b> ⚡\n\n"
+                                    f"<b>Ativo:</b> {ativo} ({maior_prob}% de Assertividade)\n"
+                                    f"<b>Timeframe:</b> M{tf}\n"
+                                    f"<b>Estratégia:</b> {nome_est_formatado}\n"
+                                    f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
+                                    f"👉 <i>Abra a corretora no ativo {ativo} e aguarde a confirmação final aos 5 segundos!</i>"
                                 )
 
                                 enviar_telegram_em_background(
-                                    msg_pre_alerta, user_email, alert_id=novo_alert_id, st=st
+                                    msg_pre_alerta, user_email, alert_id=novo_alert_id,
+                                    deletar_msg_id=None, st=st
                                 )
 
                                 st["ultimo_sinal"] = (
                                     f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
-                                    f"⚡ <b>PRÉ-ALERTA ENCONTRADO ({maior_prob}%)</b> ⚡<br>"
-                                    f"<b>ATIVO: {ativo}</b> | Entrada prevista: <b>{str_entrada}</b> (M{tf})<br>"
-                                    f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b> | Aguardando confirmação...</span>"
+                                    f"⚡ <b>OPORTUNIDADE DETECTADA (PRÉ-ALERTA)</b> ⚡<br>"
+                                    f"<b>ATIVO: {ativo}</b> | Entrada às <b>{str_entrada}</b> (M{tf})<br>"
+                                    f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado} ({maior_prob}%)</b></span>"
                                     f"</div>"
                                 )
                                 alerta = st["alerta_ativo"]
-                                break
 
-                        time.sleep(0.05)
+                except Exception as user_err:
+                    print(f"⚠️ Erro no processamento do usuário {user_email}: {user_err}")
 
-                except Exception as e_user:
-                    print(f"⚠️ Erro no loop do usuário {user_email}: {e_user}")
+            time.sleep(0.3)
 
-            time.sleep(0.5)
-
-        except Exception as e_main:
-            print(f"❌ Erro crítico no bot_loop: {e_main}")
+        except Exception as e:
+            print(f"❌ Erro fatal no Bot Loop: {e}")
             time.sleep(1)
 
-# ================= INICIALIZAÇÃO DA THREAD DO ROBÔ E FLASK =================
+# ================= INICIALIZAÇÃO DA THREAD DO BOT E SERVIDOR =================
 bot_thread = threading.Thread(target=bot_loop, daemon=True)
 bot_thread.start()
 
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port)
