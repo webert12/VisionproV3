@@ -1820,52 +1820,49 @@ def index():
     USUARIOS_ONLINE[user] = time.time()
     st = get_user_state(user)
     
+    usuarios = carregar_usuarios()
+    u_info = usuarios.get(user, {})
+    
     return render_template_string(
         HTML_INDEX, 
-        user=user, 
-        admin=ADMIN_EMAIL,
         modo=st.get("tipo_mercado", "TODOS"),
         tf=st.get("timeframe", 5),
-        estrat=st.get("estrategia", "TODAS")
+        estrat=st.get("estrategia", "TODAS"),
+        user=user,
+        admin=ADMIN_EMAIL,
+        wins=u_info.get("wins", 0),
+        reds=u_info.get("reds", 0),
+        winrate=u_info.get("winrate", 0.0)
     )
 
 @app.route('/status')
 def status():
-    if 'user' not in session: return jsonify({"error": "unauthorized"}), 401
+    if 'user' not in session: return jsonify({})
     user = session['user']
     USUARIOS_ONLINE[user] = time.time()
     st = get_user_state(user)
 
     usuarios = carregar_usuarios()
-    info_u = usuarios.get(user, {})
-    wins = info_u.get("wins", 0)
-    reds = info_u.get("reds", 0)
-    total = wins + reds
-    winrate = round((wins / total) * 100, 1) if total > 0 else 0.0
+    u_info = usuarios.get(user, {})
+    wins = u_info.get("wins", 0)
+    reds = u_info.get("reds", 0)
+    winrate = u_info.get("winrate", 0.0)
 
-    html_status = ""
     if st.get("aguardando_confirmacao") and st.get("sinal_permanente"):
-        html_status = st.get("sinal_permanente")
-    elif st.get("catalogando"):
-        html_status = """
-        <div class='system-console'>
-            <div class='tech-scanner'></div>
-            <p style='margin-top:8px; color:#00f2fe;'>Varrendo histórico de 60 velas nos ativos...</p>
-        </div>
-        """
+        html_status = st["sinal_permanente"]
     elif st.get("bot_iniciado") and not st.get("bot_pausado"):
+        ativo_corrente = st.get("ativo_atual", "ANALISANDO...")
         html_status = f"""
-        <div class='system-console'>
-            <span style='color:#10b981;'>🟢 ROBÔ OPERANDO EM TEMPO REAL</span><br>
-            <span style='color:#cbd5e1; font-size:11px;'>Analisando {st.get('ativo_atual', 'AGUARDANDO...')} (M{st.get('timeframe')})</span>
+        <div style='text-align: center;'>
+            <div class='system-console'>[ANALISANDO] {ativo_corrente}</div>
+            <div class='tech-scanner'></div>
+            <div style='font-size: 11px; color: #94a3b8; margin-top: 8px;'>Varrendo mercado em busca de oportunidades fortes...</div>
         </div>
         """
-    elif st.get("bot_iniciado") and st.get("bot_pausado"):
-        html_status = "<span style='color:#f59e0b;'>⏸ BOT PAUSADO</span>"
+    elif st.get("bot_pausado") and st.get("bot_iniciado"):
+        html_status = "<div style='color:#f59e0b; font-weight:bold;'>⏸ ROBÔ PAUSADO</div>"
     else:
         html_status = st.get("ultimo_sinal", "Aguardando Comando...")
-
-    hist = buscar_historico_bd(user)
 
     return jsonify({
         "html": html_status,
@@ -1874,14 +1871,28 @@ def status():
         "winrate": winrate,
         "aguardando": st.get("aguardando_confirmacao", False),
         "mercado": st.get("tipo_mercado", "TODOS"),
-        "ativo_atual": st.get("ativo_atual", "AGUARDANDO..."),
         "ativos_selecionados": st.get("ativos_selecionados", "TODOS"),
+        "ativo_atual": st.get("ativo_atual", "AGUARDANDO..."),
         "rodando": st.get("bot_iniciado") and not st.get("bot_pausado"),
         "catalogando": st.get("catalogando", False),
         "catalogacao": st.get("catalogacao_resultado"),
         "notificacao": st.get("notificacao"),
-        "historico": hist
+        "historico": buscar_historico_bd(user)
     })
+
+@app.route('/salvar_config_operacional', methods=['POST'])
+def salvar_config_operacional():
+    if 'user' not in session: return jsonify({"status": "error"}), 401
+    user = session['user']
+    st = get_user_state(user)
+    
+    data = request.get_json() or {}
+    if "estrategia" in data:
+        st["estrategia"] = data["estrategia"]
+    if "ativos" in data:
+        st["ativos_selecionados"] = data["ativos"]
+
+    return jsonify({"status": "ok"})
 
 @app.route('/command/<cmd>')
 def command(cmd):
@@ -1889,79 +1900,76 @@ def command(cmd):
     user = session['user']
     st = get_user_state(user)
 
-    if cmd == "start_bot":
+    if cmd == 'start_bot':
         st["bot_iniciado"] = True
         st["bot_pausado"] = False
+        st["aguardando_confirmacao"] = False
         st["inicio_varredura"] = time.time()
-        st["ultimo_sinal"] = "🚀 Robô Iniciado. Varrendo Mercado..."
-    elif cmd == "pause_bot":
+        st["sinal_permanente"] = None
+        st["ultimo_sinal"] = "Varredura Iniciada..."
+
+    elif cmd == 'pause_bot':
         st["bot_pausado"] = True
-        st["ultimo_sinal"] = "⏸ Robô Pausado."
-    elif cmd == "stop_bot":
+        st["ultimo_sinal"] = "Robô Pausado."
+
+    elif cmd == 'stop_bot':
         st["bot_iniciado"] = False
         st["bot_pausado"] = True
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
-        st["ultimo_sinal"] = "⏹ Robô Desligado."
-    elif cmd.startswith("mkt_"):
-        st["tipo_mercado"] = cmd.replace("mkt_", "")
-    elif cmd.startswith("tf_"):
-        try:
-            st["timeframe"] = int(cmd.replace("tf_", ""))
-        except ValueError:
-            pass
-    elif cmd.startswith("set_est_"):
-        st["estrategia"] = cmd.replace("set_est_", "")
-    elif cmd == "fazer_catalogacao":
-        threading.Thread(target=executar_catalogacao_60_velas, args=(user,), daemon=True).start()
-    elif cmd == "test_telegram":
-        msg_id = enviar_telegram("🧪 <b>TESTE DE CONEXÃO:</b> Bot conectado perfeitamente!", user_solicitante=user)
+        st["ativo_atual"] = "PARADO"
+        st["ultimo_sinal"] = "Robô Parado pelo Usuário."
+
+    elif cmd.startswith('mkt_'):
+        novo_mkt = cmd.replace('mkt_', '')
+        st["tipo_mercado"] = novo_mkt
+        st["ativos_selecionados"] = "TODOS"
+
+    elif cmd.startswith('tf_'):
+        st["timeframe"] = int(cmd.replace('tf_', ''))
+
+    elif cmd.startswith('set_est_'):
+        st["estrategia"] = cmd.replace('set_est_', '')
+
+    elif cmd == 'fazer_catalogacao':
+        if not st.get("catalogando"):
+            threading.Thread(target=executar_catalogacao_60_velas, args=(user,), daemon=True).start()
+
+    elif cmd == 'test_telegram':
+        msg_id = enviar_telegram("🧪 <b>TESTE DE CONEXÃO COM TELEGRAM OK!</b>", user_solicitante=user)
         if msg_id:
-            st["ultimo_sinal"] = "✅ Notificação enviada com sucesso no Telegram!"
+            st["ultimo_sinal"] = "<div style='color:#10b981;'>✅ Conexão com Telegram Funcionando!</div>"
         else:
-            st["ultimo_sinal"] = "❌ Erro ao enviar para o Telegram. Verifique Token/ChatID."
+            st["ultimo_sinal"] = "<div style='color:#ef4444;'>❌ Falha ao Enviar no Telegram! Verifique as Variáveis.</div>"
 
-    return jsonify({"status": "ok"})
-
-@app.route('/salvar_config_operacional', methods=['POST'])
-def salvar_config_operacional():
-    if 'user' not in session: return jsonify({"error": "unauthorized"}), 401
-    user = session['user']
-    st = get_user_state(user)
-    
-    data = request.json or {}
-    if "estrategia" in data:
-        st["estrategia"] = data["estrategia"]
-    if "ativos" in data:
-        st["ativos_selecionados"] = data["ativos"]
-        
     return jsonify({"status": "ok"})
 
 @app.route('/resultado/<res>')
 def resultado(res):
-    if 'user' not in session: return jsonify({"redirect": "/login"})
+    if 'user' not in session: return jsonify({"status": "error"}), 401
     user = session['user']
     st = get_user_state(user)
 
-    if st.get("aguardando_confirmacao"):
-        st["aguardando_confirmacao"] = False
-        st["sinal_permanente"] = None
+    st["aguardando_confirmacao"] = False
+    st["sinal_permanente"] = None
 
-        if res in ["win", "g1"]:
-            atualizar_estatisticas_usuario(user, is_win=True)
-            atualizar_ultimo_sinal_bd(user, f"Win ({res.upper()})")
-            st["ultimo_sinal"] = f"✅ VITÓRIA ({res.upper()}) COMPUTADA!"
-        elif res == "red":
-            atualizar_estatisticas_usuario(user, is_win=False)
-            atualizar_ultimo_sinal_bd(user, "Red")
-            st["ultimo_sinal"] = "❌ DERROTA (RED) COMPUTADA."
-        elif res == "pular":
-            atualizar_ultimo_sinal_bd(user, "Pulado")
-            st["ultimo_sinal"] = "⏭️ Sinal pulado."
+    if res in ['win', 'g1']:
+        atualizar_estatisticas_usuario(user, True)
+        atualizar_ultimo_sinal_bd(user, "WIN" if res == 'win' else "WIN G1")
+        st["ultimo_sinal"] = f"<div style='color:#10b981; font-weight:bold;'>✅ REGISTRADO: WIN ({res.upper()})</div>"
+    elif res == 'red':
+        atualizar_estatisticas_usuario(user, False)
+        atualizar_ultimo_sinal_bd(user, "RED")
+        st["ultimo_sinal"] = "<div style='color:#ef4444; font-weight:bold;'>❌ REGISTRADO: RED</div>"
+    else:
+        atualizar_ultimo_sinal_bd(user, "PULADO")
+        st["ultimo_sinal"] = "<div style='color:#94a3b8; font-weight:bold;'>⏭ SINAL PULADO</div>"
+
+    if st.get("alerta_ativo"):
+        st["alerta_ativo"] = None
 
     return jsonify({"status": "ok"})
 
-# ================= EXECUÇÃO =================
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
