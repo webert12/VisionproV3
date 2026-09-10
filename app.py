@@ -1836,10 +1836,15 @@ def process_command(cmd):
         st["ativos_selecionados"] = "TODOS"
 
     elif cmd.startswith("tf_"):
-        st["timeframe"] = int(cmd.replace("tf_", ""))
+        try:
+            novo_tf = int(cmd.replace("tf_", ""))
+            st["timeframe"] = novo_tf
+        except ValueError:
+            pass
 
     elif cmd.startswith("set_est_"):
-        st["estrategia"] = cmd.replace("set_est_", "")
+        nova_est = cmd.replace("set_est_", "")
+        st["estrategia"] = nova_est
 
     return jsonify({"status": "ok"})
 
@@ -1854,13 +1859,15 @@ def salvar_config_operacional():
 
     if "estrategia" in data:
         st["estrategia"] = data["estrategia"]
+
     if "ativos" in data:
         st["ativos_selecionados"] = data["ativos"]
 
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "sucesso"})
 
-@app.route('/resultado/<res>')
-def registrar_resultado(res):
+# ================= REGISTRO DE RESULTADOS DOS SINAIS =================
+@app.route('/resultado/<tipo>')
+def registrar_resultado(tipo):
     user = session.get('user')
     if not user:
         return jsonify({"redirect": "/login"})
@@ -1869,25 +1876,112 @@ def registrar_resultado(res):
     st["aguardando_confirmacao"] = False
     st["sinal_permanente"] = None
 
-    if res == "win":
-        atualizar_estatisticas_usuario(user, True)
-        atualizar_ultimo_sinal_bd(user, "WIN ✅")
-        st["ultimo_sinal"] = "<div style='color:#10b981; font-weight:bold;'>✅ WIN REGISTRADO COM SUCESSO!</div>"
-    elif res == "g1":
-        atualizar_estatisticas_usuario(user, True)
-        atualizar_ultimo_sinal_bd(user, "WIN G1 🟡")
-        st["ultimo_sinal"] = "<div style='color:#f59e0b; font-weight:bold;'>🟡 WIN G1 REGISTRADO!</div>"
-    elif res == "red":
-        atualizar_estatisticas_usuario(user, False)
-        atualizar_ultimo_sinal_bd(user, "RED ❌")
-        st["ultimo_sinal"] = "<div style='color:#ef4444; font-weight:bold;'>❌ RED REGISTRADO. BUSCANDO PRÓXIMA ENTRADA...</div>"
-    elif res == "pular":
-        atualizar_ultimo_sinal_bd(user, "PULADO ⏭")
-        st["ultimo_sinal"] = "<div style='color:#94a3b8;'>⏭ ENTRAMOS EM STANDBY / SINAL PULADO</div>"
+    if tipo == 'win':
+        atualizar_estatisticas_usuario(user, is_win=True)
+        atualizar_ultimo_sinal_bd(user, "Win Direct 🟢")
+        st["ultimo_sinal"] = "✅ ÚLTIMO SINAL: WIN DIRECT!"
+        enviar_telegram("✅ <b>RESULTADO: WIN DIRECT 🟢</b>", user_solicitante=user)
+    elif tipo == 'g1':
+        atualizar_estatisticas_usuario(user, is_win=True)
+        atualizar_ultimo_sinal_bd(user, "Win Gale 1 🟡")
+        st["ultimo_sinal"] = "🟡 ÚLTIMO SINAL: WIN NO GALE 1!"
+        enviar_telegram("🟡 <b>RESULTADO: WIN NO GALE 1 🟢</b>", user_solicitante=user)
+    elif tipo == 'red':
+        atualizar_estatisticas_usuario(user, is_win=False)
+        atualizar_ultimo_sinal_bd(user, "Red 🔴")
+        st["ultimo_sinal"] = "🔴 ÚLTIMO SINAL: RED (LOSS)"
+        enviar_telegram("🔴 <b>RESULTADO: RED (LOSS) 🔴</b>", user_solicitante=user)
+    elif tipo == 'pular':
+        atualizar_ultimo_sinal_bd(user, "Cancelado ⚪")
+        st["ultimo_sinal"] = "⚪ SINAL CANCELADO/PULADO"
 
+    st["inicio_varredura"] = time.time() + 10
     return jsonify({"status": "ok"})
 
-# ================= EXECUÇÃO DA APLICAÇÃO =================
+# ================= PAINEL ADMINISTRATIVO =================
+@app.route('/admin_panel')
+def admin_panel():
+    user = session.get('user')
+    if not user or user != ADMIN_EMAIL:
+        return redirect('/')
+
+    usuarios = carregar_usuarios()
+    
+    agora = time.time()
+    online_list = [usr for usr, t_last in USUARIOS_ONLINE.items() if (agora - t_last) < 15]
+
+    return render_template_string(
+        HTML_ADM,
+        lista=usuarios,
+        admin=ADMIN_EMAIL,
+        online_count=len(online_list),
+        online_list=online_list
+    )
+
+@app.route('/adm/editar', methods=['POST'])
+def adm_editar():
+    user = session.get('user')
+    if not user or user != ADMIN_EMAIL:
+        return redirect('/')
+
+    email_original = request.form.get('email_original', '').strip().lower()
+    novo_email = request.form.get('novo_email', '').strip().lower()
+    nova_senha = request.form.get('nova_senha', '').strip()
+
+    if email_original and novo_email:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cur.execute("SELECT senha, criado_em, ips_autorizados FROM usuarios WHERE email = %s;", (email_original,))
+            u = cur.fetchone()
+
+            if u:
+                senha_final = generate_password_hash(nova_senha) if nova_senha else u['senha']
+                
+                if email_original != novo_email:
+                    cur.execute("DELETE FROM usuarios WHERE email = %s;", (email_original,))
+                    
+                cur.execute("""
+                    INSERT INTO usuarios (email, senha, criado_em, ips_autorizados)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (email) DO UPDATE 
+                    SET senha = EXCLUDED.senha;
+                """, (novo_email, senha_final, u['criado_em'], u['ips_autorizados']))
+                
+                conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"Erro ao editar usuário via ADM: {e}")
+
+    return redirect('/admin_panel')
+
+@app.route('/adm/renovar/<email>')
+def adm_renovar(email):
+    user = session.get('user')
+    if not user or user != ADMIN_EMAIL:
+        return redirect('/')
+    renovar_usuario_db(email)
+    return redirect('/admin_panel')
+
+@app.route('/adm/liberar_ip/<email>')
+def adm_liberar_ip(email):
+    user = session.get('user')
+    if not user or user != ADMIN_EMAIL:
+        return redirect('/')
+    liberar_ip_usuario_db(email)
+    return redirect('/admin_panel')
+
+@app.route('/adm/excluir/<email>')
+def adm_excluir(email):
+    user = session.get('user')
+    if not user or user != ADMIN_EMAIL:
+        return redirect('/')
+    excluir_usuario_db(email)
+    return redirect('/admin_panel')
+
+# ================= EXECUÇÃO DO SERVIDOR =================
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    port = int(os.getenv("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
