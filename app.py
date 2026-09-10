@@ -53,7 +53,7 @@ def get_user_state(email):
             "aguardando_confirmacao": False,
             "sinal_permanente": None,
             "ultimo_sinal": "Aguardando Comando...",
-            "ativo_atual": "AGUARDANDO...",
+            "ativo_atual": "SISTEMA PAUSADO",
             "inicio_varredura": 0,
             "sinais_enviados": {},
             "alerta_ativo": None,
@@ -347,8 +347,6 @@ HTML_INDEX = """
         .btn-close-broker { background: #1e293b; border: 1px solid #334155; color: #00f2fe; padding: 6px 12px; font-size: 11px; font-weight: 700; border-radius: 6px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: center; }
 
         .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 100px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
-        
-        .system-console { font-family: 'JetBrains Mono', monospace; color: #38ef7d; font-size: 13px; text-shadow: 0 0 5px rgba(56, 239, 125, 0.5); width: 100%; }
 
         .result-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
         .btn-res { border: none; padding: 12px; border-radius: 10px; font-weight: 800; font-size: 12px; cursor: pointer; color: white; transition: transform 0.1s, box-shadow 0.2s; text-transform: uppercase; }
@@ -406,7 +404,6 @@ HTML_INDEX = """
         .catalog-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
         .catalog-table th, .catalog-table td { padding: 8px; text-align: left; border-bottom: 1px solid #1e293b; }
         .catalog-table th { color: #00f2fe; font-weight: 800; text-transform: uppercase; }
-        .asset-chip { display: inline-block; padding: 3px 8px; border-radius: 6px; background: rgba(0, 242, 254, 0.1); border: 1px solid rgba(0, 242, 254, 0.3); font-size: 10px; margin: 2px; font-weight: bold; }
         .asset-checkbox-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; max-height: 160px; overflow-y: auto; padding: 8px; background: #0f172a; border-radius: 8px; border: 1px solid #1e293b; margin-top: 5px; }
         .asset-checkbox-item { font-size: 11px; display: flex; align-items: center; gap: 6px; color: #cbd5e1; cursor: pointer; }
         .asset-checkbox-item input { accent-color: #00f2fe; cursor: pointer; }
@@ -583,13 +580,13 @@ HTML_INDEX = """
 
         if ('serviceWorker' in navigator && 'Notification' in window) {
             navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
-                .then(() => console.log('Service Worker de notificações registrado.'))
-                .catch(err => console.warn('Falha ao registrar Service Worker:', err));
+                .then(() => console.log('Service Worker registrado.'))
+                .catch(err => console.warn('Erro Service Worker:', err));
         }
 
         function solicitarPermissaoNotificacao() {
             if (!('Notification' in window)) {
-                alert('Este navegador não suporta notificações de sistema.');
+                alert('Este navegador não suporta notificações.');
                 return;
             }
 
@@ -685,7 +682,7 @@ HTML_INDEX = """
             const selEst = document.getElementById('select-est');
             if(selEst && est) selEst.value = est;
 
-            alert('✅ Configuração aplicada! Clique em START para o robô operar com esses ativos.');
+            alert('✅ Configuração aplicada! Clique em START para o robô operar.');
         }
 
         function atualizarListaAtivosSelecao(mktModo, ativosAtuais) {
@@ -847,7 +844,6 @@ HTML_INDEX = """
                     }
                 }
 
-                // Sincroniza dinamicamente se o mercado mudar no backend
                 if(data.mercado && data.mercado !== current_mkt_state) {
                     atualizarListaAtivosSelecao(data.mercado, data.ativos_selecionados);
                     current_mkt_state = data.mercado;
@@ -897,7 +893,6 @@ HTML_INDEX = """
             } catch (err) {
                 console.warn('Falha ao atualizar o painel:', err);
             } finally {
-                // Fetch dynamic display very frequently
                 setTimeout(atualizarPainel, 1000);
             }
         }
@@ -1182,7 +1177,6 @@ NOME_ESTRATEGIAS_DISPLAY = {
     "TODAS": "Análise Dinâmica Múltipla"
 }
 
-# ================= ATIVOS DIVIDIDOS ABERTO E OTC =================
 ATIVOS_BASE = {
     "FOREX_ABERTO": [
         "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
@@ -1202,7 +1196,6 @@ ATIVOS_BASE = {
     ]
 }
 
-# ================= MAPEAMENTO DE TICKERS =================
 MAPA_TICKERS = {}
 for par in ATIVOS_BASE["FOREX_ABERTO"]: MAPA_TICKERS[par] = par + "=X"
 for par in ATIVOS_BASE["CRIPTO_ABERTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
@@ -1211,7 +1204,6 @@ for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", ""
 
 # ================= MOTOR DE ANÁLISE REAL DE VELAS =================
 def get_data_v2(ticker, tf, velas_minimas=60):
-    """Busca dados reais OHLC e garante o mínimo de velas exigido."""
     try:
         base_ticker = ticker
         headers = {
@@ -1220,7 +1212,7 @@ def get_data_v2(ticker, tf, velas_minimas=60):
         }
         
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d"
-        res = requests.get(url, headers=headers, timeout=5.0)
+        res = requests.get(url, headers=headers, timeout=4.0)
         
         if res.status_code == 200 and 'chart' in res.json():
             data_json = res.json()
@@ -1246,7 +1238,7 @@ def get_data_v2(ticker, tf, velas_minimas=60):
         if "-USD" in base_ticker or "USD" in ticker:
             crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
             url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=120&aggregate={tf}"
-            r_alt = requests.get(url_alt, timeout=5.0).json()
+            r_alt = requests.get(url_alt, timeout=4.0).json()
             
             if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
                 data_list = r_alt['Data']['Data']
@@ -1543,7 +1535,7 @@ def executar_catalogacao_60_velas(user_email):
             "corpo": f"Melhor Estratégia: {mais_forte['nome_display']} ({mais_forte['winrate']}%) em {top_ativos_str}"
         }
 
-# ================= MOTOR PRINCIPAL DE VARREDURA EM TEMPO REAL (THREAD CONTINUA) =================
+# ================= MOTOR PRINCIPAL DE VARREDURA EM TEMPO REAL =================
 def loop_varredura_principal():
     """Thread contínua que executa em segundo plano monitorando sinais para todos os usuários."""
     while True:
@@ -1578,11 +1570,8 @@ def loop_varredura_principal():
                     if not st.get("bot_iniciado") or st.get("bot_pausado") or st.get("aguardando_confirmacao"):
                         break
 
-                    # ATUALIZA O ATIVO NO BACKEND
                     st["ativo_atual"] = ativo
-                    
-                    # DELAY VISUAL NO BACKEND PRA DAR TEMPO DO FRONTEND MOSTRAR O ATIVO NA TELA (0.8s por ativo)
-                    time.sleep(0.8)
+                    time.sleep(0.5)
 
                     ticker = MAPA_TICKERS.get(ativo, ativo)
                     data = get_data_v2(ticker, tf, velas_minimas=30)
@@ -1656,7 +1645,7 @@ def loop_varredura_principal():
 
         except Exception as e:
             print(f"Erro no loop de varredura: {e}")
-        time.sleep(2)
+        time.sleep(1)
 
 # Inicializa a Thread em segundo plano
 t_varredura = threading.Thread(target=loop_varredura_principal, daemon=True)
@@ -1690,11 +1679,157 @@ def service_worker():
     """
     response = Response(sw_code, mimetype='application/javascript')
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
     return response
 
-# ================= ROTAS DE NAVEGAÇÃO =================
+# ================= ROTAS DO PAINEL E COMANDOS =================
+@app.route('/')
+def index():
+    user = session.get('user')
+    if not user:
+        return redirect('/login')
+    st = get_user_state(user)
+    return render_template_string(
+        HTML_INDEX, 
+        user=user, 
+        admin=ADMIN_EMAIL, 
+        modo=st.get('tipo_mercado', 'TODOS'),
+        tf=st.get('timeframe', 5),
+        estrat=st.get('estrategia', 'TODAS')
+    )
+
+@app.route('/status')
+def status():
+    user = session.get('user')
+    if not user:
+        return jsonify({"redirect": "/login"})
+    
+    st = get_user_state(user)
+    USUARIOS_ONLINE[user] = time.time()
+
+    usuarios = carregar_usuarios()
+    info_u = usuarios.get(user, {})
+    wins = info_u.get('wins', 0)
+    reds = info_u.get('reds', 0)
+    winrate = info_u.get('winrate', 0.0)
+
+    html_display = st.get('sinal_permanente') or st.get('ultimo_sinal') or "Aguardando Comando..."
+
+    if st.get('bot_iniciado') and not st.get('bot_pausado') and not st.get('aguardando_confirmacao') and not st.get('catalogando'):
+        html_display = f"""
+        <div style='text-align: center; color: #00f2fe;'>
+            <div class='tech-scanner'></div>
+            <div style='font-size: 13px; font-weight: 800; margin-top: 10px;'>⚡ VARREDURA EM TEMPO REAL ATIVA</div>
+            <div style='font-size: 11px; color: #94a3b8; margin-top: 4px;'>Analisando: <b style='color:#38ef7d;'>{st.get('ativo_atual', 'VARRENDO...')}</b></div>
+        </div>
+        """
+
+    return jsonify({
+        "html": html_display,
+        "wins": wins,
+        "reds": reds,
+        "winrate": winrate,
+        "aguardando": st.get('aguardando_confirmacao', False),
+        "rodando": st.get('bot_iniciado', False) and not st.get('bot_pausado', True),
+        "mercado": st.get('tipo_mercado', 'TODOS'),
+        "ativo_atual": st.get('ativo_atual', 'AGUARDANDO...'),
+        "ativos_selecionados": st.get('ativos_selecionados', 'TODOS'),
+        "catalogando": st.get('catalogando', False),
+        "catalogacao": st.get('catalogacao_resultado'),
+        "notificacao": st.get('notificacao'),
+        "historico": buscar_historico_bd(user)
+    })
+
+@app.route('/command/<cmd>')
+def command(cmd):
+    user = session.get('user')
+    if not user:
+        return jsonify({"redirect": "/login"})
+    
+    st = get_user_state(user)
+
+    if cmd == "start_bot":
+        st["bot_iniciado"] = True
+        st["bot_pausado"] = False
+        st["aguardando_confirmacao"] = False
+        st["sinal_permanente"] = None
+        st["inicio_varredura"] = time.time()
+        st["ultimo_sinal"] = "Varredura iniciada! Aguardando novos sinais..."
+    
+    elif cmd == "pause_bot":
+        st["bot_pausado"] = True
+        st["ativo_atual"] = "SISTEMA PAUSADO"
+        st["ultimo_sinal"] = "Robô Pausado pelo Usuário."
+
+    elif cmd == "stop_bot":
+        st["bot_iniciado"] = False
+        st["bot_pausado"] = True
+        st["aguardando_confirmacao"] = False
+        st["sinal_permanente"] = None
+        st["ativo_atual"] = "SISTEMA PAUSADO"
+        st["ultimo_sinal"] = "Robô Parado."
+
+    elif cmd.startswith("mkt_"):
+        novo_mkt = cmd.replace("mkt_", "")
+        st["tipo_mercado"] = novo_mkt
+        st["ativos_selecionados"] = "TODOS"
+
+    elif cmd.startswith("tf_"):
+        st["timeframe"] = int(cmd.replace("tf_", ""))
+
+    elif cmd.startswith("set_est_"):
+        st["estrategia"] = cmd.replace("set_est_", "")
+
+    elif cmd == "fazer_catalogacao":
+        threading.Thread(target=executar_catalogacao_60_velas, args=(user,), daemon=True).start()
+
+    elif cmd == "test_telegram":
+        res = enviar_telegram("🧪 <b>TESTE DE CONEXÃO DE NOTIFICAÇÃO VISION PRO V3 OK!</b>", user_solicitante=user)
+        if res:
+            st["ultimo_sinal"] = "<div style='color:#10b981; font-weight:bold;'>✅ Telegram Conectado e Notificando!</div>"
+        else:
+            st["ultimo_sinal"] = "<div style='color:#ef4444; font-weight:bold;'>❌ Falha no envio ao Telegram. Verifique as credenciais nas variáveis de ambiente.</div>"
+
+    return jsonify({"status": "ok"})
+
+@app.route('/salvar_config_operacional', methods=['POST'])
+def salvar_config_operacional():
+    user = session.get('user')
+    if not user: return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json() or {}
+    st = get_user_state(user)
+
+    if "estrategia" in data:
+        st["estrategia"] = data["estrategia"]
+    if "ativos" in data:
+        st["ativos_selecionados"] = data["ativos"]
+
+    return jsonify({"status": "ok"})
+
+@app.route('/resultado/<res>')
+def resultado(res):
+    user = session.get('user')
+    if not user: return redirect('/login')
+
+    st = get_user_state(user)
+    st["aguardando_confirmacao"] = False
+    st["sinal_permanente"] = None
+
+    if res in ["win", "g1"]:
+        atualizar_estatisticas_usuario(user, is_win=True)
+        atualizar_ultimo_sinal_bd(user, f"WIN ({res.upper()})")
+        st["ultimo_sinal"] = f"<div style='color:#10b981; font-weight:bold; font-size:16px;'>🟢 VITÓRIA REGISTRADA ({res.upper()})!</div>"
+    elif res == "red":
+        atualizar_estatisticas_usuario(user, is_win=False)
+        atualizar_ultimo_sinal_bd(user, "RED")
+        st["ultimo_sinal"] = "<div style='color:#ef4444; font-weight:bold; font-size:16px;'>🔴 RED REGISTRADO!</div>"
+    else:
+        atualizar_ultimo_sinal_bd(user, "PULADO")
+        st["ultimo_sinal"] = "<div style='color:#cbd5e1; font-weight:bold;'>⚪ Sinal Pulado.</div>"
+
+    return jsonify({"status": "ok"})
+
+# ================= ROTAS DE NAVEGAÇÃO SECUNDÁRIAS =================
 @app.route('/health')
 def health():
     return jsonify({"status": "ok"}), 200
@@ -1823,163 +1958,6 @@ def adm_excluir(email):
     excluir_usuario_db(email)
     return redirect('/admin_panel')
 
-@app.route('/')
-def index():
-    if 'user' not in session: return redirect('/login')
-    user = session['user']
-    USUARIOS_ONLINE[user] = time.time()
-    st = get_user_state(user)
-    
-    usuarios = carregar_usuarios()
-    u_info = usuarios.get(user, {})
-    
-    return render_template_string(
-        HTML_INDEX, 
-        modo=st.get("tipo_mercado", "TODOS"),
-        tf=st.get("timeframe", 5),
-        estrat=st.get("estrategia", "TODAS"),
-        user=user,
-        admin=ADMIN_EMAIL,
-        wins=u_info.get("wins", 0),
-        reds=u_info.get("reds", 0),
-        winrate=u_info.get("winrate", 0.0)
-    )
-
-@app.route('/status')
-def status():
-    if 'user' not in session: return jsonify({})
-    user = session['user']
-    USUARIOS_ONLINE[user] = time.time()
-    st = get_user_state(user)
-
-    usuarios = carregar_usuarios()
-    u_info = usuarios.get(user, {})
-    wins = u_info.get("wins", 0)
-    reds = u_info.get("reds", 0)
-    winrate = u_info.get("winrate", 0.0)
-
-    if st.get("aguardando_confirmacao") and st.get("sinal_permanente"):
-        html_status = st["sinal_permanente"]
-    elif st.get("bot_iniciado") and not st.get("bot_pausado"):
-        ativo_corrente = st.get("ativo_atual", "ANALISANDO...")
-        html_status = f"""
-        <div style='text-align: center;'>
-            <div class='system-console'>[ANALISANDO] {ativo_corrente}</div>
-            <div class='tech-scanner'></div>
-            <div style='font-size: 11px; color: #94a3b8; margin-top: 8px;'>Varrendo mercado em busca de oportunidades fortes...</div>
-        </div>
-        """
-    elif st.get("bot_pausado") and st.get("bot_iniciado"):
-        html_status = "<div style='color:#f59e0b; font-weight:bold;'>⏸ ROBÔ PAUSADO</div>"
-    else:
-        html_status = st.get("ultimo_sinal", "Aguardando Comando...")
-
-    return jsonify({
-        "html": html_status,
-        "wins": wins,
-        "reds": reds,
-        "winrate": winrate,
-        "aguardando": st.get("aguardando_confirmacao", False),
-        "mercado": st.get("tipo_mercado", "TODOS"),
-        "ativos_selecionados": st.get("ativos_selecionados", "TODOS"),
-        "ativo_atual": st.get("ativo_atual", "AGUARDANDO..."),
-        "rodando": st.get("bot_iniciado") and not st.get("bot_pausado"),
-        "catalogando": st.get("catalogando", False),
-        "catalogacao": st.get("catalogacao_resultado"),
-        "notificacao": st.get("notificacao"),
-        "historico": buscar_historico_bd(user)
-    })
-
-@app.route('/salvar_config_operacional', methods=['POST'])
-def salvar_config_operacional():
-    if 'user' not in session: return jsonify({"status": "error"}), 401
-    user = session['user']
-    st = get_user_state(user)
-    
-    data = request.get_json() or {}
-    if "estrategia" in data:
-        st["estrategia"] = data["estrategia"]
-    if "ativos" in data:
-        st["ativos_selecionados"] = data["ativos"]
-
-    return jsonify({"status": "ok"})
-
-@app.route('/command/<cmd>')
-def command(cmd):
-    if 'user' not in session: return jsonify({"redirect": "/login"})
-    user = session['user']
-    st = get_user_state(user)
-
-    if cmd == 'start_bot':
-        st["bot_iniciado"] = True
-        st["bot_pausado"] = False
-        st["aguardando_confirmacao"] = False
-        st["inicio_varredura"] = time.time()
-        st["sinal_permanente"] = None
-        st["ultimo_sinal"] = "Varredura Iniciada..."
-
-    elif cmd == 'pause_bot':
-        st["bot_pausado"] = True
-        st["ultimo_sinal"] = "Robô Pausado."
-
-    elif cmd == 'stop_bot':
-        st["bot_iniciado"] = False
-        st["bot_pausado"] = True
-        st["aguardando_confirmacao"] = False
-        st["sinal_permanente"] = None
-        st["ativo_atual"] = "PARADO"
-        st["ultimo_sinal"] = "Robô Parado pelo Usuário."
-
-    elif cmd.startswith('mkt_'):
-        novo_mkt = cmd.replace('mkt_', '')
-        st["tipo_mercado"] = novo_mkt
-        st["ativos_selecionados"] = "TODOS"
-
-    elif cmd.startswith('tf_'):
-        st["timeframe"] = int(cmd.replace('tf_', ''))
-
-    elif cmd.startswith('set_est_'):
-        st["estrategia"] = cmd.replace('set_est_', '')
-
-    elif cmd == 'fazer_catalogacao':
-        if not st.get("catalogando"):
-            threading.Thread(target=executar_catalogacao_60_velas, args=(user,), daemon=True).start()
-
-    elif cmd == 'test_telegram':
-        msg_id = enviar_telegram("🧪 <b>TESTE DE CONEXÃO COM TELEGRAM OK!</b>", user_solicitante=user)
-        if msg_id:
-            st["ultimo_sinal"] = "<div style='color:#10b981;'>✅ Conexão com Telegram Funcionando!</div>"
-        else:
-            st["ultimo_sinal"] = "<div style='color:#ef4444;'>❌ Falha ao Enviar no Telegram! Verifique as Variáveis.</div>"
-
-    return jsonify({"status": "ok"})
-
-@app.route('/resultado/<res>')
-def resultado(res):
-    if 'user' not in session: return jsonify({"status": "error"}), 401
-    user = session['user']
-    st = get_user_state(user)
-
-    st["aguardando_confirmacao"] = False
-    st["sinal_permanente"] = None
-
-    if res in ['win', 'g1']:
-        atualizar_estatisticas_usuario(user, True)
-        atualizar_ultimo_sinal_bd(user, "WIN" if res == 'win' else "WIN G1")
-        st["ultimo_sinal"] = f"<div style='color:#10b981; font-weight:bold;'>✅ REGISTRADO: WIN ({res.upper()})</div>"
-    elif res == 'red':
-        atualizar_estatisticas_usuario(user, False)
-        atualizar_ultimo_sinal_bd(user, "RED")
-        st["ultimo_sinal"] = "<div style='color:#ef4444; font-weight:bold;'>❌ REGISTRADO: RED</div>"
-    else:
-        atualizar_ultimo_sinal_bd(user, "PULADO")
-        st["ultimo_sinal"] = "<div style='color:#94a3b8; font-weight:bold;'>⏭ SINAL PULADO</div>"
-
-    if st.get("alerta_ativo"):
-        st["alerta_ativo"] = None
-
-    return jsonify({"status": "ok"})
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
