@@ -456,10 +456,10 @@ HTML_INDEX = """
             <iframe id="brokerIframe" class="broker-iframe-inline" src=""></iframe>
         </div>
 
-        <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
-            MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
-            ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b><br>
-            <span style="font-size:10px; color:#94a3b8;">FILTRO DE ATIVOS: <b id="ativos-badge" style="color:#f59e0b;">TODOS OS ATIVOS</b></span>
+        <!-- ================= MUDANÇA APLICADA AQUI ================= -->
+        <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 12px; margin-bottom: 12px; text-align: center;">
+            <div style="color: #00f2fe; font-size: 14px; font-weight: 900; letter-spacing: 1px; margin-bottom: 5px;">🤖 ROBÔ EM OPERAÇÃO</div>
+            <div id="ativos-analisados" style="color: #ffffff; font-size: 12px; font-weight: bold; word-wrap: break-word;">AGUARDANDO...</div>
         </div>
 
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
@@ -833,16 +833,6 @@ HTML_INDEX = """
                 if(document.getElementById('wr-fill')) document.getElementById('wr-fill').style.width = data.winrate + "%";
                 if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
                 
-                if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
-                if(document.getElementById('ativos-badge')) {
-                    const atvs = data.ativos_selecionados;
-                    if (atvs === "TODOS" || !Array.isArray(atvs)) {
-                        document.getElementById('ativos-badge').innerText = "TODOS OS ATIVOS";
-                    } else {
-                        document.getElementById('ativos-badge').innerText = `${atvs.length} ATIVO(S) SELECIONADO(S)`;
-                    }
-                }
-
                 if(data.mercado && data.mercado !== current_mkt_state) {
                     atualizarListaAtivosSelecao(data.mercado, data.ativos_selecionados);
                     current_mkt_state = data.mercado;
@@ -853,11 +843,17 @@ HTML_INDEX = """
                     }
                 }
 
-                if(document.getElementById('current-asset')) {
+                // ================= LÓGICA ATUALIZADA AQUI =================
+                if(document.getElementById('ativos-analisados')) {
                     if(data.rodando) {
-                        document.getElementById('current-asset').innerText = data.ativo_atual || "VARRENDO...";
+                        const atvs = data.ativos_selecionados;
+                        if (Array.isArray(atvs) && atvs.length > 0) {
+                            document.getElementById('ativos-analisados').innerText = atvs.join(", ");
+                        } else {
+                            document.getElementById('ativos-analisados').innerText = data.ativo_atual || "TODOS OS ATIVOS";
+                        }
                     } else {
-                        document.getElementById('current-asset').innerText = "SISTEMA PAUSADO";
+                        document.getElementById('ativos-analisados').innerText = "SISTEMA PAUSADO";
                     }
                 }
 
@@ -1770,191 +1766,96 @@ def status():
     reds = info_u.get('reds', 0)
     winrate = info_u.get('winrate', 0.0)
 
-    html_display = st.get('sinal_permanente') or st.get('ultimo_sinal') or "Aguardando Comando..."
-
-    if st.get('bot_iniciado') and not st.get('bot_pausado') and not st.get('aguardando_confirmacao'):
-        ativo_str = st.get('ativo_atual', 'VARRENDO MERCADO...')
-    else:
-        ativo_str = "SISTEMA PAUSADO"
-
     return jsonify({
-        "html": html_display,
+        "html": st.get("sinal_permanente") or st.get("ultimo_sinal", "Aguardando Comando..."),
         "wins": wins,
         "reds": reds,
         "winrate": winrate,
-        "aguardando": st.get('aguardando_confirmacao', False),
-        "mercado": st.get('tipo_mercado', 'TODOS'),
-        "ativos_selecionados": st.get('ativos_selecionados', 'TODOS'),
-        "rodando": st.get('bot_iniciado') and not st.get('bot_pausado'),
-        "ativo_atual": ativo_str,
-        "catalogando": st.get('catalogando', False),
-        "catalogacao": st.get('catalogacao_resultado'),
-        "notificacao": st.get('notificacao'),
-        "historico": buscar_historico_bd(user)
+        "rodando": st.get("bot_iniciado", False) and not st.get("bot_pausado", False),
+        "aguardando": st.get("aguardando_confirmacao", False),
+        "ativo_atual": st.get("ativo_atual", ""),
+        "mercado": st.get("tipo_mercado", "TODOS"),
+        "ativos_selecionados": st.get("ativos_selecionados", "TODOS"),
+        "notificacao": st.get("notificacao", None),
+        "historico": buscar_historico_bd(user),
+        "catalogando": st.get("catalogando", False),
+        "catalogacao": st.get("catalogacao_resultado", None)
     })
 
 @app.route('/command/<cmd>')
-def process_command(cmd):
+def command(cmd):
     user = session.get('user')
-    if not user:
-        return jsonify({"redirect": "/login"})
-    
+    if not user: return jsonify({"redirect": "/login"})
     st = get_user_state(user)
-
+    
     if cmd == "start_bot":
         st["bot_iniciado"] = True
         st["bot_pausado"] = False
-        st["aguardando_confirmacao"] = False
-        st["sinal_permanente"] = None
         st["inicio_varredura"] = time.time()
-        st["ativo_atual"] = "VARRENDO MERCADO..."
-        st["ultimo_sinal"] = """
-        <div style='background: rgba(16, 185, 129, 0.1); border: 2px solid #10b981; border-radius: 14px; padding: 15px; text-align: center;'>
-            <div style='font-size: 13px; color: #10b981; font-weight: 800; text-transform: uppercase;'>🟢 ROBÔ EM OPERAÇÃO</div>
-            <div style='font-size: 15px; font-weight: 700; color: #ffffff; margin-top: 5px;'>INICIANDO VARREDURA... BUSCANDO OPORTUNIDADES EM TEMPO REAL</div>
-        </div>
-        """
-        enviar_telegram("▶ <b>ROBÔ INICIADO!</b>\nO sistema começou a analisar o mercado.", user_solicitante=user)
-
+        st["ultimo_sinal"] = "<div style='color:#10b981; font-weight:bold;'>▶ ROBÔ INICIADO. Analisando o mercado...</div>"
+        st["sinal_permanente"] = None
     elif cmd == "pause_bot":
         st["bot_pausado"] = True
-        st["ativo_atual"] = "SISTEMA PAUSADO"
-        st["ultimo_sinal"] = "⏸ ROBÔ PAUSADO PELO USUÁRIO"
-
+        st["ultimo_sinal"] = "<div style='color:#f59e0b; font-weight:bold;'>⏸ ROBÔ PAUSADO.</div>"
+        st["sinal_permanente"] = None
     elif cmd == "stop_bot":
         st["bot_iniciado"] = False
         st["bot_pausado"] = True
         st["aguardando_confirmacao"] = False
+        st["ultimo_sinal"] = "<div style='color:#ef4444; font-weight:bold;'>⏹ ROBÔ PARADO.</div>"
         st["sinal_permanente"] = None
-        st["ativo_atual"] = "SISTEMA PAUSADO"
-        st["ultimo_sinal"] = "⏹ ROBÔ PARADO"
-
-    elif cmd == "fazer_catalogacao":
-        threading.Thread(target=executar_catalogacao_60_velas, args=(user,), daemon=True).start()
-
-    elif cmd == "test_telegram":
-        res = enviar_telegram("🧪 <b>TESTE DE CONEXÃO:</b> Bot conectado com sucesso!", user_solicitante=user)
-        if res:
-            st["ultimo_sinal"] = "✅ Teste do Telegram enviado com sucesso!"
-        else:
-            st["ultimo_sinal"] = "❌ Erro ao enviar mensagem para o Telegram."
-
     elif cmd.startswith("mkt_"):
         st["tipo_mercado"] = cmd.replace("mkt_", "")
-
     elif cmd.startswith("tf_"):
-        try:
-            st["timeframe"] = int(cmd.replace("tf_", ""))
-        except ValueError:
-            pass
-
+        st["timeframe"] = int(cmd.replace("tf_", ""))
     elif cmd.startswith("set_est_"):
         st["estrategia"] = cmd.replace("set_est_", "")
+    elif cmd == "fazer_catalogacao":
+        threading.Thread(target=executar_catalogacao_60_velas, args=(user,), daemon=True).start()
+    elif cmd == "test_telegram":
+        enviar_telegram("🧪 <b>Teste de Conexão:</b> Telegram conectado com sucesso!", user_solicitante=user)
+        
+    return jsonify({"status": "ok"})
 
+@app.route('/resultado/<res>')
+def resultado(res):
+    user = session.get('user')
+    if not user: return jsonify({"redirect": "/login"})
+    st = get_user_state(user)
+    
+    if not st.get("aguardando_confirmacao"):
+        return jsonify({"status": "ignorado"})
+        
+    is_win = (res == "win" or res == "g1")
+    is_loss = (res == "red")
+    
+    if is_win or is_loss:
+        atualizar_estatisticas_usuario(user, is_win)
+        
+    if res == "win": res_texto = "WIN ✅"
+    elif res == "g1": res_texto = "WIN G1 ⚠️"
+    elif res == "red": res_texto = "LOSS ❌"
+    else: res_texto = "PULADO ⏭️"
+    
+    atualizar_ultimo_sinal_bd(user, res_texto)
+    
+    st["aguardando_confirmacao"] = False
+    st["sinal_permanente"] = None
+    st["ultimo_sinal"] = f"<div style='color:#00f2fe; font-weight:bold; font-size:14px; text-align:center;'>✅ Último Resultado: {res_texto}</div>"
+    
     return jsonify({"status": "ok"})
 
 @app.route('/salvar_config_operacional', methods=['POST'])
 def salvar_config_operacional():
     user = session.get('user')
-    if not user:
-        return jsonify({"redirect": "/login"})
-
+    if not user: return jsonify({"redirect": "/login"})
     st = get_user_state(user)
-    data = request.json or {}
-
-    if "estrategia" in data:
-        st["estrategia"] = data["estrategia"]
-    if "ativos" in data:
-        st["ativos_selecionados"] = data["ativos"]
-
+    data = request.json
+    if data:
+        if "estrategia" in data: st["estrategia"] = data["estrategia"]
+        if "ativos" in data: st["ativos_selecionados"] = data["ativos"]
     return jsonify({"status": "ok"})
-
-@app.route('/resultado/<res>')
-def registrar_resultado(res):
-    user = session.get('user')
-    if not user:
-        return jsonify({"redirect": "/login"})
-
-    st = get_user_state(user)
-    
-    if res in ["win", "g1"]:
-        atualizar_estatisticas_usuario(user, is_win=True)
-        atualizar_ultimo_sinal_bd(user, f"WIN ({res.upper()})")
-    elif res == "red":
-        atualizar_estatisticas_usuario(user, is_win=False)
-        atualizar_ultimo_sinal_bd(user, "RED")
-    elif res == "pular":
-        atualizar_ultimo_sinal_bd(user, "PULADO")
-
-    st["aguardando_confirmacao"] = False
-    st["sinal_permanente"] = None
-    st["ultimo_sinal"] = "Aguardando novo sinal..."
-    return jsonify({"status": "ok"})
-
-# ================= ROTAS ADMINISTRATIVAS =================
-@app.route('/admin_panel')
-def admin_panel():
-    user = session.get('user')
-    if user != ADMIN_EMAIL:
-        return redirect('/')
-
-    usuarios = carregar_usuarios()
-    online_now = [u for u, t in USUARIOS_ONLINE.items() if time.time() - t < 30]
-
-    return render_template_string(
-        HTML_ADM,
-        lista=usuarios,
-        online_count=len(online_now),
-        online_list=online_now,
-        admin=ADMIN_EMAIL
-    )
-
-@app.route('/adm/editar', methods=['POST'])
-def adm_editar():
-    user = session.get('user')
-    if user != ADMIN_EMAIL:
-        return redirect('/')
-
-    email_orig = request.form.get('email_original', '').strip().lower()
-    novo_email = request.form.get('novo_email', '').strip().lower()
-    nova_senha = request.form.get('nova_senha', '').strip()
-
-    if email_orig and novo_email:
-        usuarios = carregar_usuarios()
-        u = usuarios.get(email_orig)
-        if u:
-            senha_final = generate_password_hash(nova_senha) if nova_senha else u.get('senha')
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("""
-                UPDATE usuarios 
-                SET email = %s, senha = %s 
-                WHERE email = %s;
-            """, (novo_email, senha_final, email_orig))
-            conn.commit()
-            cur.close()
-            conn.close()
-
-    return redirect('/admin_panel')
-
-@app.route('/adm/renovar/<email>')
-def adm_renovar(email):
-    if session.get('user') == ADMIN_EMAIL:
-        renovar_usuario_db(email)
-    return redirect('/admin_panel')
-
-@app.route('/adm/liberar_ip/<email>')
-def adm_liberar_ip(email):
-    if session.get('user') == ADMIN_EMAIL:
-        liberar_ip_usuario_db(email)
-    return redirect('/admin_panel')
-
-@app.route('/adm/excluir/<email>')
-def adm_excluir(email):
-    if session.get('user') == ADMIN_EMAIL:
-        excluir_usuario_db(email)
-    return redirect('/admin_panel')
 
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=False)
