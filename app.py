@@ -1804,7 +1804,9 @@ def process_command(cmd):
     if cmd == "start_bot":
         st["bot_iniciado"] = True
         st["bot_pausado"] = False
+        st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
+        st["inicio_varredura"] = time.time()
         st["ativo_atual"] = "VARRENDO MERCADO..."
         st["ultimo_sinal"] = """
         <div style='background: rgba(16, 185, 129, 0.1); border: 2px solid #10b981; border-radius: 14px; padding: 15px; text-align: center;'>
@@ -1831,17 +1833,20 @@ def process_command(cmd):
         threading.Thread(target=executar_catalogacao_60_velas, args=(user,), daemon=True).start()
 
     elif cmd == "test_telegram":
-        enviar_telegram("🧪 <b>TESTE DE CONEXÃO</b>\nO Vision Pro V3 está conectado perfeitamente ao Telegram!", user_solicitante=user)
+        res = enviar_telegram("🧪 <b>TESTE DE CONEXÃO:</b> Bot conectado com sucesso!", user_solicitante=user)
+        if res:
+            st["ultimo_sinal"] = "✅ Teste do Telegram enviado com sucesso!"
+        else:
+            st["ultimo_sinal"] = "❌ Erro ao enviar mensagem para o Telegram."
+
+    elif cmd.startswith("mkt_"):
+        st["tipo_mercado"] = cmd.replace("mkt_", "")
 
     elif cmd.startswith("tf_"):
         try:
             st["timeframe"] = int(cmd.replace("tf_", ""))
         except ValueError:
             pass
-
-    elif cmd.startswith("mkt_"):
-        st["tipo_mercado"] = cmd.replace("mkt_", "")
-        st["ativos_selecionados"] = "TODOS"
 
     elif cmd.startswith("set_est_"):
         st["estrategia"] = cmd.replace("set_est_", "")
@@ -1852,17 +1857,17 @@ def process_command(cmd):
 def salvar_config_operacional():
     user = session.get('user')
     if not user:
-        return jsonify({"error": "Não autorizado"}), 401
-        
+        return jsonify({"redirect": "/login"})
+
     st = get_user_state(user)
     data = request.json or {}
-    
+
     if "estrategia" in data:
         st["estrategia"] = data["estrategia"]
     if "ativos" in data:
         st["ativos_selecionados"] = data["ativos"]
 
-    return jsonify({"status": "sucesso"})
+    return jsonify({"status": "ok"})
 
 @app.route('/resultado/<res>')
 def registrar_resultado(res):
@@ -1871,24 +1876,19 @@ def registrar_resultado(res):
         return jsonify({"redirect": "/login"})
 
     st = get_user_state(user)
-
+    
     if res in ["win", "g1"]:
-        atualizar_estatisticas_usuario(user, True)
-        atualizar_ultimo_sinal_bd(user, "WIN (G1)" if res == "g1" else "WIN DIRECT")
-        msg = "✅ <b>RESULTADO: WIN!</b>" if res == "win" else "🟢 <b>RESULTADO: WIN NO G1!</b>"
-        enviar_telegram(msg, user_solicitante=user)
+        atualizar_estatisticas_usuario(user, is_win=True)
+        atualizar_ultimo_sinal_bd(user, f"WIN ({res.upper()})")
     elif res == "red":
-        atualizar_estatisticas_usuario(user, False)
+        atualizar_estatisticas_usuario(user, is_win=False)
         atualizar_ultimo_sinal_bd(user, "RED")
-        enviar_telegram("🔴 <b>RESULTADO: RED!</b>", user_solicitante=user)
     elif res == "pular":
-        atualizar_ultimo_sinal_bd(user, "CANCELADO")
+        atualizar_ultimo_sinal_bd(user, "PULADO")
 
     st["aguardando_confirmacao"] = False
     st["sinal_permanente"] = None
-    st["alerta_ativo"] = None
-    st["ultimo_sinal"] = "🔍 BUSCANDO PRÓXIMA OPORTUNIDADE..."
-
+    st["ultimo_sinal"] = "Aguardando novo sinal..."
     return jsonify({"status": "ok"})
 
 # ================= ROTAS ADMINISTRATIVAS =================
@@ -1898,65 +1898,63 @@ def admin_panel():
     if user != ADMIN_EMAIL:
         return redirect('/')
 
-    agora = time.time()
-    online_list = [u for u, t in USUARIOS_ONLINE.items() if (agora - t) < 15]
     usuarios = carregar_usuarios()
+    online_now = [u for u, t in USUARIOS_ONLINE.items() if time.time() - t < 30]
 
     return render_template_string(
         HTML_ADM,
         lista=usuarios,
-        online_list=online_list,
-        online_count=len(online_list),
+        online_count=len(online_now),
+        online_list=online_now,
         admin=ADMIN_EMAIL
     )
 
 @app.route('/adm/editar', methods=['POST'])
 def adm_editar():
-    if session.get('user') != ADMIN_EMAIL:
+    user = session.get('user')
+    if user != ADMIN_EMAIL:
         return redirect('/')
 
     email_orig = request.form.get('email_original', '').strip().lower()
     novo_email = request.form.get('novo_email', '').strip().lower()
     nova_senha = request.form.get('nova_senha', '').strip()
 
-    if not novo_email:
-        return redirect('/admin_panel')
-
-    usuarios = carregar_usuarios()
-    info = usuarios.get(email_orig)
-
-    if info:
-        senha_final = generate_password_hash(nova_senha) if nova_senha else info.get('senha')
-
-        if email_orig != novo_email:
-            excluir_usuario_db(email_orig)
-
-        salvar_usuario(novo_email, senha_final, data=str(info.get('criado_em')).split('T')[0])
+    if email_orig and novo_email:
+        usuarios = carregar_usuarios()
+        u = usuarios.get(email_orig)
+        if u:
+            senha_final = generate_password_hash(nova_senha) if nova_senha else u.get('senha')
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE usuarios 
+                SET email = %s, senha = %s 
+                WHERE email = %s;
+            """, (novo_email, senha_final, email_orig))
+            conn.commit()
+            cur.close()
+            conn.close()
 
     return redirect('/admin_panel')
 
 @app.route('/adm/renovar/<email>')
 def adm_renovar(email):
-    if session.get('user') != ADMIN_EMAIL:
-        return redirect('/')
-    renovar_usuario_db(email)
+    if session.get('user') == ADMIN_EMAIL:
+        renovar_usuario_db(email)
     return redirect('/admin_panel')
 
 @app.route('/adm/liberar_ip/<email>')
 def adm_liberar_ip(email):
-    if session.get('user') != ADMIN_EMAIL:
-        return redirect('/')
-    liberar_ip_usuario_db(email)
+    if session.get('user') == ADMIN_EMAIL:
+        liberar_ip_usuario_db(email)
     return redirect('/admin_panel')
 
 @app.route('/adm/excluir/<email>')
 def adm_excluir(email):
-    if session.get('user') != ADMIN_EMAIL:
-        return redirect('/')
-    excluir_usuario_db(email)
+    if session.get('user') == ADMIN_EMAIL:
+        excluir_usuario_db(email)
     return redirect('/admin_panel')
 
-# ================= EXECUÇÃO DO SERVIDOR =================
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    port = int(os.getenv("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
