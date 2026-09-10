@@ -452,6 +452,8 @@ HTML_INDEX = """
                 <button class="btn-action btn-pause" onclick="sendCommand('pause_bot')">⏸ PAUSE</button>
                 <button class="btn-action btn-stop" onclick="sendCommand('stop_bot')">⏹ STOP</button>
             </div>
+            
+            <button class="btn-action" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9); width:100%; margin-bottom:15px; box-shadow: 0 4px 12px rgba(139,92,246,0.2);" onclick="sendCommand('run_backtest')">📊 RODAR BACKTEST GLOBAL (30 VELAS)</button>
 
             <span class="section-label">Configurações de Análise</span>
             
@@ -963,7 +965,7 @@ for par in ATIVOS_BASE["CRIPTO_ABERTO"]: MAPA_TICKERS[par] = par.replace("USD", 
 for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X")
 for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
-# ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
+# ================= MOTOR DE ANÁLISE REAL =================
 def get_data_v2(ticker, tf, velas_minimas=30):
     try:
         base_ticker = ticker
@@ -1145,6 +1147,121 @@ def analisar_estrategia(data, estrategia, i=-1):
 
     probabilidade = min(98, max(75, probabilidade)) if sinal else 0
     return sinal, probabilidade
+
+# ================= ENVIO TELEGRAM ASSÍNCRONO =================
+def enviar_telegram_em_background(mensagem, user_email, alert_id=None, deletar_msg_id=None, st=None):
+    """Executa operações do Telegram fora do loop de análise."""
+    def worker():
+        try:
+            if deletar_msg_id:
+                try:
+                    deletar_mensagem_telegram(deletar_msg_id)
+                except Exception as e:
+                    print(f"⚠️ Falha ao deletar alerta antigo no Telegram: {e}")
+            if st is not None and alert_id is not None:
+                atual = st.get("alerta_ativo")
+                if atual and atual.get("alert_id") != alert_id:
+                    return
+
+            novo_id = enviar_telegram(mensagem, auto_delete=None, user_solicitante=user_email)
+            if st is not None and alert_id is not None:
+                atual = st.get("alerta_ativo")
+                if atual and atual.get("alert_id") == alert_id:
+                    atual["msg_id"] = novo_id
+        except Exception as e:
+            print(f"⚠️ Erro no envio Telegram em background: {e}")
+    threading.Thread(target=worker, daemon=True).start()
+
+# ================= BACKTEST GLOBAL ASSÍNCRONO =================
+def processar_backtest_thread(user_email, st):
+    tf = st.get("timeframe", 5)
+    mkt = st.get("tipo_mercado", "TODOS")
+
+    if mkt == "TODOS":
+        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+    elif mkt == "ABERTO_TODOS":
+        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
+    elif mkt == "OTC_TODOS":
+        ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+    else:
+        ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
+
+    stats_ativos = {a: {"wins": 0, "losses": 0} for a in ativos}
+    stats_est = {e: {"wins": 0, "losses": 0} for e in LISTA_ESTRATEGIAS}
+
+    for ativo in ativos:
+        ticker = MAPA_TICKERS.get(ativo, ativo)
+        data = get_data_v2(ticker, tf, velas_minimas=60)
+        
+        if not data or len(data["close"]) < 35:
+            continue
+
+        limite = min(30, len(data["close"]) - 3)
+        for est in LISTA_ESTRATEGIAS:
+            for i in range(-limite - 1, -1):
+                sinal, prob = analisar_estrategia(data, est, i)
+                if sinal:
+                    next_idx = i + 1
+                    c_next, o_next = data["close"][next_idx], data["open"][next_idx]
+                    
+                    is_win = False
+                    if sinal == "CALL" and c_next > o_next:
+                        is_win = True
+                    elif sinal == "PUT" and c_next < o_next:
+                        is_win = True
+                        
+                    if is_win:
+                        stats_ativos[ativo]["wins"] += 1
+                        stats_est[est]["wins"] += 1
+                    else:
+                        stats_ativos[ativo]["losses"] += 1
+                        stats_est[est]["losses"] += 1
+
+    melhor_ativo = "N/A"
+    maior_wr_ativo = -1.0
+    for a, s in stats_ativos.items():
+        total = s["wins"] + s["losses"]
+        if total >= 3:
+            wr = (s["wins"] / total) * 100
+            if wr > maior_wr_ativo:
+                maior_wr_ativo = wr
+                melhor_ativo = a
+
+    melhor_est = "N/A"
+    maior_wr_est = -1.0
+    html_est = ""
+    for e, s in stats_est.items():
+        total = s["wins"] + s["losses"]
+        if total > 0:
+            wr = (s["wins"] / total) * 100
+            nome_est = NOME_ESTRATEGIAS_DISPLAY.get(e, e)
+            html_est += f"&bull; {nome_est}: <b>{wr:.1f}%</b> ({s['wins']}W/{s['losses']}L)<br>"
+            if total >= 3 and wr > maior_wr_est:
+                maior_wr_est = wr
+                melhor_est = e
+
+    html_final = (
+        f"<div style='text-align:left; font-size:12px; padding:10px; background:rgba(15,23,42,0.8); border: 1px solid #00f2fe; border-radius:12px;'>"
+        f"<h3 style='color:#00f2fe; text-align:center; margin-bottom:10px; font-size:14px;'>📊 BACKTEST (ÚLTIMAS 30 VELAS)</h3>"
+        f"<b style='color:#38ef7d;'>🏆 Melhor Ativo:</b> {melhor_ativo} ({maior_wr_ativo:.1f}%)<br>"
+        f"<b style='color:#38ef7d;'>🏆 Melhor Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(melhor_est, melhor_est)} ({maior_wr_est:.1f}%)<br><br>"
+        f"<div style='border-top:1px solid #1e293b; margin-top:8px; padding-top:8px;'>"
+        f"<b style='color:#94a3b8;'>Desempenho por Estratégia:</b><br>{html_est}"
+        f"</div>"
+        f"</div>"
+    )
+    
+    st["bot_pausado"] = True
+    st["ativo_atual"] = "BACKTEST CONCLUÍDO"
+    st["ultimo_sinal"] = html_final
+    
+    msg_tg = (
+        f"📊 <b>RELATÓRIO DE BACKTEST (30 VELAS)</b>\n\n"
+        f"🏆 <b>Melhor Ativo:</b> {melhor_ativo} ({maior_wr_ativo:.1f}%)\n"
+        f"🏆 <b>Melhor Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(melhor_est, melhor_est)} ({maior_wr_est:.1f}%)\n\n"
+        f"<i>O robô foi pausado para leitura dos resultados no painel.</i>"
+    )
+    enviar_telegram(msg_tg, user_solicitante=user_email)
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
 @app.route('/sw.js')
@@ -1412,6 +1529,13 @@ def command(cmd):
         zerar_estatisticas_usuario(user)
         enviar_telegram("🔴 <b>ROBÔ ENCERRADO!</b>", user_solicitante=user)
         return jsonify({"ok": True})
+        
+    elif cmd == "run_backtest":
+        st["bot_pausado"] = True
+        st["ativo_atual"] = "PROCESSANDO BACKTEST..."
+        st["ultimo_sinal"] = "<div class='system-console' style='color:#8b5cf6;'>⏳ <b>EXECUTANDO BACKTEST NAS ÚLTIMAS 30 VELAS...</b><br>Isso pode levar alguns segundos dependendo da quantidade de ativos.</div><div class='tech-scanner' style='border-top-color:#8b5cf6;'></div>"
+        threading.Thread(target=processar_backtest_thread, args=(user, st), daemon=True).start()
+        return jsonify({"ok": True})
 
     elif cmd.startswith("tf_"): 
         st["timeframe"] = int(cmd.split('_')[1])
@@ -1450,32 +1574,6 @@ def resultado(res):
         st["ultimo_sinal"] = f"<div class='system-console'>🔍 ANALISANDO VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[RETOMANDO VARREDURA COMPLETA]</span></div><div class='tech-scanner'></div>"
     
     return redirect('/')
-
-# ================= ENVIO TELEGRAM ASSÍNCRONO =================
-def enviar_telegram_em_background(mensagem, user_email, alert_id=None, deletar_msg_id=None, st=None):
-    """Executa operações do Telegram fora do loop de análise."""
-    def worker():
-        try:
-            if deletar_msg_id:
-                try:
-                    deletar_mensagem_telegram(deletar_msg_id)
-                except Exception as e:
-                    print(f"⚠️ Falha ao deletar alerta antigo no Telegram: {e}")
-            # Se o alerta já foi substituído enquanto o Telegram estava processando,
-            # não envia a mensagem antiga.
-            if st is not None and alert_id is not None:
-                atual = st.get("alerta_ativo")
-                if atual and atual.get("alert_id") != alert_id:
-                    return
-
-            novo_id = enviar_telegram(mensagem, auto_delete=None, user_solicitante=user_email)
-            if st is not None and alert_id is not None:
-                atual = st.get("alerta_ativo")
-                if atual and atual.get("alert_id") == alert_id:
-                    atual["msg_id"] = novo_id
-        except Exception as e:
-            print(f"⚠️ Erro no envio Telegram em background: {e}")
-    threading.Thread(target=worker, daemon=True).start()
 
 
 # ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT =================
