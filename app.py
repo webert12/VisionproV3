@@ -57,7 +57,9 @@ def get_user_state(email):
             "sinais_enviados": {},
             "alerta_ativo": None,  # Guarda informações do alerta ativo no ciclo
             "notificacao": None,
-            "notificacao_ultima_hora": 0.0
+            "notificacao_ultima_hora": 0.0,
+            "ativos_customizados": [],
+            "usar_customizados": False
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -324,7 +326,7 @@ HTML_INDEX = """
         }
 
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
-        .brand { font-size: 17px; font-weight: 900; letter-spacing: 1px; color: #00f2fe; display: flex; align-items: center; gap: 8px; text-shadow: 0 0 10px rgba(0,242,254,0.4); }
+        .brand { font-size: 17px; font-weight: 900; letter-spacing: 1px; color: #00f2fe; display: flex; align-items: center; gap: 8px; text-shadow: 0 0 10px rgba(0,242,254,0.4); cursor: pointer; }
         .brand span { background: rgba(0, 242, 254, 0.15); color: #38ef7d; font-size: 10px; padding: 3px 8px; border-radius: 12px; border: 1px solid rgba(56, 239, 125, 0.4); font-weight: 700; }
         .btn-logout { font-size: 12px; color: #ef4444; text-decoration: none; font-weight: 700; padding: 6px 14px; border-radius: 10px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); transition: 0.2s; }
         .btn-logout:hover { background: rgba(239, 68, 68, 0.2); }
@@ -400,7 +402,7 @@ HTML_INDEX = """
 <body>
     <div class="container">
         <div class="header">
-            <div class="brand">VISION PRO <span>V3 ULTRA</span></div>
+            <div class="brand" ondblclick="toggleHiddenAssets()" title="Clique Duplo para Funções Ocultas">VISION PRO <span>V3 ULTRA</span></div>
             <a href="/logout" class="btn-logout">SAIR</a>
         </div>
 
@@ -454,6 +456,23 @@ HTML_INDEX = """
             </div>
             
             <button class="btn-action" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9); width:100%; margin-bottom:15px; box-shadow: 0 4px 12px rgba(139,92,246,0.2);" onclick="sendCommand('run_backtest')">📊 RODAR BACKTEST GLOBAL (30 VELAS)</button>
+
+            <!-- PAINEL OCULTO DE ATIVOS -->
+            <div id="hidden-asset-panel" style="display: none; background: #0b1120; border: 1px dashed #00f2fe; border-radius: 12px; padding: 15px; margin-top: 15px; margin-bottom: 15px;">
+                <span class="section-label" style="color: #00f2fe;">SELEÇÃO OCULTA DE ATIVOS</span>
+                <p style="font-size:10px; color:#94a3b8; margin-bottom:10px;">Selecione ativos específicos. Se algum for marcado, o bot ignorará a lista global e focará apenas neles.</p>
+                <div style="max-height: 200px; overflow-y: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size:11px; margin-bottom:10px;">
+                    {% for cat, lista in ativos_base.items() %}
+                        <div style="grid-column: span 2; font-weight:800; color:#cbd5e1; margin-top:5px; border-bottom:1px solid #1e293b; padding-bottom:3px;">{{ cat.replace('_', ' ') }}</div>
+                        {% for a in lista %}
+                            <label style="display:flex; align-items:center; gap:5px; cursor:pointer;">
+                                <input type="checkbox" class="custom-asset-chk" value="{{ a }}"> {{ a }}
+                            </label>
+                        {% endfor %}
+                    {% endfor %}
+                </div>
+                <button class="btn-action btn-start" style="width:100%; padding:10px;" onclick="saveCustomAssets()">APLICAR ATIVOS SELECIONADOS</button>
+            </div>
 
             <span class="section-label">Configurações de Análise</span>
             
@@ -525,7 +544,6 @@ HTML_INDEX = """
         let lastNotifId = null;
         const NATIVE_NOTIFICATION_COOLDOWN_MS = 60000;
 
-        // Registra o Service Worker, mas não dispara nenhuma notificação automaticamente.
         if ('serviceWorker' in navigator && 'Notification' in window) {
             navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
                 .then(() => console.log('Service Worker de notificações registrado.'))
@@ -544,9 +562,6 @@ HTML_INDEX = """
                     btn.innerText = "✅ NOTIFICAÇÕES NATIVAS ATIVADAS!";
                     btn.style.borderColor = "#10b981";
                     btn.style.color = "#10b981";
-
-                    // Não envia uma notificação de teste imediatamente após a permissão.
-                    // Isso evita uma notificação desnecessária no momento da ativação.
                 } else {
                     alert('Permissão de Notificação Recusada.');
                 }
@@ -558,8 +573,6 @@ HTML_INDEX = """
 
             const id = String(notifId || '');
             const agora = Date.now();
-
-            // Evita repetir a mesma notificação após recarregar/consultar o painel.
             const ultimoId = localStorage.getItem('vision_last_notif_id') || '';
             const ultimaHora = Number(localStorage.getItem('vision_last_notif_at') || '0');
 
@@ -569,10 +582,8 @@ HTML_INDEX = """
             try {
                 if ('serviceWorker' in navigator) {
                     const reg = await navigator.serviceWorker.ready;
-
                     await reg.showNotification(titulo, {
                         body: corpo,
-                        // Sem vibração repetitiva e sem renotify: comportamento menos intrusivo.
                         tag: 'vision-signal',
                         renotify: false,
                         requireInteraction: false
@@ -586,6 +597,28 @@ HTML_INDEX = """
             } catch (err) {
                 console.warn('Não foi possível exibir a notificação:', err);
             }
+        }
+
+        function toggleHiddenAssets() {
+            const panel = document.getElementById('hidden-asset-panel');
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function saveCustomAssets() {
+            let selecionados = [];
+            document.querySelectorAll('.custom-asset-chk:checked').forEach(chk => selecionados.push(chk.value));
+            fetch('/custom_assets', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ativos: selecionados})
+            }).then(r => r.json()).then(data => {
+                if(selecionados.length > 0) {
+                    alert('✅ Ativos específicos ativados! (' + selecionados.length + ' ativos). O mercado geral será ignorado.');
+                } else {
+                    alert('🔄 Nenhum ativo específico marcado. Voltando a operar pela categoria do mercado selecionada.');
+                }
+                document.getElementById('hidden-asset-panel').style.display='none';
+            });
         }
 
         function openBroker(url) {
@@ -653,7 +686,6 @@ HTML_INDEX = """
             } catch (err) {
                 console.warn('Falha ao atualizar o painel:', err);
             } finally {
-                // Nova consulta 250ms após a resposta, sem acumular requisições.
                 setTimeout(atualizarPainel, 250);
             }
         }
@@ -1177,14 +1209,17 @@ def processar_backtest_thread(user_email, st):
     tf = st.get("timeframe", 5)
     mkt = st.get("tipo_mercado", "TODOS")
 
-    if mkt == "TODOS":
-        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
-    elif mkt == "ABERTO_TODOS":
-        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
-    elif mkt == "OTC_TODOS":
-        ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+    if st.get("usar_customizados") and st.get("ativos_customizados"):
+        ativos = st["ativos_customizados"]
     else:
-        ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
+        if mkt == "TODOS":
+            ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+        elif mkt == "ABERTO_TODOS":
+            ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
+        elif mkt == "OTC_TODOS":
+            ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+        else:
+            ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
 
     stats_ativos = {a: {"wins": 0, "losses": 0} for a in ativos}
     stats_est = {e: {"wins": 0, "losses": 0} for e in LISTA_ESTRATEGIAS}
@@ -1418,19 +1453,13 @@ def adm_editar():
         
     return redirect('/admin_panel')
 
-@app.route('/adm/excluir/<email>')
-def adm_excluir(email):
-    if session.get('user') != ADMIN_EMAIL: return abort(403)
-    excluir_usuario_db(email)
-    return redirect('/admin_panel')
-
 @app.route('/')
 def index():
     if 'user' not in session: return redirect('/login')
     user = session['user']
     USUARIOS_ONLINE[user] = time.time()
     st = get_user_state(user)
-    return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL)
+    return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL, ativos_base=ATIVOS_BASE)
 
 @app.route('/status')
 def status():
@@ -1460,6 +1489,17 @@ def status():
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     return response
+
+@app.route('/custom_assets', methods=['POST'])
+def custom_assets():
+    user = session.get('user')
+    if not user: return jsonify({"ok": False})
+    st = get_user_state(user)
+    data = request.json
+    if data and "ativos" in data:
+        st["ativos_customizados"] = data["ativos"]
+        st["usar_customizados"] = len(data["ativos"]) > 0
+    return jsonify({"ok": True})
 
 @app.route('/command/<cmd>')
 def command(cmd):
@@ -1673,14 +1713,17 @@ def bot_loop():
                     # -------------------------------------------------------------
                     # 2. VARREDURA DINÂMICA DE TODOS OS ATIVOS DO MERCADO
                     # -------------------------------------------------------------
-                    if mkt == "TODOS":
-                        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
-                    elif mkt == "ABERTO_TODOS":
-                        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
-                    elif mkt == "OTC_TODOS":
-                        ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+                    if st.get("usar_customizados") and st.get("ativos_customizados"):
+                        ativos = st["ativos_customizados"]
                     else:
-                        ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
+                        if mkt == "TODOS":
+                            ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+                        elif mkt == "ABERTO_TODOS":
+                            ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
+                        elif mkt == "OTC_TODOS":
+                            ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+                        else:
+                            ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
 
                     ativos_scan = ativos.copy()
                     random.shuffle(ativos_scan)
@@ -1856,24 +1899,10 @@ def bot_loop():
                     print(f"Erro no loop do usuario {user_email}: {e_usr}")
 
             time.sleep(0.5)
-        except Exception as err:
-            print(f"Erro no loop global do bot: {err}")
+        except Exception as main_e:
+            print(f"Erro Crítico no Bot Loop Principal: {main_e}")
             time.sleep(2)
 
-# ================= THREAD BACKGROUND =================
-thread_iniciada = False
-lock_thread = threading.Lock()
-
-@app.before_request
-def start_background_loop():
-    global thread_iniciada
-    if not thread_iniciada:
-        with lock_thread:
-            if not thread_iniciada:
-                threading.Thread(target=bot_loop, daemon=True).start()
-                thread_iniciada = True
-
 if __name__ == '__main__':
-    start_background_loop()
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    threading.Thread(target=bot_loop, daemon=True).start()
+    app.run(host='0.0.0.0', port=5000, threaded=True)
