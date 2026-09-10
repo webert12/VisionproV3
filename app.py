@@ -397,7 +397,6 @@ HTML_INDEX = """
         .btn-notify { width: 100%; padding: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; }
         .btn-notify:hover { background: rgba(16, 185, 129, 0.3); }
 
-        /* ESTILOS DE CATALOGAÇÃO E SELEÇÃO DE ATIVOS */
         .btn-catalog { width: 100%; padding: 13px; background: linear-gradient(135deg, #00c6ff, #0072ff); border: none; color: white; font-weight: 800; font-size: 12px; border-radius: 12px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; box-shadow: 0 4px 15px rgba(0, 198, 255, 0.3); letter-spacing: 0.5px; }
         .btn-catalog:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0, 198, 255, 0.5); }
         .catalog-card { background: #0b1120; border: 1px solid #00f2fe; border-radius: 16px; padding: 15px; margin-bottom: 16px; font-size: 12px; }
@@ -1203,7 +1202,7 @@ for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X
 for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE REAL DE VELAS =================
-def get_data_v2(ticker, tf, velas_minimas=60):
+def get_data_v2(ticker, tf, velas_minimas=30):
     try:
         base_ticker = ticker
         headers = {
@@ -1212,33 +1211,35 @@ def get_data_v2(ticker, tf, velas_minimas=60):
         }
         
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d"
-        res = requests.get(url, headers=headers, timeout=4.0)
+        res = requests.get(url, headers=headers, timeout=3.0)
         
         if res.status_code == 200 and 'chart' in res.json():
             data_json = res.json()
-            result = data_json['chart']['result'][0]
-            timestamps = result['timestamp']
-            quote = result['indicators']['quote'][0]
-            
-            ohlc = {
-                "time": np.array(timestamps),
-                "open": np.array(quote['open'], dtype=float),
-                "high": np.array(quote['high'], dtype=float),
-                "low": np.array(quote['low'], dtype=float),
-                "close": np.array(quote['close'], dtype=float)
-            }
-            
-            idx = ~np.isnan(ohlc["close"])
-            for k in ohlc: 
-                ohlc[k] = ohlc[k][idx]
+            if data_json.get('chart', {}).get('result'):
+                result = data_json['chart']['result'][0]
+                timestamps = result.get('timestamp')
+                indicators = result.get('indicators', {}).get('quote', [{}])[0]
                 
-            if len(ohlc["close"]) >= velas_minimas:
-                return ohlc
+                if timestamps and indicators:
+                    ohlc = {
+                        "time": np.array(timestamps),
+                        "open": np.array(indicators.get('open', []), dtype=float),
+                        "high": np.array(indicators.get('high', []), dtype=float),
+                        "low": np.array(indicators.get('low', []), dtype=float),
+                        "close": np.array(indicators.get('close', []), dtype=float)
+                    }
+                    
+                    idx = ~np.isnan(ohlc["close"])
+                    for k in ohlc: 
+                        ohlc[k] = ohlc[k][idx]
+                        
+                    if len(ohlc["close"]) >= velas_minimas:
+                        return ohlc
 
         if "-USD" in base_ticker or "USD" in ticker:
             crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
             url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=120&aggregate={tf}"
-            r_alt = requests.get(url_alt, timeout=4.0).json()
+            r_alt = requests.get(url_alt, timeout=3.0).json()
             
             if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
                 data_list = r_alt['Data']['Data']
@@ -1287,11 +1288,10 @@ def calcular_ema(dados, periodo):
 
 # ================= MOTOR DE ESTRATÉGIAS COM SCORE DE PROBABILIDADE =================
 def analisar_estrategia(data, estrategia, i=-1):
-    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
-    
-    if len(c) < 25: 
+    if not data or "close" not in data or len(data["close"]) < 20:
         return None, 0
         
+    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
     sinal = None
     probabilidade = 0
 
@@ -1552,17 +1552,22 @@ def loop_varredura_principal():
                 est_config = st.get("estrategia", "TODAS")
                 ativos_sel = st.get("ativos_selecionados", "TODOS")
 
-                if ativos_sel != "TODOS" and isinstance(ativos_sel, list) and len(ativos_sel) > 0:
-                    lista_ativos = ativos_sel
+                # Definição segura dos ativos a serem analisados
+                if mkt == "TODOS":
+                    base = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+                elif mkt == "ABERTO_TODOS":
+                    base = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
+                elif mkt == "OTC_TODOS":
+                    base = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
                 else:
-                    if mkt == "TODOS":
-                        lista_ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
-                    elif mkt == "ABERTO_TODOS":
-                        lista_ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
-                    elif mkt == "OTC_TODOS":
-                        lista_ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
-                    else:
-                        lista_ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
+                    base = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
+
+                if isinstance(ativos_sel, list) and len(ativos_sel) > 0:
+                    lista_ativos = [a for a in ativos_sel if a in base]
+                    if not lista_ativos:
+                        lista_ativos = base
+                else:
+                    lista_ativos = base
 
                 sinal_encontrado = False
 
@@ -1571,10 +1576,8 @@ def loop_varredura_principal():
                         break
 
                     st["ativo_atual"] = ativo
-                    time.sleep(0.3)
-
                     ticker = MAPA_TICKERS.get(ativo, ativo)
-                    data = get_data_v2(ticker, tf, velas_minimas=30)
+                    data = get_data_v2(ticker, tf, velas_minimas=20)
 
                     if not data:
                         continue
@@ -1641,11 +1644,11 @@ def loop_varredura_principal():
                             break
 
                 if not sinal_encontrado and not st.get("aguardando_confirmacao"):
-                    time.sleep(0.5)
+                    time.sleep(0.2)
 
         except Exception as e:
             print(f"Erro no loop de varredura: {e}")
-        time.sleep(1)
+        time.sleep(0.5)
 
 # Inicializa a Thread em segundo plano
 t_varredura = threading.Thread(target=loop_varredura_principal, daemon=True)
@@ -1830,21 +1833,18 @@ def process_command(cmd):
     elif cmd == "test_telegram":
         enviar_telegram("🧪 <b>TESTE DE CONEXÃO</b>\nO Vision Pro V3 está conectado perfeitamente ao Telegram!", user_solicitante=user)
 
-    elif cmd.startswith("mkt_"):
-        novo_mkt = cmd.replace("mkt_", "")
-        st["tipo_mercado"] = novo_mkt
-        st["ativos_selecionados"] = "TODOS"
-
     elif cmd.startswith("tf_"):
         try:
-            novo_tf = int(cmd.replace("tf_", ""))
-            st["timeframe"] = novo_tf
+            st["timeframe"] = int(cmd.replace("tf_", ""))
         except ValueError:
             pass
 
+    elif cmd.startswith("mkt_"):
+        st["tipo_mercado"] = cmd.replace("mkt_", "")
+        st["ativos_selecionados"] = "TODOS"
+
     elif cmd.startswith("set_est_"):
-        nova_est = cmd.replace("set_est_", "")
-        st["estrategia"] = nova_est
+        st["estrategia"] = cmd.replace("set_est_", "")
 
     return jsonify({"status": "ok"})
 
@@ -1852,136 +1852,111 @@ def process_command(cmd):
 def salvar_config_operacional():
     user = session.get('user')
     if not user:
-        return jsonify({"redirect": "/login"})
-    
+        return jsonify({"error": "Não autorizado"}), 401
+        
     st = get_user_state(user)
-    data = request.get_json() or {}
-
+    data = request.json or {}
+    
     if "estrategia" in data:
         st["estrategia"] = data["estrategia"]
-
     if "ativos" in data:
         st["ativos_selecionados"] = data["ativos"]
 
     return jsonify({"status": "sucesso"})
 
-# ================= REGISTRO DE RESULTADOS DOS SINAIS =================
-@app.route('/resultado/<tipo>')
-def registrar_resultado(tipo):
+@app.route('/resultado/<res>')
+def registrar_resultado(res):
     user = session.get('user')
     if not user:
         return jsonify({"redirect": "/login"})
-    
+
     st = get_user_state(user)
+
+    if res in ["win", "g1"]:
+        atualizar_estatisticas_usuario(user, True)
+        atualizar_ultimo_sinal_bd(user, "WIN (G1)" if res == "g1" else "WIN DIRECT")
+        msg = "✅ <b>RESULTADO: WIN!</b>" if res == "win" else "🟢 <b>RESULTADO: WIN NO G1!</b>"
+        enviar_telegram(msg, user_solicitante=user)
+    elif res == "red":
+        atualizar_estatisticas_usuario(user, False)
+        atualizar_ultimo_sinal_bd(user, "RED")
+        enviar_telegram("🔴 <b>RESULTADO: RED!</b>", user_solicitante=user)
+    elif res == "pular":
+        atualizar_ultimo_sinal_bd(user, "CANCELADO")
+
     st["aguardando_confirmacao"] = False
     st["sinal_permanente"] = None
+    st["alerta_ativo"] = None
+    st["ultimo_sinal"] = "🔍 BUSCANDO PRÓXIMA OPORTUNIDADE..."
 
-    if tipo == 'win':
-        atualizar_estatisticas_usuario(user, is_win=True)
-        atualizar_ultimo_sinal_bd(user, "Win Direct 🟢")
-        st["ultimo_sinal"] = "✅ ÚLTIMO SINAL: WIN DIRECT!"
-        enviar_telegram("✅ <b>RESULTADO: WIN DIRECT 🟢</b>", user_solicitante=user)
-    elif tipo == 'g1':
-        atualizar_estatisticas_usuario(user, is_win=True)
-        atualizar_ultimo_sinal_bd(user, "Win Gale 1 🟡")
-        st["ultimo_sinal"] = "🟡 ÚLTIMO SINAL: WIN NO GALE 1!"
-        enviar_telegram("🟡 <b>RESULTADO: WIN NO GALE 1 🟢</b>", user_solicitante=user)
-    elif tipo == 'red':
-        atualizar_estatisticas_usuario(user, is_win=False)
-        atualizar_ultimo_sinal_bd(user, "Red 🔴")
-        st["ultimo_sinal"] = "🔴 ÚLTIMO SINAL: RED (LOSS)"
-        enviar_telegram("🔴 <b>RESULTADO: RED (LOSS) 🔴</b>", user_solicitante=user)
-    elif tipo == 'pular':
-        atualizar_ultimo_sinal_bd(user, "Cancelado ⚪")
-        st["ultimo_sinal"] = "⚪ SINAL CANCELADO/PULADO"
-
-    st["inicio_varredura"] = time.time() + 10
     return jsonify({"status": "ok"})
 
-# ================= PAINEL ADMINISTRATIVO =================
+# ================= ROTAS ADMINISTRATIVAS =================
 @app.route('/admin_panel')
 def admin_panel():
     user = session.get('user')
-    if not user or user != ADMIN_EMAIL:
+    if user != ADMIN_EMAIL:
         return redirect('/')
 
-    usuarios = carregar_usuarios()
-    
     agora = time.time()
-    online_list = [usr for usr, t_last in USUARIOS_ONLINE.items() if (agora - t_last) < 15]
+    online_list = [u for u, t in USUARIOS_ONLINE.items() if (agora - t) < 15]
+    usuarios = carregar_usuarios()
 
     return render_template_string(
         HTML_ADM,
         lista=usuarios,
-        admin=ADMIN_EMAIL,
+        online_list=online_list,
         online_count=len(online_list),
-        online_list=online_list
+        admin=ADMIN_EMAIL
     )
 
 @app.route('/adm/editar', methods=['POST'])
 def adm_editar():
-    user = session.get('user')
-    if not user or user != ADMIN_EMAIL:
+    if session.get('user') != ADMIN_EMAIL:
         return redirect('/')
 
-    email_original = request.form.get('email_original', '').strip().lower()
+    email_orig = request.form.get('email_original', '').strip().lower()
     novo_email = request.form.get('novo_email', '').strip().lower()
     nova_senha = request.form.get('nova_senha', '').strip()
 
-    if email_original and novo_email:
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor(cursor_factory=RealDictCursor)
-            
-            cur.execute("SELECT senha, criado_em, ips_autorizados FROM usuarios WHERE email = %s;", (email_original,))
-            u = cur.fetchone()
+    if not novo_email:
+        return redirect('/admin_panel')
 
-            if u:
-                senha_final = generate_password_hash(nova_senha) if nova_senha else u['senha']
-                
-                if email_original != novo_email:
-                    cur.execute("DELETE FROM usuarios WHERE email = %s;", (email_original,))
-                    
-                cur.execute("""
-                    INSERT INTO usuarios (email, senha, criado_em, ips_autorizados)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (email) DO UPDATE 
-                    SET senha = EXCLUDED.senha;
-                """, (novo_email, senha_final, u['criado_em'], u['ips_autorizados']))
-                
-                conn.commit()
-            cur.close()
-            conn.close()
-        except Exception as e:
-            print(f"Erro ao editar usuário via ADM: {e}")
+    usuarios = carregar_usuarios()
+    info = usuarios.get(email_orig)
+
+    if info:
+        senha_final = generate_password_hash(nova_senha) if nova_senha else info.get('senha')
+
+        if email_orig != novo_email:
+            excluir_usuario_db(email_orig)
+
+        salvar_usuario(novo_email, senha_final, data=str(info.get('criado_em')).split('T')[0])
 
     return redirect('/admin_panel')
 
 @app.route('/adm/renovar/<email>')
 def adm_renovar(email):
-    user = session.get('user')
-    if not user or user != ADMIN_EMAIL:
+    if session.get('user') != ADMIN_EMAIL:
         return redirect('/')
     renovar_usuario_db(email)
     return redirect('/admin_panel')
 
 @app.route('/adm/liberar_ip/<email>')
 def adm_liberar_ip(email):
-    user = session.get('user')
-    if not user or user != ADMIN_EMAIL:
+    if session.get('user') != ADMIN_EMAIL:
         return redirect('/')
     liberar_ip_usuario_db(email)
     return redirect('/admin_panel')
 
 @app.route('/adm/excluir/<email>')
 def adm_excluir(email):
-    user = session.get('user')
-    if not user or user != ADMIN_EMAIL:
+    if session.get('user') != ADMIN_EMAIL:
         return redirect('/')
     excluir_usuario_db(email)
     return redirect('/admin_panel')
 
 # ================= EXECUÇÃO DO SERVIDOR =================
 if __name__ == '__main__':
-    port = int(os.getenv("PORT", 5000))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
