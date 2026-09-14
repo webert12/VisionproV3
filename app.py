@@ -58,7 +58,8 @@ def get_user_state(email):
             "alerta_ativo": None,  # Guarda informações do alerta ativo no ciclo
             "timer_confirmacao": None,  # Timer independente para não depender da varredura
             "notificacao": None,
-            "notificacao_ultima_hora": 0.0
+            "notificacao_ultima_hora": 0.0,
+            "ultimo_sinal_id": None
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -512,6 +513,7 @@ HTML_INDEX = """
             {% endif %}
 
             <button class="btn-toggle-hist" onclick="toggleHistorico()">👁️ EXIBIR HISTÓRICO PASSADO</button>
+            <button onclick="location.href='/backtest'" style="width:100%; margin-top:10px; padding:12px; background:rgba(139,92,246,0.12); border:1px solid #8b5cf6; color:#c4b5fd; font-weight:bold; border-radius:10px; cursor:pointer;">🧪 ABRIR LABORATÓRIO DE BACKTEST</button>
 
             <div class="historico-box" id="box-historico">
                 <span class="section-label">Histórico de Sinais Salvo</span>
@@ -695,6 +697,20 @@ def init_db():
                 user_email VARCHAR(255) NOT NULL,
                 sinal VARCHAR(255) NOT NULL,
                 resultado VARCHAR(50) NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS backtest_execucoes (
+                id SERIAL PRIMARY KEY,
+                user_email VARCHAR(255) NOT NULL,
+                ativo VARCHAR(80) NOT NULL,
+                timeframe INT NOT NULL,
+                executado_em TIMESTAMP NOT NULL,
+                amostras INT DEFAULT 0,
+                sinais INT DEFAULT 0,
+                acertos INT DEFAULT 0,
+                erros INT DEFAULT 0,
+                neutros INT DEFAULT 0,
+                taxa FLOAT DEFAULT 0.0
             );
         """)
         conn.commit()
@@ -880,13 +896,14 @@ def registrar_sinal_bd(email, sinal_str):
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO historico_sinais (user_email, sinal, resultado)
-            VALUES (%s, %s, %s);
+            VALUES (%s, %s, %s) RETURNING id;
         """, (email.strip().lower(), sinal_str, "Analisando..."))
+        row=cur.fetchone()
         conn.commit()
-        cur.close()
-        conn.close()
+        cur.close(); conn.close()
+        return row[0] if row else None
     except Exception:
-        pass
+        return None
 
 def buscar_historico_bd(email):
     try:
@@ -908,22 +925,20 @@ def buscar_historico_bd(email):
 def atualizar_ultimo_sinal_bd(email, resultado):
     try:
         email_clean = email.strip().lower()
+        st = get_user_state(email_clean)
+        sinal_id = st.get("ultimo_sinal_id")
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT id FROM historico_sinais 
-            WHERE user_email = %s 
-            ORDER BY id DESC LIMIT 1;
-        """, (email_clean,))
-        res = cur.fetchone()
-
-        if res:
-            ultimo_id = res["id"]
-            cur.execute("UPDATE historico_sinais SET resultado = %s WHERE id = %s;", (resultado, ultimo_id))
-            conn.commit()
-
-        cur.close()
-        conn.close()
+        if sinal_id:
+            cur.execute("UPDATE historico_sinais SET resultado = %s WHERE id = %s AND user_email = %s RETURNING id;", (resultado, sinal_id, email_clean))
+            res = cur.fetchone()
+        else:
+            cur.execute("SELECT id FROM historico_sinais WHERE user_email = %s ORDER BY id DESC LIMIT 1;", (email_clean,))
+            res = cur.fetchone()
+            if res:
+                cur.execute("UPDATE historico_sinais SET resultado = %s WHERE id = %s;", (resultado, res["id"]))
+        conn.commit(); cur.close(); conn.close()
+        st["ultimo_sinal_id"] = None
     except Exception:
         pass
 
@@ -1504,6 +1519,85 @@ def index():
     st = get_user_state(user)
     return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL)
 
+# ================= LABORATÓRIO DE BACKTEST V3 =================
+def _directional_outcome(data, idx, signal):
+    if idx + 1 >= len(data['close']) or not signal:
+        return 'NEUTRO'
+    now = float(data['close'][idx])
+    nxt = float(data['close'][idx + 1])
+    if abs(nxt - now) <= max(abs(now) * 1e-8, 1e-12):
+        return 'NEUTRO'
+    if signal == 'CALL':
+        return 'WIN' if nxt > now else 'RED'
+    return 'WIN' if nxt < now else 'RED'
+
+def _backtest_strategy(data, estrategia, min_score=60, start=None):
+    n = len(data['close'])
+    start = max(60, start or 60)
+    rows=[]
+    for idx in range(start, n-1):
+        prefix={k: np.asarray(v[:idx+1]).copy() for k,v in data.items()}
+        try:
+            sig, score = analisar_estrategia(prefix, estrategia)
+        except Exception:
+            continue
+        if not sig or score < min_score:
+            continue
+        outcome=_directional_outcome(data, idx, sig)
+        rows.append({'idx':idx,'signal':sig,'score':int(score),'outcome':outcome})
+    return rows
+
+def executar_backtest(data, estrategias=None):
+    if not data or len(data['close']) < 80:
+        return {'ok':False,'erro':'Dados insuficientes para backtest.'}
+    estrategias=estrategias or LISTA_ESTRATEGIAS
+    resultados={}
+    for est in estrategias:
+        rows=_backtest_strategy(data, est, min_score=60)
+        wins=sum(r['outcome']=='WIN' for r in rows)
+        reds=sum(r['outcome']=='RED' for r in rows)
+        neutros=sum(r['outcome']=='NEUTRO' for r in rows)
+        decididos=wins+reds
+        taxa=(wins/decididos*100) if decididos else 0.0
+        resultados[est]={
+            'nome':NOME_ESTRATEGIAS_DISPLAY.get(est,est),
+            'sinais':len(rows),'wins':wins,'reds':reds,'neutros':neutros,
+            'taxa':round(taxa,2),
+            'score_medio':round(float(np.mean([r['score'] for r in rows])),2) if rows else 0,
+            'ultimo_score':rows[-1]['score'] if rows else 0
+        }
+    return {'ok':True,'amostras':len(data['close'])-60-1,'resultados':resultados}
+
+@app.route('/backtest')
+def backtest_page():
+    user=session.get('user')
+    if not user: return redirect('/login')
+    st=get_user_state(user)
+    return render_template_string('''
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vision Pro V3 Ultra — Laboratório</title>
+<style>
+body{margin:0;background:#070b14;color:#e5e7eb;font-family:Arial,sans-serif;padding:20px}.wrap{max-width:900px;margin:auto}.card{background:#0d1422;border:1px solid #243047;border-radius:16px;padding:18px;margin-bottom:14px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}select,button{width:100%;padding:12px;border-radius:10px;border:1px solid #334155;background:#111827;color:#fff}button{cursor:pointer;font-weight:700;background:#0e7490}table{width:100%;border-collapse:collapse;margin-top:14px}th,td{padding:9px;border-bottom:1px solid #263244;text-align:left;font-size:13px}th{color:#67e8f9}.muted{color:#94a3b8;font-size:12px}.win{color:#34d399}.red{color:#fb7185}.warn{color:#fbbf24}@media(max-width:600px){.grid{grid-template-columns:1fr}}
+</style></head><body><div class="wrap"><div class="card"><h2>🧠 Laboratório de Backtest V3</h2><div class="muted">Teste histórico direcional de 1 candle. Não é garantia de resultado futuro e não substitui validação fora da amostra.</div></div>
+<div class="card"><div class="grid"><select id="ativo">{% for a in ativos %}<option value="{{a}}">{{a}}</option>{% endfor %}</select><select id="tf"><option value="1">M1</option><option value="5" {% if tf==5 %}selected{% endif %}>M5</option><option value="15" {% if tf==15 %}selected{% endif %}>M15</option></select></div><button onclick="rodar()" style="margin-top:10px">▶ EXECUTAR BACKTEST</button><button onclick="location.href='/'" style="margin-top:10px;background:#172033">← VOLTAR AO TERMINAL</button></div>
+<div id="out" class="card">Escolha o ativo e execute o teste.</div></div>
+<script>
+async function rodar(){const out=document.getElementById('out');out.innerHTML='⏳ Buscando dados reais e executando análise...';try{const a=document.getElementById('ativo').value,t=document.getElementById('tf').value;const r=await fetch('/api/backtest?ativo='+encodeURIComponent(a)+'&tf='+t);const d=await r.json();if(!d.ok){out.innerHTML='❌ '+d.erro;return}let h='<h3>'+a+' — M'+t+'</h3><div class="muted">'+d.amostras+' pontos históricos avaliados.</div><table><tr><th>Estratégia</th><th>Sinais</th><th>WIN</th><th>RED</th><th>Taxa*</th><th>Score médio</th></tr>';for(const k in d.resultados){const x=d.resultados[k];h+=`<tr><td>${x.nome}</td><td>${x.sinais}</td><td class="win">${x.wins}</td><td class="red">${x.reds}</td><td>${x.taxa}%</td><td>${x.score_medio}</td></tr>`}h+='</table><p class="muted">* Taxa = WIN/(WIN+RED) no teste direcional de 1 candle. Não representa probabilidade nem garante desempenho futuro.</p>';out.innerHTML=h}catch(e){out.innerHTML='❌ Falha ao executar o teste.'}}
+</script></body></html>''', ativos=sorted(set(sum(ATIVOS_BASE.values(),[]))), tf=st.get('timeframe',5))
+
+@app.route('/api/backtest')
+def api_backtest():
+    user=session.get('user')
+    if not user: return jsonify({'ok':False,'erro':'Não autenticado.'}),401
+    ativo=request.args.get('ativo','').strip().upper()
+    try: tf=int(request.args.get('tf',get_user_state(user).get('timeframe',5)))
+    except Exception: tf=5
+    if ativo not in MAPA_TICKERS or tf not in (1,5,15):
+        return jsonify({'ok':False,'erro':'Ativo ou timeframe inválido.'}),400
+    data=get_data_v2(MAPA_TICKERS[ativo],tf,velas_minimas=120)
+    if not data: return jsonify({'ok':False,'erro':'Não foi possível obter dados reais suficientes para este ativo.'}),503
+    return jsonify(executar_backtest(data))
+
 @app.route('/status')
 def status():
     user = session.get('user')
@@ -1753,10 +1847,12 @@ def confirmar_alerta_agendado(user_email, alert_id):
             _est_fmt=est_fmt, _tf=tf, _msg=msg_sinal
         ):
             try:
-                registrar_sinal_bd(
+                sid = registrar_sinal_bd(
                     _user,
                     f"{_ativo} | {_sinal} | {_est_fmt} | M{_tf}"
                 )
+                if sid:
+                    get_user_state(_user)["ultimo_sinal_id"] = sid
             except Exception as e:
                 print(f"⚠️ Erro ao registrar sinal confirmado: {e}")
             try:
