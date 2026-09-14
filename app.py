@@ -967,7 +967,7 @@ for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X
 for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
-def get_data_v2(ticker, tf, velas_minimas=30):
+def get_data_v2(ticker, tf, velas_minimas=60):
     try:
         base_ticker = ticker
         headers = {
@@ -1032,302 +1032,308 @@ def calcular_ema(dados, periodo):
         ema[i] = (dados[i] - ema[i-1]) * multiplicador + ema[i-1]
     return ema
 
-# ================= MOTOR AVANÇADO: PRICE ACTION + ESTRUTURA =================
-# Este módulo não promete probabilidade estatística. O valor produzido é um
-# SCORE DE CONFLUÊNCIA (0-100), construído a partir de sinais independentes.
+# ================= MOTOR V2: PRICE ACTION + ESTRUTURA + CONTEXTO =================
+# O motor V2 usa SCORE DE CONFLUÊNCIA (0-100), e não "probabilidade".
+# Nenhum score representa taxa de acerto estatística. Isso só pode ser medido
+# posteriormente com backtest/out-of-sample em dados reais.
 
 def _safe_div(a, b, default=0.0):
-    return float(a / b) if b not in (0, None) else default
+    try:
+        b = float(b)
+        return float(a) / b if abs(b) > 1e-12 else default
+    except Exception:
+        return default
 
 def _rolling_mean(arr, n):
     arr = np.asarray(arr, dtype=float)
-    return float(np.mean(arr[-n:])) if len(arr) >= n else float(np.mean(arr))
+    if len(arr) == 0:
+        return 0.0
+    return float(np.mean(arr[-n:]))
+
+def _atr_series(data, period=14):
+    h, l, c = map(lambda x: np.asarray(x, dtype=float), (data['high'], data['low'], data['close']))
+    if len(c) < 2:
+        return np.zeros(len(c))
+    tr = np.empty(len(c)); tr[0] = h[0] - l[0]
+    tr[1:] = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
+    out = np.zeros(len(c)); out[0] = tr[0]
+    alpha = 1.0 / max(1, period)
+    for j in range(1, len(c)):
+        out[j] = alpha * tr[j] + (1-alpha) * out[j-1]
+    return out
 
 def _atr(data, period=14):
-    h, l, c = data["high"], data["low"], data["close"]
-    if len(c) < 2:
-        return 0.0
-    prev = c[:-1]
-    tr = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - prev), np.abs(l[1:] - prev)))
-    if len(tr) < period:
-        return float(np.mean(tr))
-    return float(np.mean(tr[-period:]))
+    a = _atr_series(data, period)
+    return float(a[-1]) if len(a) else 0.0
 
 def _ema_last(c, period):
-    return float(calcular_ema(c, period)[-1])
+    return float(calcular_ema(np.asarray(c, dtype=float), period)[-1])
 
-def _pivot_points(h, l, lookback=3):
+def _rsi_series(c, period=14):
+    c = np.asarray(c, dtype=float)
+    if len(c) < period + 1:
+        return np.full(len(c), 50.0)
+    d = np.diff(c)
+    gain = np.maximum(d, 0.0); loss = np.maximum(-d, 0.0)
+    avg_g = np.mean(gain[:period]); avg_l = np.mean(loss[:period])
+    r = np.full(len(c), 50.0); r[period] = 100.0 if avg_l == 0 else 100 - 100/(1+avg_g/avg_l)
+    for j in range(period+1, len(c)):
+        avg_g = (avg_g*(period-1) + gain[j-1]) / period
+        avg_l = (avg_l*(period-1) + loss[j-1]) / period
+        r[j] = 100.0 if avg_l == 0 else 100 - 100/(1+avg_g/avg_l)
+    return r
+
+def _macd(c):
+    c = np.asarray(c, dtype=float)
+    e12, e26 = calcular_ema(c, 12), calcular_ema(c, 26)
+    line = e12 - e26
+    sig = calcular_ema(line, 9)
+    return line, sig, line - sig
+
+def _pivot_points(h, l, lookback=2):
+    h, l = np.asarray(h), np.asarray(l)
     highs, lows = [], []
-    for k in range(lookback, len(h) - lookback):
-        if h[k] == max(h[k-lookback:k+lookback+1]):
-            highs.append((k, float(h[k])))
-        if l[k] == min(l[k-lookback:k+lookback+1]):
-            lows.append((k, float(l[k])))
+    for k in range(lookback, len(h)-lookback):
+        if h[k] == np.max(h[k-lookback:k+lookback+1]): highs.append((k, float(h[k])))
+        if l[k] == np.min(l[k-lookback:k+lookback+1]): lows.append((k, float(l[k])))
     return highs, lows
 
 def _market_structure(data):
-    h, l = data["high"], data["low"]
+    h, l, c = data['high'], data['low'], data['close']
     ph, pl = _pivot_points(h, l, 2)
-    if len(ph) < 2 or len(pl) < 2:
-        return "NEUTRA", 0
-    hh = ph[-1][1] > ph[-2][1]
-    hl = pl[-1][1] > pl[-2][1]
-    lh = ph[-1][1] < ph[-2][1]
-    ll = pl[-1][1] < pl[-2][1]
-    if hh and hl:
-        return "ALTA", 18
-    if lh and ll:
-        return "BAIXA", 18
-    return "NEUTRA", 0
+    if len(ph) < 2 or len(pl) < 2: return 'NEUTRA', 0, {}
+    last_h, prev_h = ph[-1][1], ph[-2][1]
+    last_l, prev_l = pl[-1][1], pl[-2][1]
+    hh, hl = last_h > prev_h, last_l > prev_l
+    lh, ll = last_h < prev_h, last_l < prev_l
+    ema20, ema50 = _ema_last(c, 20), _ema_last(c, min(50, len(c)))
+    if hh and hl: return 'ALTA', 18, {'hh':True,'hl':True,'lh':False,'ll':False}
+    if lh and ll: return 'BAIXA', 18, {'hh':False,'hl':False,'lh':True,'ll':True}
+    # Estrutura mista + alinhamento das médias = tendência mais fraca.
+    if ema20 > ema50 and c[-1] > ema20: return 'ALTA_FRACA', 8, {'hh':hh,'hl':hl,'lh':lh,'ll':ll}
+    if ema20 < ema50 and c[-1] < ema20: return 'BAIXA_FRACA', 8, {'hh':hh,'hl':hl,'lh':lh,'ll':ll}
+    return 'NEUTRA', 0, {'hh':hh,'hl':hl,'lh':lh,'ll':ll}
 
-def _support_resistance(data, tolerance_atr=0.35):
-    c, h, l = data["close"], data["high"], data["low"]
+def _support_resistance(data, tolerance_atr=0.45):
+    h, l, c = map(lambda x: np.asarray(x, dtype=float), (data['high'], data['low'], data['close']))
     atr = _atr(data)
-    if atr <= 0:
-        return None, None, 0.0
-    recent_h = list(h[-30:])
-    recent_l = list(l[-30:])
-    resistance = max(recent_h[:-1]) if len(recent_h) > 1 else max(recent_h)
-    support = min(recent_l[:-1]) if len(recent_l) > 1 else min(recent_l)
+    if atr <= 0 or len(c) < 20: return None, None, atr, {}
+    ph, pl = _pivot_points(h, l, 2)
     price = float(c[-1])
-    near_sup = abs(price - support) <= atr * tolerance_atr
-    near_res = abs(price - resistance) <= atr * tolerance_atr
-    return support if near_sup else None, resistance if near_res else None, atr
+    highs = [x[1] for x in ph[-8:]]
+    lows = [x[1] for x in pl[-8:]]
+    # Agrupa níveis próximos e prefere zonas testadas várias vezes.
+    def cluster(vals):
+        if not vals: return []
+        groups=[]
+        for v in sorted(vals):
+            if not groups or abs(v-np.mean(groups[-1])) > atr*0.45: groups.append([v])
+            else: groups[-1].append(v)
+        return [(float(np.mean(g)), len(g)) for g in groups]
+    res = [(v,n) for v,n in cluster(highs) if v > price]
+    sup = [(v,n) for v,n in cluster(lows) if v < price]
+    resistance = min(res, key=lambda x:x[0]-price) if res else None
+    support = max(sup, key=lambda x:price-x[0]) if sup else None
+    near_s = support and abs(price-support[0]) <= atr*tolerance_atr
+    near_r = resistance and abs(resistance[0]-price) <= atr*tolerance_atr
+    details={'support_tests':support[1] if near_s else 0,'resistance_tests':resistance[1] if near_r else 0}
+    return support[0] if near_s else None, resistance[0] if near_r else None, atr, details
 
-def _candle_features(data):
-    o, h, l, c = data["open"][-1], data["high"][-1], data["low"][-1], data["close"][-1]
-    rng = max(float(h-l), 1e-12)
-    body = abs(float(c-o))
-    upper = float(h-max(o,c))
-    lower = float(min(o,c)-l)
-    return {
-        "bull": c > o, "bear": c < o, "range": rng, "body": body,
-        "body_ratio": body/rng, "upper_ratio": upper/rng, "lower_ratio": lower/rng,
-        "close_pos": (c-l)/rng
-    }
+def _candle_features(data, idx=-1):
+    o,h,l,c = [float(data[k][idx]) for k in ('open','high','low','close')]
+    rng=max(h-l,1e-12); body=abs(c-o); upper=h-max(o,c); lower=min(o,c)-l
+    return {'bull':c>o,'bear':c<o,'range':rng,'body':body,'body_ratio':body/rng,
+            'upper_ratio':upper/rng,'lower_ratio':lower/rng,'close_pos':(c-l)/rng}
 
 def _price_action(data):
-    o, h, l, c = data["open"], data["high"], data["low"], data["close"]
-    if len(c) < 4:
-        return None, 0, []
-    f = _candle_features(data)
-    prev_o, prev_c = o[-2], c[-2]
-    reasons = []
-    bull = bear = 0
-    # Rejeição / pin bar
-    if f["lower_ratio"] >= 0.45 and f["upper_ratio"] <= 0.20:
-        bull += 12; reasons.append("rejeição inferior")
-    if f["upper_ratio"] >= 0.45 and f["lower_ratio"] <= 0.20:
-        bear += 12; reasons.append("rejeição superior")
-    # Engolfo
-    if c[-1] > o[-1] and c[-2] < o[-2] and c[-1] >= o[-2] and o[-1] <= c[-2]:
-        bull += 14; reasons.append("engolfo comprador")
-    if c[-1] < o[-1] and c[-2] > o[-2] and c[-1] <= o[-2] and o[-1] >= c[-2]:
-        bear += 14; reasons.append("engolfo vendedor")
-    # Impulso relativo à média de range
-    ranges = h[-11:-1] - l[-11:-1]
-    avg_range = float(np.mean(ranges)) if len(ranges) else f["range"]
-    if f["range"] >= avg_range * 1.5 and f["body_ratio"] >= 0.65:
-        if f["bull"]: bull += 8; reasons.append("candle de impulso comprador")
-        elif f["bear"]: bear += 8; reasons.append("candle de impulso vendedor")
-    if bull > bear and bull >= 12: return "CALL", min(22, bull), reasons
-    if bear > bull and bear >= 12: return "PUT", min(22, bear), reasons
-    return None, 0, reasons
+    if len(data['close']) < 5: return None,0,[]
+    o,h,l,c=data['open'],data['high'],data['low'],data['close']; f=_candle_features(data); reasons=[]
+    bull=bear=0
+    # Rejeição contextualizada: pavio grande + fechamento favorável.
+    if f['lower_ratio'] >= .40 and f['close_pos'] >= .62: bull += 14; reasons.append('rejeição inferior')
+    if f['upper_ratio'] >= .40 and f['close_pos'] <= .38: bear += 14; reasons.append('rejeição superior')
+    # Engolfo real, exigindo corpo relevante.
+    pf=_candle_features(data,-2)
+    if f['bull'] and pf['bear'] and c[-1] >= o[-2] and o[-1] <= c[-2] and f['body_ratio'] >= .45:
+        bull += 15; reasons.append('engolfo comprador')
+    if f['bear'] and pf['bull'] and c[-1] <= o[-2] and o[-1] >= c[-2] and f['body_ratio'] >= .45:
+        bear += 15; reasons.append('engolfo vendedor')
+    # Impulso relativo ao histórico recente.
+    avg=_rolling_mean(h[-11:-1]-l[-11:-1],10)
+    if avg>0 and f['range'] >= 1.5*avg and f['body_ratio'] >= .65:
+        if f['bull']: bull += 8; reasons.append('candle de impulso comprador')
+        elif f['bear']: bear += 8; reasons.append('candle de impulso vendedor')
+    # Inside/outside bar como contexto, não sinal isolado.
+    if h[-1] < h[-2] and l[-1] > l[-2]: reasons.append('inside bar')
+    if h[-1] > h[-2] and l[-1] < l[-2]: reasons.append('outside bar')
+    if bull>bear and bull>=12: return 'CALL',min(25,bull),reasons
+    if bear>bull and bear>=12: return 'PUT',min(25,bear),reasons
+    return None,0,reasons
 
 def _breakout_state(data):
-    h, l, c, o = data["high"], data["low"], data["close"], data["open"]
-    atr = _atr(data)
-    if atr <= 0 or len(c) < 12:
-        return None, 0, []
-    resistance = float(np.max(h[-11:-1])); support = float(np.min(l[-11:-1]))
-    rng = max(h[-1]-l[-1], 1e-12)
-    body = abs(c[-1]-o[-1])
-    reasons=[]
-    # Rompimento válido: fecha além do nível e o corpo sustenta o movimento.
-    if c[-1] > resistance + 0.10*atr and body/rng >= 0.55:
-        reasons.append("rompimento de resistência confirmado")
-        return "CALL", 18, reasons
-    if c[-1] < support - 0.10*atr and body/rng >= 0.55:
-        reasons.append("rompimento de suporte confirmado")
-        return "PUT", 18, reasons
-    # Falso rompimento: sombra atravessa nível, mas fechamento retorna para dentro.
-    if h[-1] > resistance and c[-1] < resistance:
-        reasons.append("falso rompimento de resistência")
-        return "PUT", 20, reasons
-    if l[-1] < support and c[-1] > support:
-        reasons.append("falso rompimento de suporte")
-        return "CALL", 20, reasons
-    return None, 0, reasons
+    h,l,o,c=data['high'],data['low'],data['open'],data['close']; atr=_atr(data)
+    if len(c)<25 or atr<=0: return None,0,[],{'kind':None}
+    # Usa uma janela que exclui a vela atual para evitar contaminar o nível.
+    resistance=float(np.max(h[-21:-1])); support=float(np.min(l[-21:-1])); f=_candle_features(data); reasons=[]
+    body_ratio=f['body_ratio']; close=c[-1]
+    # Rompimento confirmado: corpo + fechamento além do nível.
+    if close > resistance + .12*atr and body_ratio >= .55:
+        reasons.append('rompimento de resistência confirmado');
+        # Reteste recente da região aumenta a qualidade.
+        retest=bool(np.min(l[-4:-1]) <= resistance + .25*atr)
+        if retest: reasons.append('reteste de resistência')
+        return 'CALL',24 if retest else 18,reasons,{'kind':'BREAKOUT','level':resistance,'retest':retest}
+    if close < support - .12*atr and body_ratio >= .55:
+        reasons.append('rompimento de suporte confirmado')
+        retest=bool(np.max(h[-4:-1]) >= support - .25*atr)
+        if retest: reasons.append('reteste de suporte')
+        return 'PUT',24 if retest else 18,reasons,{'kind':'BREAKOUT','level':support,'retest':retest}
+    # Falso rompimento / sweep: atravessa e fecha de volta para dentro.
+    if h[-1] > resistance and close < resistance:
+        reasons.append('falso rompimento de resistência / sweep'); return 'PUT',22,reasons,{'kind':'FAKEOUT','level':resistance}
+    if l[-1] < support and close > support:
+        reasons.append('falso rompimento de suporte / sweep'); return 'CALL',22,reasons,{'kind':'FAKEOUT','level':support}
+    return None,0,reasons,{'kind':None}
 
 def _exhaustion_state(data):
-    h, l, c, o = data["high"], data["low"], data["close"], data["open"]
-    if len(c) < 8:
-        return None, 0, []
-    f = _candle_features(data); atr = _atr(data)
-    if atr <= 0: return None, 0, []
-    # Sequência direcional + expansão + rejeição no extremo.
-    seq_up = all(c[-j] > o[-j] for j in range(1, 5))
-    seq_dn = all(c[-j] < o[-j] for j in range(1, 5))
-    avg_range = float(np.mean((h[-9:-1]-l[-9:-1])))
-    reasons=[]
-    if seq_up and f["range"] >= max(1.6*atr, 1.4*avg_range) and f["upper_ratio"] >= 0.30:
-        reasons.append("exaustão após sequência compradora")
-        return "PUT", 16, reasons
-    if seq_dn and f["range"] >= max(1.6*atr, 1.4*avg_range) and f["lower_ratio"] >= 0.30:
-        reasons.append("exaustão após sequência vendedora")
-        return "CALL", 16, reasons
-    return None, 0, reasons
+    h,l,o,c=data['high'],data['low'],data['open'],data['close']; atr=_atr(data)
+    if len(c)<12 or atr<=0: return None,0,[]
+    f=_candle_features(data); avg=_rolling_mean(h[-11:-1]-l[-11:-1],10); reasons=[]
+    up=sum(1 for j in range(1,6) if c[-j]>o[-j]); dn=sum(1 for j in range(1,6) if c[-j]<o[-j])
+    # Exaustão exige sequência + expansão + perda de fechamento no extremo.
+    if up>=4 and f['range']>=max(1.35*avg,1.45*atr) and f['upper_ratio']>=.25 and f['close_pos']<.72:
+        reasons.append('exaustão compradora'); return 'PUT',17,reasons
+    if dn>=4 and f['range']>=max(1.35*avg,1.45*atr) and f['lower_ratio']>=.25 and f['close_pos']>.28:
+        reasons.append('exaustão vendedora'); return 'CALL',17,reasons
+    return None,0,reasons
+
+def _momentum_context(data):
+    c=np.asarray(data['close'],dtype=float); rsi=float(_rsi_series(c)[-1]); macd,sig,hist=_macd(c)
+    e9,e20,e50=_ema_last(c,9),_ema_last(c,20),_ema_last(c,min(50,len(c)))
+    out={'rsi':rsi,'macd_hist':float(hist[-1]),'ema9':e9,'ema20':e20,'ema50':e50}
+    call=put=0; reasons=[]
+    if e9>e20>e50 and c[-1]>e9: call+=12; reasons.append('alinhamento de tendência pelas EMAs')
+    elif e9<e20<e50 and c[-1]<e9: put+=12; reasons.append('alinhamento de tendência pelas EMAs')
+    if hist[-1]>0 and hist[-1]>=hist[-2]: call+=7; reasons.append('MACD com momentum comprador')
+    elif hist[-1]<0 and hist[-1]<=hist[-2]: put+=7; reasons.append('MACD com momentum vendedor')
+    if 42<=rsi<=68 and hist[-1]>0: call+=5; reasons.append('RSI em zona saudável para alta')
+    if 32<=rsi<=58 and hist[-1]<0: put+=5; reasons.append('RSI em zona saudável para baixa')
+    # Extremos de RSI não geram entrada sozinhos; servem como alerta de extensão.
+    if rsi>=78: out['overbought']=True; reasons.append('RSI muito esticado')
+    elif rsi<=22: out['oversold']=True; reasons.append('RSI muito esticado')
+    return ('CALL',call,reasons,out) if call>put else ('PUT',put,reasons,out) if put>call else (None,0,reasons,out)
 
 def _advanced_confluence(data):
-    c = data["close"]
-    if len(c) < 30:
-        return None, 0, {}
-    trend, trend_pts = _market_structure(data)
-    pa_sig, pa_pts, pa_reasons = _price_action(data)
-    bo_sig, bo_pts, bo_reasons = _breakout_state(data)
-    ex_sig, ex_pts, ex_reasons = _exhaustion_state(data)
-    support, resistance, atr = _support_resistance(data)
-    reasons = pa_reasons + bo_reasons + ex_reasons
-    scores = {"CALL": 0, "PUT": 0}
-    if trend == "ALTA": scores["CALL"] += trend_pts; reasons.append("estrutura HH/HL")
-    elif trend == "BAIXA": scores["PUT"] += trend_pts; reasons.append("estrutura LH/LL")
-    if pa_sig: scores[pa_sig] += pa_pts
-    if bo_sig: scores[bo_sig] += bo_pts
-    if ex_sig: scores[ex_sig] += ex_pts
-    if support is not None:
-        scores["CALL"] += 15; reasons.append("preço em zona de suporte")
-    if resistance is not None:
-        scores["PUT"] += 15; reasons.append("preço em zona de resistência")
-    # EMA e momentum como filtros, sem dominar o score.
-    ema9, ema20 = _ema_last(c, 9), _ema_last(c, 20)
-    if ema9 > ema20 and c[-1] > ema9: scores["CALL"] += 10; reasons.append("momentum acima das médias")
-    elif ema9 < ema20 and c[-1] < ema9: scores["PUT"] += 10; reasons.append("momentum abaixo das médias")
-    # Evita comprar/vender em expansão extrema contra o contexto.
-    atr_avg = _rolling_mean(np.array([_atr({"high":data["high"][:k],"low":data["low"][:k],"close":data["close"][:k]}) for k in range(20,len(c)+1)]), 10) if len(c)>=30 else atr
-    if atr_avg > 0 and atr > atr_avg * 2.2:
-        reasons.append("volatilidade extrema")
-        scores["CALL"] = max(0, scores["CALL"] - 10)
-        scores["PUT"] = max(0, scores["PUT"] - 10)
-    signal = "CALL" if scores["CALL"] > scores["PUT"] else "PUT" if scores["PUT"] > scores["CALL"] else None
-    score = scores[signal] if signal else 0
-    # Exige pelo menos 2 evidências independentes e score mínimo.
-    evidence = sum(1 for x in (pa_sig, bo_sig, ex_sig) if x == signal)
-    context = trend == ("ALTA" if signal == "CALL" else "BAIXA")
-    evidence += 1 if context else 0
-    evidence += 1 if (support is not None and signal == "CALL") or (resistance is not None and signal == "PUT") else 0
-    if evidence < 2 or score < 55:
-        signal, score = None, 0
-    details = {
-        "trend": trend, "support": support, "resistance": resistance, "atr": atr,
-        "score_call": scores["CALL"], "score_put": scores["PUT"],
-        "evidence": evidence, "reasons": reasons[:6]
-    }
-    return signal, min(100, int(score)), details
+    if len(data['close']) < 40: return None,0,{'reasons':[],'evidence':0}
+    trend,tpts,structure=_market_structure(data)
+    pa_sig,pa_pts,pa_reasons=_price_action(data)
+    bo_sig,bo_pts,bo_reasons,bo_info=_breakout_state(data)
+    ex_sig,ex_pts,ex_reasons=_exhaustion_state(data)
+    mom_sig,mom_pts,mom_reasons,mom=_momentum_context(data)
+    support,resistance,atr,sr=_support_resistance(data)
+    scores={'CALL':0,'PUT':0}; evidence={'CALL':set(),'PUT':set()}; reasons=[]
+    def add(sig,pts,tag):
+        if sig in scores and pts:
+            scores[sig]+=pts; evidence[sig].add(tag)
+    if trend.startswith('ALTA'): add('CALL',tpts,'estrutura')
+    if trend.startswith('BAIXA'): add('PUT',tpts,'estrutura')
+    add(pa_sig,pa_pts,'price_action'); add(bo_sig,bo_pts,'rompimento'); add(ex_sig,ex_pts,'exaustao'); add(mom_sig,mom_pts,'momentum')
+    if support is not None: add('CALL',14,'suporte'); reasons.append('preço em zona de suporte')
+    if resistance is not None: add('PUT',14,'resistencia'); reasons.append('preço em zona de resistência')
+    reasons += pa_reasons + bo_reasons + ex_reasons + mom_reasons
+    # Contradições importantes reduzem score.
+    if ex_sig=='PUT': scores['CALL']-=12; evidence['CALL'].discard('price_action') if pa_sig=='CALL' and 'price_action' in evidence['CALL'] else None
+    if ex_sig=='CALL': scores['PUT']-=12
+    if bo_info.get('kind')=='FAKEOUT':
+        opposite='CALL' if bo_sig=='PUT' else 'PUT'
+        scores[opposite]-=10
+    # Volatilidade: evita extremos; não cria sinal.
+    atr_series=_atr_series(data); atr_now=float(atr_series[-1]); atr_base=_rolling_mean(atr_series[-25:-1],20)
+    volatility='NORMAL'
+    if atr_base>0:
+        if atr_now>1.8*atr_base: volatility='EXTREMA'
+        elif atr_now<0.55*atr_base: volatility='BAIXA'
+    if volatility=='EXTREMA':
+        scores['CALL']-=10; scores['PUT']-=10; reasons.append('volatilidade extrema: filtro de risco')
+    elif volatility=='BAIXA':
+        scores['CALL']-=4; scores['PUT']-=4; reasons.append('volatilidade muito baixa')
+    # Resistência/suporte muito próximos podem invalidar continuação.
+    price=float(data['close'][-1])
+    if resistance and bo_sig!='CALL' and resistance-price < atr*0.55:
+        scores['CALL']-=10; reasons.append('resistência próxima')
+    if support and bo_sig!='PUT' and price-support < atr*0.55:
+        scores['PUT']-=10; reasons.append('suporte próximo')
+    signal=max(scores,key=scores.get); score=max(0,min(100,int(scores[signal])))
+    # Exige 2 fontes independentes e score mínimo. Para breakout/fakeout,
+    # o próprio evento conta como uma fonte, mas precisa de contexto adicional.
+    ev=len(evidence[signal])
+    if bo_info.get('kind') in ('BREAKOUT','FAKEOUT') and ev>=2: pass
+    valid=(score>=62 and ev>=2)
+    # Impede reversão contra estrutura forte sem Price Action ou fakeout.
+    if valid and signal=='CALL' and trend=='BAIXA' and not (pa_sig=='CALL' or bo_info.get('kind')=='FAKEOUT' or ex_sig=='CALL'):
+        valid=False; reasons.append('contra estrutura de baixa sem confirmação de reversão')
+    if valid and signal=='PUT' and trend=='ALTA' and not (pa_sig=='PUT' or bo_info.get('kind')=='FAKEOUT' or ex_sig=='PUT'):
+        valid=False; reasons.append('contra estrutura de alta sem confirmação de reversão')
+    if not valid: signal=None; score=0
+    details={'trend':trend,'structure':structure,'support':support,'resistance':resistance,'atr':atr,
+             'volatility':volatility,'rsi':mom['rsi'],'macd_hist':mom['macd_hist'],
+             'score_call':max(0,int(scores['CALL'])),'score_put':max(0,int(scores['PUT'])),
+             'evidence':ev,'reasons':list(dict.fromkeys(reasons))[:10], 'breakout':bo_info}
+    return signal,score,details
 
-# ================= MOTOR DE ESTRATÉGIAS COM SCORE DE PROBABILIDADE =================
+def _strategy_score(data, estrategia):
+    c,o,h,l=data['close'],data['open'],data['high'],data['low']
+    if len(c)<40: return None,0
+    trend,_,_= _market_structure(data)
+    pa_sig,pa_pts,_=_price_action(data)
+    bo_sig,bo_pts,_,bo_info=_breakout_state(data)
+    ex_sig,ex_pts,_=_exhaustion_state(data)
+    mom_sig,mom_pts,_,mom=_momentum_context(data)
+    signal=None; raw=0
+    if estrategia=='LOGICA_DO_PRECO':
+        # Preço 2.0: prioriza rejeição/engolfo/estrutura e evita candle isolado.
+        candidates=[(pa_sig,pa_pts),(bo_sig,bo_pts),(ex_sig,ex_pts)]
+        best=max(candidates,key=lambda x:x[1])
+        if best[0]: signal,raw=best
+        if signal=='CALL' and trend.startswith('ALTA'): raw+=15
+        if signal=='PUT' and trend.startswith('BAIXA'): raw+=15
+        if signal=='CALL' and trend=='BAIXA' and bo_info.get('kind')!='FAKEOUT': raw-=12
+        if signal=='PUT' and trend=='ALTA' and bo_info.get('kind')!='FAKEOUT': raw-=12
+    elif estrategia=='RSI_MACD_MA':
+        # Mantém a estratégia, mas exige alinhamento de momentum, evitando RSI extremo isolado.
+        if mom_sig: signal=mom_sig; raw=mom_pts+25
+        rsi=mom['rsi']
+        if signal=='CALL' and 35<=rsi<=65: raw+=8
+        if signal=='PUT' and 35<=rsi<=65: raw+=8
+    elif estrategia=='MHI1':
+        # MHI é tratado como padrão de curto prazo, com filtro estrutural e candle neutro proibido.
+        colors=[]
+        for j in range(-3,0): colors.append('G' if c[j]>o[j] else 'R' if c[j]<o[j] else 'D')
+        if 'D' not in colors:
+            if colors.count('G')>=2: signal='PUT'; raw=58
+            elif colors.count('R')>=2: signal='CALL'; raw=58
+            if signal=='CALL' and trend.startswith('ALTA'): raw+=12
+            if signal=='PUT' and trend.startswith('BAIXA'): raw+=12
+            # Sequência 3 contra a tendência é melhor tratada como possível correção, não reversão automática.
+            if len(set(colors))==1: raw-=8
+    elif estrategia in ('REVERSAO','RETRACAO'):
+        mid=np.mean(c[-20:]); std=np.std(c[-20:]);
+        if std>0:
+            upper=mid+2*std; lower=mid-2*std
+            if c[-1]<=lower and pa_sig=='CALL': signal='CALL'; raw=68
+            elif c[-1]>=upper and pa_sig=='PUT': signal='PUT'; raw=68
+            elif c[-1]<=lower and ex_sig=='CALL': signal='CALL'; raw=62
+            elif c[-1]>=upper and ex_sig=='PUT': signal='PUT'; raw=62
+            if signal=='CALL' and trend=='BAIXA' and bo_info.get('kind')!='FAKEOUT': raw-=10
+            if signal=='PUT' and trend=='ALTA' and bo_info.get('kind')!='FAKEOUT': raw-=10
+    elif estrategia=='CONFLUENCIA_PRICE_ACTION':
+        return _advanced_confluence(data)[:2]
+    if not signal or raw<60: return None,0
+    # Compatibilidade com o pipeline existente: score, não probabilidade.
+    return signal,min(98,int(raw))
+
 def analisar_estrategia(data, estrategia, i=-1):
-    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
-    
-    if len(c) < 30: 
-        return None, 0
-        
-    sinal = None
-    probabilidade = 0
-
-    if estrategia == "CONFLUENCIA_PRICE_ACTION":
-        sinal, score, _ = _advanced_confluence(data)
-        return sinal, score
-
-    if estrategia == "LOGICA_DO_PRECO":
-        tamanho = abs(c[i] - o[i])
-        amplitude = h[i] - l[i]
-        if amplitude > 0 and tamanho > 0:
-            cor = "G" if c[i] > o[i] else "R"
-            p_sup = h[i] - max(o[i], c[i])
-            p_inf = min(o[i], c[i]) - l[i]
-            
-            # Rejeição de Fundo / Suporte
-            if cor == "G" and p_inf >= (amplitude * 0.45) and p_sup <= (amplitude * 0.20):
-                sinal = "CALL"
-                probabilidade = int(82 + (p_inf / amplitude) * 15)
-            # Rejeição de Topo / Resistência
-            elif cor == "R" and p_sup >= (amplitude * 0.45) and p_inf <= (amplitude * 0.20):
-                sinal = "PUT"
-                probabilidade = int(82 + (p_sup / amplitude) * 15)
-            # Exaustão Compradora
-            elif cor == "G" and p_sup >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
-                sinal = "PUT"
-                probabilidade = int(80 + (p_sup / amplitude) * 15)
-            # Exaustão Vendedora
-            elif cor == "R" and p_inf >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
-                sinal = "CALL"
-                probabilidade = int(80 + (p_inf / amplitude) * 15)
-
-    elif estrategia == "RSI_MACD_MA":
-        if len(c) >= 26:
-            diff = np.diff(c[-15:])
-            gains = diff[diff > 0]
-            losses = np.abs(diff[diff < 0])
-            avg_gain = np.mean(gains) if len(gains) > 0 else 1e-7
-            avg_loss = np.mean(losses) if len(losses) > 0 else 1e-7
-            rs = avg_gain / avg_loss
-            rsi = 100 - (100 / (1 + rs))
-
-            ema12 = calcular_ema(c, 12)
-            ema26 = calcular_ema(c, 26)
-            macd_line = ema12 - ema26
-            signal_line = calcular_ema(macd_line, 9)
-
-            if rsi <= 35 and macd_line[i] > signal_line[i]:
-                sinal = "CALL"
-                probabilidade = int(83 + (35 - rsi) * 0.5)
-            elif rsi >= 65 and macd_line[i] < signal_line[i]:
-                sinal = "PUT"
-                probabilidade = int(83 + (rsi - 65) * 0.5)
-
-    elif estrategia == "MHI1":
-        cores = []
-        for j in range(i-2, i+1):
-            if c[j] > o[j]: cores.append("G")
-            elif c[j] < o[j]: cores.append("R")
-            else: cores.append("D") 
-            
-        if "D" not in cores:
-            qtd_g = cores.count("G")
-            qtd_r = cores.count("R")
-            
-            ema20 = np.mean(c[-20:])
-            if qtd_g == 2 and qtd_r == 1 and c[i] <= ema20:
-                sinal = "PUT"
-                probabilidade = 84
-            elif qtd_r == 2 and qtd_g == 1 and c[i] >= ema20:
-                sinal = "CALL"
-                probabilidade = 84
-            elif qtd_g == 3:
-                sinal = "PUT"
-                probabilidade = 88
-            elif qtd_r == 3:
-                sinal = "CALL"
-                probabilidade = 88
-
-    elif estrategia in ["REVERSAO", "RETRACAO"]:
-        std = np.std(c[-20:])
-        ma = np.mean(c[-20:])
-        banda_superior = ma + (2.0 * std)
-        banda_inferior = ma - (2.0 * std)
-
-        if c[i] <= banda_inferior and c[i] < o[i]: 
-            sinal = "CALL"
-            dist = (banda_inferior - c[i]) / (std if std > 0 else 1)
-            probabilidade = int(81 + min(15, dist * 10))
-        elif c[i] >= banda_superior and c[i] > o[i]: 
-            sinal = "PUT"
-            dist = (c[i] - banda_superior) / (std if std > 0 else 1)
-            probabilidade = int(81 + min(15, dist * 10))
-
-    # Para estratégias legadas, mantemos o intervalo original apenas para compatibilidade.
-    probabilidade = min(98, max(75, probabilidade)) if sinal else 0
-    return sinal, probabilidade
+    return _strategy_score(data, estrategia)
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
 @app.route('/sw.js')
@@ -1569,7 +1575,7 @@ def command(cmd):
         
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
-            f"🟢 <b>Status:</b> Análise de 30 velas ativada\n"
+            f"🟢 <b>Status:</b> Análise de 60 velas ativada\n"
             f"👤 <b>Usuário:</b> {user}\n"
             f"📊 <b>Timeframe:</b> M{st['timeframe']}\n"
             f"🌐 <b>Mercado:</b> {st['tipo_mercado']}\n"
@@ -1582,7 +1588,7 @@ def command(cmd):
     elif cmd == "pause_bot":
         st["bot_pausado"] = not st["bot_pausado"]
         status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if st["bot_pausado"] else f"🔍 ANALISANDO: {st['ativo_atual']} (M{st['timeframe']})"
-        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO 30 VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
+        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO 60 VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
         msg_pause = "⏸ <b>SISTEMA PAUSADO</b>" if st["bot_pausado"] else "▶️ <b>SISTEMA RETOMADO!</b>"
         enviar_telegram(msg_pause, user_solicitante=user)
         return jsonify({"ok": True})
@@ -1840,13 +1846,13 @@ def bot_loop():
                         ticker = MAPA_TICKERS.get(ativo, ativo)
 
                         if not alerta and not st.get("aguardando_confirmacao"):
-                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
+                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 60 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
 
                         cache_key = f"{ticker}_{tf}"
                         if cache_key in ohlc_cache:
                             data = ohlc_cache[cache_key]["data"]
                         else:
-                            data = get_data_v2(ticker, tf, velas_minimas=30)
+                            data = get_data_v2(ticker, tf, velas_minimas=60)
                             if data:
                                 ohlc_cache[cache_key] = {"data": data, "time": time.time()}
 
