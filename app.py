@@ -3,6 +3,7 @@ import time
 import math
 import pytz
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import sys
 import random
@@ -59,7 +60,15 @@ def get_user_state(email):
             "timer_confirmacao": None,  # Timer independente para não depender da varredura
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
-            "ultimo_sinal_id": None
+            "ultimo_sinal_id": None,
+            "diagnostico": {
+                "ciclo_inicio": time.time(), "ativos_analisados": 0, "dados_ok": 0,
+                "dados_falha": 0, "candidatos": 0, "rejeitados": 0,
+                "ultima_oportunidade": None, "ultimo_motivo": "Aguardando análise...",
+                "motivo_contagem": {}, "ultimo_score": 0, "ultimo_direcao": None,
+                "ultima_atualizacao": time.time(), "estrategias_concordantes": 0,
+                "estrategias_analisadas": 0, "ultimo_ativo_analisado": None
+            }
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -345,6 +354,15 @@ HTML_INDEX = """
         .broker-iframe-inline { width: 100%; height: 100%; border: none; background: #0b1120; border-radius: 10px; }
         .btn-close-broker { background: #1e293b; border: 1px solid #334155; color: #00f2fe; padding: 6px 12px; font-size: 11px; font-weight: 700; border-radius: 6px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: center; }
 
+        .diagnostic-box { background: rgba(15,23,42,.78); border: 1px solid rgba(0,242,254,.18); border-radius: 12px; padding: 12px; margin-bottom: 12px; font-size: 12px; }
+        .diag-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:8px 0; }
+        .diag-item { background:rgba(255,255,255,.03); border-radius:8px; padding:8px; text-align:center; }
+        .diag-label { color:#94a3b8; font-size:10px; text-transform:uppercase; }
+        .diag-value { color:#e2e8f0; font-weight:800; font-size:14px; margin-top:2px; }
+        .diag-reason { color:#f59e0b; margin-top:8px; line-height:1.45; }
+        .diag-bar { height:6px; background:#1e293b; border-radius:8px; overflow:hidden; margin-top:7px; }
+        .diag-fill { height:100%; background:#00f2fe; transition:width .3s; }
+
         .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 100px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
         
         .system-console { font-family: 'JetBrains Mono', monospace; color: #38ef7d; font-size: 13px; text-shadow: 0 0 5px rgba(56, 239, 125, 0.5); width: 100%; }
@@ -435,6 +453,19 @@ HTML_INDEX = """
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
             MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
             ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
+        </div>
+
+        <div class="diagnostic-box" id="diagnostic-box">
+            <b style="color:#00f2fe;">🔎 DIAGNÓSTICO DA VARREDURA</b>
+            <div class="diag-grid">
+                <div class="diag-item"><div class="diag-label">Ativos</div><div class="diag-value" id="diag-assets">0</div></div>
+                <div class="diag-item"><div class="diag-label">Oportunidades</div><div class="diag-value" id="diag-candidates">0</div></div>
+                <div class="diag-item"><div class="diag-label">Rejeitadas</div><div class="diag-value" id="diag-rejected">0</div></div>
+            </div>
+            <div>Score da última oportunidade: <b id="diag-score">0/100</b></div>
+            <div class="diag-bar"><div class="diag-fill" id="diag-fill" style="width:0%"></div></div>
+            <div class="diag-reason" id="diag-reason">Aguardando análise...</div>
+            <div style="color:#64748b;margin-top:6px;" id="diag-detail">Nenhum setup avaliado ainda.</div>
         </div>
 
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
@@ -627,6 +658,14 @@ HTML_INDEX = """
                 if(document.getElementById('wr-text')) document.getElementById('wr-text').innerText = data.winrate + "%";
                 if(document.getElementById('wr-fill')) document.getElementById('wr-fill').style.width = data.winrate + "%";
                 if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
+                const d = data.diagnostico || {};
+                if(document.getElementById('diag-assets')) document.getElementById('diag-assets').innerText = d.ativos_analisados || 0;
+                if(document.getElementById('diag-candidates')) document.getElementById('diag-candidates').innerText = d.candidatos || 0;
+                if(document.getElementById('diag-rejected')) document.getElementById('diag-rejected').innerText = d.rejeitados || 0;
+                if(document.getElementById('diag-score')) document.getElementById('diag-score').innerText = (d.ultimo_score || 0) + '/100';
+                if(document.getElementById('diag-fill')) document.getElementById('diag-fill').style.width = Math.min(100, d.ultimo_score || 0) + '%';
+                if(document.getElementById('diag-reason')) document.getElementById('diag-reason').innerText = 'Status: ' + (d.ultimo_motivo || 'Aguardando análise...');
+                if(document.getElementById('diag-detail')) document.getElementById('diag-detail').innerText = (d.ultimo_ativo_analisado || '—') + ' | Estratégias: ' + (d.estrategias_analisadas || 0) + ' | Concordâncias: ' + (d.estrategias_concordantes || 0);
                 
                 if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
                 if(document.getElementById('current-asset')) {
@@ -963,7 +1002,7 @@ def atualizar_ultimo_sinal_bd(email, resultado):
     except Exception:
         pass
 
-# ================= V4: MEMÓRIA ESTATÍSTICA E SETUPS =================
+# ================= V5: MEMÓRIA ESTATÍSTICA E SETUPS =================
 def _classificar_setup(details):
     bo=(details or {}).get('breakout',{}) or {}; kind=bo.get('kind'); trend=(details or {}).get('trend','NEUTRA')
     reasons=' '.join((details or {}).get('reasons',[])).lower()
@@ -1004,7 +1043,7 @@ def obter_estatistica_setup(ativo,tf,estrategia,setup,direcao,ttl=60):
     return data
 
 def registrar_resultado_setup(signal_id,resultado):
-    if resultado not in ('Win','Red'): return
+    if resultado not in ('Win','WinG1','Red'): return
     try:
         conn=get_db_connection(); cur=conn.cursor(cursor_factory=RealDictCursor)
         cur.execute('SELECT ativo,timeframe,estrategia,direcao,setup FROM historico_sinais WHERE id=%s',(signal_id,)); row=cur.fetchone()
@@ -1016,7 +1055,7 @@ def registrar_resultado_setup(signal_id,resultado):
                        ON CONFLICT (chave) DO UPDATE SET
                          sinais=estatisticas_setups.sinais+1, wins=estatisticas_setups.wins+EXCLUDED.wins,
                          reds=estatisticas_setups.reds+EXCLUDED.reds, atualizado_em=EXCLUDED.atualizado_em""",
-                    (key,row['ativo'],row['timeframe'],row['estrategia'],row['setup'],row['direcao'],1 if resultado=='Win' else 0,1 if resultado=='Red' else 0,agora_brasilia().replace(tzinfo=None)))
+                    (key,row['ativo'],row['timeframe'],row['estrategia'],row['setup'],row['direcao'],1 if resultado in ('Win','WinG1') else 0,1 if resultado=='Red' else 0,agora_brasilia().replace(tzinfo=None)))
         conn.commit(); cur.close(); conn.close()
         with _ADAPTIVE_CACHE_LOCK: _ADAPTIVE_CACHE.pop(key,None)
     except Exception as e: print(f'⚠️ Erro ao atualizar estatística do setup: {e}')
@@ -1605,15 +1644,16 @@ def index():
 
 # ================= LABORATÓRIO DE BACKTEST V3 =================
 def _directional_outcome(data, idx, signal):
+    """Resultado mais próximo da operação real: entrada na abertura da próxima vela e expiração no fechamento dela."""
     if idx + 1 >= len(data['close']) or not signal:
         return 'NEUTRO'
-    now = float(data['close'][idx])
-    nxt = float(data['close'][idx + 1])
-    if abs(nxt - now) <= max(abs(now) * 1e-8, 1e-12):
+    entry = float(data['open'][idx + 1])
+    expiry = float(data['close'][idx + 1])
+    if abs(expiry - entry) <= max(abs(entry) * 1e-8, 1e-12):
         return 'NEUTRO'
     if signal == 'CALL':
-        return 'WIN' if nxt > now else 'RED'
-    return 'WIN' if nxt < now else 'RED'
+        return 'WIN' if expiry > entry else 'RED'
+    return 'WIN' if expiry < entry else 'RED'
 
 def _backtest_strategy(data, estrategia, min_score=60, start=None):
     n = len(data['close'])
@@ -1623,38 +1663,52 @@ def _backtest_strategy(data, estrategia, min_score=60, start=None):
         prefix={k: np.asarray(v[:idx+1]).copy() for k,v in data.items()}
         try:
             sig, score = analisar_estrategia(prefix, estrategia)
-            _, _, adv_details = _advanced_confluence(prefix)
+            adv_sig, adv_score, adv_details = _advanced_confluence(prefix)
         except Exception:
             continue
         if not sig or score < min_score:
             continue
+        # O teste reproduz o filtro estrutural usado pelo robô.
+        if adv_sig != sig or adv_score < 55:
+            continue
+        final_score=int(round((float(score)+float(adv_score))/2.0))
         setup=_classificar_setup(adv_details) if adv_details else 'SEM_SETUP'
         outcome=_directional_outcome(data, idx, sig)
-        rows.append({'idx':idx,'signal':sig,'score':int(score),'outcome':outcome,'setup':setup})
+        rows.append({'idx':idx,'signal':sig,'score':final_score,'outcome':outcome,'setup':setup})
     return rows
 
-def executar_backtest(data, estrategias=None):
-    if not data or len(data['close']) < 80:
-        return {'ok':False,'erro':'Dados insuficientes para backtest.'}
-    estrategias=estrategias or LISTA_ESTRATEGIAS
-    resultados={}
-    for est in estrategias:
-        rows=_backtest_strategy(data, est, min_score=60)
-        wins=sum(r['outcome']=='WIN' for r in rows)
-        reds=sum(r['outcome']=='RED' for r in rows)
-        neutros=sum(r['outcome']=='NEUTRO' for r in rows)
-        decididos=wins+reds
-        taxa=(wins/decididos*100) if decididos else 0.0
-        setups={}
-        for r in rows:
-            k=r.get('setup','SEM_SETUP'); x=setups.setdefault(k,{'sinais':0,'wins':0,'reds':0})
-            x['sinais']+=1; x['wins']+=int(r['outcome']=='WIN'); x['reds']+=int(r['outcome']=='RED')
-        for x in setups.values():
-            d=x['wins']+x['reds']; x['taxa']=round(x['wins']/d*100,2) if d else 0.0
-        resultados[est]={'nome':NOME_ESTRATEGIAS_DISPLAY.get(est,est),'sinais':len(rows),'wins':wins,'reds':reds,'neutros':neutros,
-            'taxa':round(taxa,2),'score_medio':round(float(np.mean([r['score'] for r in rows])),2) if rows else 0,
+def _resumo_backtest(rows):
+    wins=sum(r['outcome']=='WIN' for r in rows)
+    reds=sum(r['outcome']=='RED' for r in rows)
+    neutros=sum(r['outcome']=='NEUTRO' for r in rows)
+    decididos=wins+reds
+    taxa=(wins/decididos*100) if decididos else 0.0
+    setups={}
+    for r in rows:
+        k=r.get('setup','SEM_SETUP'); x=setups.setdefault(k,{'sinais':0,'wins':0,'reds':0})
+        x['sinais']+=1; x['wins']+=int(r['outcome']=='WIN'); x['reds']+=int(r['outcome']=='RED')
+    for x in setups.values():
+        d=x['wins']+x['reds']; x['taxa']=round(x['wins']/d*100,2) if d else 0.0
+    return {'sinais':len(rows),'wins':wins,'reds':reds,'neutros':neutros,'taxa':round(taxa,2),
+            'score_medio':round(float(np.mean([r['score'] for r in rows])),2) if rows else 0,
             'ultimo_score':rows[-1]['score'] if rows else 0,'setups':setups}
-    return {'ok':True,'amostras':len(data['close'])-60-1,'resultados':resultados,'versao':'V4'}
+
+def executar_backtest(data, estrategias=None):
+    if not data or len(data['close']) < 100:
+        return {'ok':False,'erro':'Dados insuficientes para backtest V5.'}
+    estrategias=estrategias or LISTA_ESTRATEGIAS
+    n=len(data['close']); split=max(80,int(n*0.70)); resultados={}
+    for est in estrategias:
+        rows=_backtest_strategy(data, est, min_score=60, start=60)
+        train=[r for r in rows if r['idx'] < split]
+        test=[r for r in rows if r['idx'] >= split]
+        resultados[est]={
+            'nome':NOME_ESTRATEGIAS_DISPLAY.get(est,est),
+            **_resumo_backtest(rows),
+            'treino':_resumo_backtest(train),
+            'fora_amostra':_resumo_backtest(test)
+        }
+    return {'ok':True,'amostras':n-61,'split_treino':split,'resultados':resultados,'versao':'V5'}
 
 @app.route('/backtest')
 def backtest_page():
@@ -1663,14 +1717,14 @@ def backtest_page():
     st=get_user_state(user)
     return render_template_string('''
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vision Pro V3 Ultra — Laboratório V4</title>
+<title>Vision Pro V3 Ultra — Laboratório V5</title>
 <style>
 body{margin:0;background:#070b14;color:#e5e7eb;font-family:Arial,sans-serif;padding:20px}.wrap{max-width:900px;margin:auto}.card{background:#0d1422;border:1px solid #243047;border-radius:16px;padding:18px;margin-bottom:14px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}select,button{width:100%;padding:12px;border-radius:10px;border:1px solid #334155;background:#111827;color:#fff}button{cursor:pointer;font-weight:700;background:#0e7490}table{width:100%;border-collapse:collapse;margin-top:14px}th,td{padding:9px;border-bottom:1px solid #263244;text-align:left;font-size:13px}th{color:#67e8f9}.muted{color:#94a3b8;font-size:12px}.win{color:#34d399}.red{color:#fb7185}.warn{color:#fbbf24}@media(max-width:600px){.grid{grid-template-columns:1fr}}
-</style></head><body><div class="wrap"><div class="card"><h2>🧠 Laboratório de Backtest V4</h2><div class="muted">Teste histórico direcional de 1 candle. Não é garantia de resultado futuro e não substitui validação fora da amostra.</div></div>
+</style></head><body><div class="wrap"><div class="card"><h2>🧠 Laboratório de Backtest V5</h2><div class="muted">Backtest V5: entrada na abertura da próxima vela e expiração no fechamento dela. O teste é separado em treino e fora da amostra; não é garantia de resultado futuro.</div></div>
 <div class="card"><div class="grid"><select id="ativo">{% for a in ativos %}<option value="{{a}}">{{a}}</option>{% endfor %}</select><select id="tf"><option value="1">M1</option><option value="5" {% if tf==5 %}selected{% endif %}>M5</option><option value="15" {% if tf==15 %}selected{% endif %}>M15</option></select></div><button onclick="rodar()" style="margin-top:10px">▶ EXECUTAR BACKTEST</button><button onclick="location.href='/'" style="margin-top:10px;background:#172033">← VOLTAR AO TERMINAL</button></div>
 <div id="out" class="card">Escolha o ativo e execute o teste.</div></div>
 <script>
-async function rodar(){const out=document.getElementById('out');out.innerHTML='⏳ Buscando dados reais e executando análise...';try{const a=document.getElementById('ativo').value,t=document.getElementById('tf').value;const r=await fetch('/api/backtest?ativo='+encodeURIComponent(a)+'&tf='+t);const d=await r.json();if(!d.ok){out.innerHTML='❌ '+d.erro;return}let h='<h3>'+a+' — M'+t+'</h3><div class="muted">'+d.amostras+' pontos históricos avaliados.</div><table><tr><th>Estratégia</th><th>Sinais</th><th>WIN</th><th>RED</th><th>Taxa*</th><th>Score médio</th></tr>';for(const k in d.resultados){const x=d.resultados[k];h+=`<tr><td>${x.nome}</td><td>${x.sinais}</td><td class="win">${x.wins}</td><td class="red">${x.reds}</td><td>${x.taxa}%</td><td>${x.score_medio}</td></tr>`}h+='</table>';for(const k in d.resultados){const z=d.resultados[k].setups||{};const ks=Object.keys(z);if(ks.length){h+='<h4>Setups — '+d.resultados[k].nome+'</h4><table><tr><th>Setup</th><th>Sinais</th><th>WIN</th><th>RED</th><th>Taxa*</th></tr>';for(const q of ks){const v=z[q];h+=`<tr><td>${q}</td><td>${v.sinais}</td><td class="win">${v.wins}</td><td class="red">${v.reds}</td><td>${v.taxa}%</td></tr>`}h+='</table>';}}h+='<p class="muted">* Taxa = WIN/(WIN+RED) no teste direcional de 1 candle. Não representa probabilidade nem garante desempenho futuro. V4 separa resultados por setup.</p>';out.innerHTML=h}catch(e){out.innerHTML='❌ Falha ao executar o teste.'}}
+async function rodar(){const out=document.getElementById('out');out.innerHTML='⏳ Buscando dados reais e executando análise...';try{const a=document.getElementById('ativo').value,t=document.getElementById('tf').value;const r=await fetch('/api/backtest?ativo='+encodeURIComponent(a)+'&tf='+t);const d=await r.json();if(!d.ok){out.innerHTML='❌ '+d.erro;return}let h='<h3>'+a+' — M'+t+'</h3><div class="muted">'+d.amostras+' pontos históricos avaliados.</div><table><tr><th>Estratégia</th><th>Sinais</th><th>WIN</th><th>RED</th><th>Taxa*</th><th>Fora amostra*</th><th>Score médio</th></tr>';for(const k in d.resultados){const x=d.resultados[k];h+=`<tr><td>${x.nome}</td><td>${x.sinais}</td><td class="win">${x.wins}</td><td class="red">${x.reds}</td><td>${x.taxa}%</td><td>${x.fora_amostra.taxa}% (${x.fora_amostra.sinais})</td><td>${x.score_medio}</td></tr>`}h+='</table>';for(const k in d.resultados){const z=d.resultados[k].setups||{};const ks=Object.keys(z);if(ks.length){h+='<h4>Setups — '+d.resultados[k].nome+'</h4><table><tr><th>Setup</th><th>Sinais</th><th>WIN</th><th>RED</th><th>Taxa*</th></tr>';for(const q of ks){const v=z[q];h+=`<tr><td>${q}</td><td>${v.sinais}</td><td class="win">${v.wins}</td><td class="red">${v.reds}</td><td>${v.taxa}%</td></tr>`}h+='</table>';}}h+='<p class="muted">* Taxa = WIN/(WIN+RED) no teste direcional de 1 candle. Não representa probabilidade nem garante desempenho futuro. V5 separa resultados por setup, janela de entrada e desempenho histórico.</p>';out.innerHTML=h}catch(e){out.innerHTML='❌ Falha ao executar o teste.'}}
 </script></body></html>''', ativos=sorted(set(sum(ATIVOS_BASE.values(),[]))), tf=st.get('timeframe',5))
 
 @app.route('/api/backtest')
@@ -1709,7 +1763,8 @@ def status():
         "ativo_atual": st["ativo_atual"],
         "mercado": st["tipo_mercado"],
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
-        "notificacao": st["notificacao"]
+        "notificacao": st["notificacao"],
+        "diagnostico": st.get("diagnostico", {})
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -1750,8 +1805,14 @@ def command(cmd):
         st["timer_confirmacao"] = None
         st["alerta_ativo"] = None
         st["inicio_varredura"] = time.time() + 2 
-        st["sinais_enviados"].clear() 
-        
+        st["sinais_enviados"].clear()
+        st["diagnostico"] = {
+            "ciclo_inicio": time.time(), "ativos_analisados": 0, "dados_ok": 0, "dados_falha": 0,
+            "candidatos": 0, "rejeitados": 0, "ultima_oportunidade": None,
+            "ultimo_motivo": "Iniciando diagnóstico...", "motivo_contagem": {},
+            "ultimo_score": 0, "ultimo_direcao": None, "ultima_atualizacao": time.time(),
+            "estrategias_concordantes": 0, "estrategias_analisadas": 0, "ultimo_ativo_analisado": None
+        }
         st["ativo_atual"] = "INICIANDO VARREDURA..."
         st["ultimo_sinal"] = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE DINÂMICA</b><br><span style='color:#00f2fe;'>[VARRENDO TODOS OS ATIVOS...]</span></div><div class='tech-scanner'></div>"
         
@@ -1990,6 +2051,9 @@ def bot_loop():
                     tf = st.get("timeframe", 5)
                     mkt = st.get("tipo_mercado", "TODOS")
                     user_est = st.get("estrategia", "TODAS")
+                    diag = st.setdefault("diagnostico", {})
+                    diag.setdefault("motivo_contagem", {})
+                    diag["ultima_atualizacao"] = time.time()
 
                     # -------------------------------------------------------------
                     # 1. CONFIRMAÇÃO AGENDADA
@@ -2031,6 +2095,8 @@ def bot_loop():
                             break
 
                         st["ativo_atual"] = ativo
+                        diag["ativos_analisados"] = diag.get("ativos_analisados", 0) + 1
+                        diag["ultimo_ativo_analisado"] = ativo
                         ticker = MAPA_TICKERS.get(ativo, ativo)
 
                         if not alerta and not st.get("aguardando_confirmacao"):
@@ -2045,7 +2111,11 @@ def bot_loop():
                                 ohlc_cache[cache_key] = {"data": data, "time": time.time()}
 
                         if not data:
+                            diag["dados_falha"] = diag.get("dados_falha", 0) + 1
+                            diag["ultimo_motivo"] = f"{ativo}: sem dados reais suficientes"
+                            diag["motivo_contagem"]["SEM_DADOS"] = diag["motivo_contagem"].get("SEM_DADOS", 0) + 1
                             continue
+                        diag["dados_ok"] = diag.get("dados_ok", 0) + 1
 
                         sinal_encontrado = None
                         est_nome_encontrada = None
@@ -2061,28 +2131,72 @@ def bot_loop():
                         else:
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
 
+                        candidatos = []
                         for est_nome in estrategias_para_analisar:
                             sinal_test, prob_test = analisar_estrategia(data, est_nome)
-                            if sinal_test and prob_test > maior_prob:
-                                sinal_encontrado = sinal_test
-                                est_nome_encontrada = est_nome
-                                maior_prob = prob_test
+                            if sinal_test:
+                                candidatos.append((est_nome, sinal_test, int(prob_test)))
 
-                        # FILTRO AVANÇADO OBRIGATÓRIO:
-                        # uma estratégia legada só pode gerar alerta se o motor
-                        # estrutural/Price Action concordar com a direção.
-                        # Isso reduz sinais isolados de RSI/MHI/Bandas.
+                        if candidatos:
+                            diag["candidatos"] = diag.get("candidatos", 0) + 1
+                            diag["ultima_oportunidade"] = time.time()
+                            diag["ultimo_score"] = max(x[2] for x in candidatos)
+                        else:
+                            diag["ultimo_motivo"] = f"{ativo}: nenhuma estratégia encontrou oportunidade"
+                            diag["motivo_contagem"]["SEM_CANDIDATO"] = diag["motivo_contagem"].get("SEM_CANDIDATO", 0) + 1
+
+                        # V5: TODAS significa analisar todas; não significa que todas
+                        # precisam concordar. A direção precisa de suporte de pelo
+                        # menos duas estratégias quando houver sinais concorrentes,
+                        # ou de uma estratégia forte + confluência estrutural forte.
+                        if candidatos:
+                            por_dir={'CALL':[],'PUT':[]}
+                            for item in candidatos: por_dir[item[1]].append(item)
+                            best_dir=max(por_dir, key=lambda d: (len(por_dir[d]), max([x[2] for x in por_dir[d]], default=0)))
+                            best_list=por_dir[best_dir]
+                            best_item=max(best_list, key=lambda x:x[2])
+                            concordancias=len(best_list)
+                            sinal_encontrado=best_dir
+                            est_nome_encontrada=best_item[0]
+                            maior_prob=best_item[2] + min(10, max(0, concordancias-1)*5)
+
+                        # FILTRO AVANÇADO OBRIGATÓRIO.
                         adv_sig, adv_score, adv_details = _advanced_confluence(data)
                         if sinal_encontrado:
-                            if adv_sig != sinal_encontrado or adv_score < 55:
+                            # Se duas ou mais estratégias concordarem, isso vira
+                            # evidência adicional. Se só uma concordar, exigimos
+                            # confluência estrutural mais forte.
+                            min_adv = 62 if concordancias < 2 else 55
+                            if adv_sig != sinal_encontrado or adv_score < min_adv:
+                                diag["rejeitados"] = diag.get("rejeitados", 0) + 1
+                                if adv_sig != sinal_encontrado:
+                                    motivo = f"{ativo}: rejeitado — estratégia apontou {sinal_encontrado}, mas motor avançado apontou {adv_sig or 'NEUTRO'}"
+                                    chave = "DIRECAO_CONTRARIA"
+                                else:
+                                    motivo = f"{ativo}: rejeitado — score {adv_score}/100 abaixo do mínimo {min_adv}"
+                                    chave = "SCORE_BAIXO"
+                                diag["ultimo_motivo"] = motivo
+                                diag["motivo_contagem"][chave] = diag["motivo_contagem"].get(chave, 0) + 1
+                                diag["ultimo_score"] = int(adv_score)
                                 sinal_encontrado = None
                                 est_nome_encontrada = None
                                 maior_prob = 0
                             else:
-                                # O valor mostrado passa a representar SCORE DE
-                                # CONFLUÊNCIA, não uma probabilidade estatística.
                                 maior_prob = int(round((float(maior_prob) + float(adv_score)) / 2.0))
+                                # Bônus limitado pela concordância entre estratégias.
+                                maior_prob=min(100, maior_prob + min(6, max(0, concordancias-1)*3))
                                 maior_prob, adv_details = _enriquecer_score_adaptativo(ativo, tf, est_nome_encontrada, sinal_encontrado, maior_prob, adv_details)
+                                adv_details['estrategias_concordantes']=concordancias
+                                adv_details['estrategias_analisadas']=len(estrategias_para_analisar)
+                                diag["ultimo_score"] = int(maior_prob)
+                                diag["estrategias_concordantes"] = concordancias
+                                diag["estrategias_analisadas"] = len(estrategias_para_analisar)
+                                diag["ultimo_direcao"] = sinal_encontrado
+                                diag["ultimo_motivo"] = f"{ativo}: oportunidade VALIDADA — {sinal_encontrado} | score {maior_prob}/100 | {concordancias} concordância(s)"
+
+                        if sinal_encontrado and bloquear_novos_alertas:
+                            diag["ultimo_motivo"] = f"{ativo}: sinal válido encontrado, mas existe uma entrada aguardando confirmação"
+                            diag["motivo_contagem"]["AGUARDANDO_CONFIRM"] = diag["motivo_contagem"].get("AGUARDANDO_CONFIRM", 0) + 1
 
                         if sinal_encontrado and not bloquear_novos_alertas:
                             agora = agora_brasilia()
@@ -2094,6 +2208,9 @@ def bot_loop():
 
                             # A janela de decisão fecha 5 segundos antes da virada.
                             if seg_restantes <= 5:
+                                diag["rejeitados"] = diag.get("rejeitados", 0) + 1
+                                diag["ultimo_motivo"] = f"{ativo}: oportunidade encontrada, mas faltavam {int(seg_restantes)}s para a virada — janela perdida"
+                                diag["motivo_contagem"]["JANELA_PERDIDA"] = diag["motivo_contagem"].get("JANELA_PERDIDA", 0) + 1
                                 continue
 
                             prox_minuto_entrada = agora + timedelta(seconds=seg_restantes)
@@ -2180,6 +2297,8 @@ def bot_loop():
                                     continue
 
                                 st["sinais_enviados"][ativo] = str_entrada
+                                diag["ultimo_motivo"] = f"{ativo}: PRÉ-ALERTA criado — entrada programada para {str_entrada}"
+                                diag["motivo_contagem"]["PRE_ALERTA"] = diag["motivo_contagem"].get("PRE_ALERTA", 0) + 1
 
                                 msg_pre_alerta = (
                                     f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n"
