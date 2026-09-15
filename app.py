@@ -712,6 +712,27 @@ def init_db():
                 neutros INT DEFAULT 0,
                 taxa FLOAT DEFAULT 0.0
             );
+
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS ativo VARCHAR(80);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS timeframe INT;
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS estrategia VARCHAR(100);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS direcao VARCHAR(10);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS score INT DEFAULT 0;
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS setup VARCHAR(120);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS analise_json TEXT;
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS entrada_em TIMESTAMP;
+
+            CREATE TABLE IF NOT EXISTS estatisticas_setups (
+                id SERIAL PRIMARY KEY,
+                chave VARCHAR(300) UNIQUE NOT NULL,
+                ativo VARCHAR(80) NOT NULL,
+                timeframe INT NOT NULL,
+                estrategia VARCHAR(100) NOT NULL,
+                setup VARCHAR(120) NOT NULL,
+                direcao VARCHAR(10) NOT NULL,
+                sinais INT DEFAULT 0, wins INT DEFAULT 0, reds INT DEFAULT 0,
+                atualizado_em TIMESTAMP NOT NULL
+            );
         """)
         conn.commit()
         cur.close()
@@ -890,27 +911,25 @@ def verificar_assinatura(email):
     except Exception:
         return True, 30
 
-def registrar_sinal_bd(email, sinal_str):
+def registrar_sinal_bd(email, sinal_str, metadata=None):
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO historico_sinais (user_email, sinal, resultado)
-            VALUES (%s, %s, %s) RETURNING id;
-        """, (email.strip().lower(), sinal_str, "Analisando..."))
-        row=cur.fetchone()
-        conn.commit()
-        cur.close(); conn.close()
-        return row[0] if row else None
-    except Exception:
-        return None
+        metadata=metadata or {}; conn=get_db_connection(); cur=conn.cursor()
+        cur.execute("""INSERT INTO historico_sinais
+        (user_email,sinal,resultado,ativo,timeframe,estrategia,direcao,score,setup,analise_json,entrada_em)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id;""",
+        (email.strip().lower(),sinal_str,'Analisando...',metadata.get('ativo'),metadata.get('timeframe'),metadata.get('estrategia'),
+         metadata.get('direcao'),int(metadata.get('score') or 0),metadata.get('setup'),json.dumps(metadata.get('analise') or {},ensure_ascii=False,default=str),
+         metadata.get('entrada_em') or agora_brasilia().replace(tzinfo=None)))
+        row=cur.fetchone(); conn.commit(); cur.close(); conn.close(); return row[0] if row else None
+    except Exception as e:
+        print(f'⚠️ Erro ao registrar sinal V4: {e}'); return None
 
 def buscar_historico_bd(email):
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
-            SELECT id, sinal, resultado 
+            SELECT id, sinal, resultado, ativo, timeframe, estrategia, direcao, score, setup
             FROM historico_sinais 
             WHERE user_email = %s 
             ORDER BY id DESC LIMIT 20;
@@ -918,7 +937,7 @@ def buscar_historico_bd(email):
         res = cur.fetchall()
         cur.close()
         conn.close()
-        return [{"id": r["id"], "sinal": r["sinal"], "res": r["resultado"]} for r in res]
+        return [{"id": r["id"], "sinal": r["sinal"], "res": r["resultado"], "ativo": r.get("ativo"), "timeframe": r.get("timeframe"), "estrategia": r.get("estrategia"), "direcao": r.get("direcao"), "score": r.get("score") or 0, "setup": r.get("setup")} for r in res]
     except Exception:
         return []
 
@@ -938,9 +957,74 @@ def atualizar_ultimo_sinal_bd(email, resultado):
             if res:
                 cur.execute("UPDATE historico_sinais SET resultado = %s WHERE id = %s;", (resultado, res["id"]))
         conn.commit(); cur.close(); conn.close()
+        if sinal_id:
+            registrar_resultado_setup(sinal_id, resultado)
         st["ultimo_sinal_id"] = None
     except Exception:
         pass
+
+# ================= V4: MEMÓRIA ESTATÍSTICA E SETUPS =================
+def _classificar_setup(details):
+    bo=(details or {}).get('breakout',{}) or {}; kind=bo.get('kind'); trend=(details or {}).get('trend','NEUTRA')
+    reasons=' '.join((details or {}).get('reasons',[])).lower()
+    if kind=='FAKEOUT': return 'FAKEOUT_REVERSAO'
+    if kind=='BREAKOUT' and bo.get('retest'): return 'BREAKOUT_RETESTE'
+    if kind=='BREAKOUT': return 'BREAKOUT_CONTINUACAO'
+    if 'exaustão' in reasons: return 'EXAUSTAO_REVERSAO'
+    if 'engolfo' in reasons and 'suporte' in reasons: return 'ENGOLFO_SUPORTE'
+    if 'engolfo' in reasons and 'resistência' in reasons: return 'ENGOLFO_RESISTENCIA'
+    if 'rejeição inferior' in reasons: return 'REJEICAO_SUPORTE'
+    if 'rejeição superior' in reasons: return 'REJEICAO_RESISTENCIA'
+    if trend.startswith('ALTA'): return 'CONTINUACAO_ALTA'
+    if trend.startswith('BAIXA'): return 'CONTINUACAO_BAIXA'
+    return 'PRICE_ACTION_NEUTRO'
+
+def _setup_key(ativo,tf,estrategia,setup,direcao):
+    return f'{ativo}|M{int(tf)}|{estrategia}|{setup}|{direcao}'
+
+_ADAPTIVE_CACHE={}; _ADAPTIVE_CACHE_LOCK=threading.Lock()
+
+def obter_estatistica_setup(ativo,tf,estrategia,setup,direcao,ttl=60):
+    key=_setup_key(ativo,tf,estrategia,setup,direcao); now=time.time()
+    with _ADAPTIVE_CACHE_LOCK:
+        cached=_ADAPTIVE_CACHE.get(key)
+        if cached and now-cached['time']<ttl: return cached['data']
+    data={'sinais':0,'wins':0,'reds':0,'winrate':None,'ajuste':0}
+    try:
+        conn=get_db_connection(); cur=conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute('SELECT sinais,wins,reds FROM estatisticas_setups WHERE chave=%s',(key,)); row=cur.fetchone(); cur.close(); conn.close()
+        if row:
+            data['sinais']=int(row.get('sinais') or 0); data['wins']=int(row.get('wins') or 0); data['reds']=int(row.get('reds') or 0)
+            d=data['wins']+data['reds']
+            if d:
+                data['winrate']=round(data['wins']/d*100,2)
+                if d>=20: data['ajuste']=max(-8,min(8,round((data['winrate']-50)*0.16)))
+    except Exception as e: print(f'⚠️ Estatística de setup indisponível: {e}')
+    with _ADAPTIVE_CACHE_LOCK: _ADAPTIVE_CACHE[key]={'time':now,'data':data}
+    return data
+
+def registrar_resultado_setup(signal_id,resultado):
+    if resultado not in ('Win','Red'): return
+    try:
+        conn=get_db_connection(); cur=conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute('SELECT ativo,timeframe,estrategia,direcao,setup FROM historico_sinais WHERE id=%s',(signal_id,)); row=cur.fetchone()
+        if not row or not all(row.get(k) for k in ('ativo','timeframe','estrategia','direcao','setup')):
+            cur.close(); conn.close(); return
+        key=_setup_key(row['ativo'],row['timeframe'],row['estrategia'],row['setup'],row['direcao'])
+        cur.execute("""INSERT INTO estatisticas_setups (chave,ativo,timeframe,estrategia,setup,direcao,sinais,wins,reds,atualizado_em)
+                       VALUES (%s,%s,%s,%s,%s,%s,1,%s,%s,%s)
+                       ON CONFLICT (chave) DO UPDATE SET
+                         sinais=estatisticas_setups.sinais+1, wins=estatisticas_setups.wins+EXCLUDED.wins,
+                         reds=estatisticas_setups.reds+EXCLUDED.reds, atualizado_em=EXCLUDED.atualizado_em""",
+                    (key,row['ativo'],row['timeframe'],row['estrategia'],row['setup'],row['direcao'],1 if resultado=='Win' else 0,1 if resultado=='Red' else 0,agora_brasilia().replace(tzinfo=None)))
+        conn.commit(); cur.close(); conn.close()
+        with _ADAPTIVE_CACHE_LOCK: _ADAPTIVE_CACHE.pop(key,None)
+    except Exception as e: print(f'⚠️ Erro ao atualizar estatística do setup: {e}')
+
+def _enriquecer_score_adaptativo(ativo,tf,estrategia,direcao,score,details):
+    setup=_classificar_setup(details); hist=obter_estatistica_setup(ativo,tf,estrategia,setup,direcao)
+    details=dict(details or {}); details['setup']=setup; details['historico_setup']=hist
+    return max(0,min(100,int(round(score+hist.get('ajuste',0))))),details
 
 # ================= BOT CONFIGS & ESTRATÉGIAS =================
 LISTA_ESTRATEGIAS = ["CONFLUENCIA_PRICE_ACTION", "LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
@@ -1539,12 +1623,14 @@ def _backtest_strategy(data, estrategia, min_score=60, start=None):
         prefix={k: np.asarray(v[:idx+1]).copy() for k,v in data.items()}
         try:
             sig, score = analisar_estrategia(prefix, estrategia)
+            _, _, adv_details = _advanced_confluence(prefix)
         except Exception:
             continue
         if not sig or score < min_score:
             continue
+        setup=_classificar_setup(adv_details) if adv_details else 'SEM_SETUP'
         outcome=_directional_outcome(data, idx, sig)
-        rows.append({'idx':idx,'signal':sig,'score':int(score),'outcome':outcome})
+        rows.append({'idx':idx,'signal':sig,'score':int(score),'outcome':outcome,'setup':setup})
     return rows
 
 def executar_backtest(data, estrategias=None):
@@ -1559,14 +1645,16 @@ def executar_backtest(data, estrategias=None):
         neutros=sum(r['outcome']=='NEUTRO' for r in rows)
         decididos=wins+reds
         taxa=(wins/decididos*100) if decididos else 0.0
-        resultados[est]={
-            'nome':NOME_ESTRATEGIAS_DISPLAY.get(est,est),
-            'sinais':len(rows),'wins':wins,'reds':reds,'neutros':neutros,
-            'taxa':round(taxa,2),
-            'score_medio':round(float(np.mean([r['score'] for r in rows])),2) if rows else 0,
-            'ultimo_score':rows[-1]['score'] if rows else 0
-        }
-    return {'ok':True,'amostras':len(data['close'])-60-1,'resultados':resultados}
+        setups={}
+        for r in rows:
+            k=r.get('setup','SEM_SETUP'); x=setups.setdefault(k,{'sinais':0,'wins':0,'reds':0})
+            x['sinais']+=1; x['wins']+=int(r['outcome']=='WIN'); x['reds']+=int(r['outcome']=='RED')
+        for x in setups.values():
+            d=x['wins']+x['reds']; x['taxa']=round(x['wins']/d*100,2) if d else 0.0
+        resultados[est]={'nome':NOME_ESTRATEGIAS_DISPLAY.get(est,est),'sinais':len(rows),'wins':wins,'reds':reds,'neutros':neutros,
+            'taxa':round(taxa,2),'score_medio':round(float(np.mean([r['score'] for r in rows])),2) if rows else 0,
+            'ultimo_score':rows[-1]['score'] if rows else 0,'setups':setups}
+    return {'ok':True,'amostras':len(data['close'])-60-1,'resultados':resultados,'versao':'V4'}
 
 @app.route('/backtest')
 def backtest_page():
@@ -1575,14 +1663,14 @@ def backtest_page():
     st=get_user_state(user)
     return render_template_string('''
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vision Pro V3 Ultra — Laboratório</title>
+<title>Vision Pro V3 Ultra — Laboratório V4</title>
 <style>
 body{margin:0;background:#070b14;color:#e5e7eb;font-family:Arial,sans-serif;padding:20px}.wrap{max-width:900px;margin:auto}.card{background:#0d1422;border:1px solid #243047;border-radius:16px;padding:18px;margin-bottom:14px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}select,button{width:100%;padding:12px;border-radius:10px;border:1px solid #334155;background:#111827;color:#fff}button{cursor:pointer;font-weight:700;background:#0e7490}table{width:100%;border-collapse:collapse;margin-top:14px}th,td{padding:9px;border-bottom:1px solid #263244;text-align:left;font-size:13px}th{color:#67e8f9}.muted{color:#94a3b8;font-size:12px}.win{color:#34d399}.red{color:#fb7185}.warn{color:#fbbf24}@media(max-width:600px){.grid{grid-template-columns:1fr}}
-</style></head><body><div class="wrap"><div class="card"><h2>🧠 Laboratório de Backtest V3</h2><div class="muted">Teste histórico direcional de 1 candle. Não é garantia de resultado futuro e não substitui validação fora da amostra.</div></div>
+</style></head><body><div class="wrap"><div class="card"><h2>🧠 Laboratório de Backtest V4</h2><div class="muted">Teste histórico direcional de 1 candle. Não é garantia de resultado futuro e não substitui validação fora da amostra.</div></div>
 <div class="card"><div class="grid"><select id="ativo">{% for a in ativos %}<option value="{{a}}">{{a}}</option>{% endfor %}</select><select id="tf"><option value="1">M1</option><option value="5" {% if tf==5 %}selected{% endif %}>M5</option><option value="15" {% if tf==15 %}selected{% endif %}>M15</option></select></div><button onclick="rodar()" style="margin-top:10px">▶ EXECUTAR BACKTEST</button><button onclick="location.href='/'" style="margin-top:10px;background:#172033">← VOLTAR AO TERMINAL</button></div>
 <div id="out" class="card">Escolha o ativo e execute o teste.</div></div>
 <script>
-async function rodar(){const out=document.getElementById('out');out.innerHTML='⏳ Buscando dados reais e executando análise...';try{const a=document.getElementById('ativo').value,t=document.getElementById('tf').value;const r=await fetch('/api/backtest?ativo='+encodeURIComponent(a)+'&tf='+t);const d=await r.json();if(!d.ok){out.innerHTML='❌ '+d.erro;return}let h='<h3>'+a+' — M'+t+'</h3><div class="muted">'+d.amostras+' pontos históricos avaliados.</div><table><tr><th>Estratégia</th><th>Sinais</th><th>WIN</th><th>RED</th><th>Taxa*</th><th>Score médio</th></tr>';for(const k in d.resultados){const x=d.resultados[k];h+=`<tr><td>${x.nome}</td><td>${x.sinais}</td><td class="win">${x.wins}</td><td class="red">${x.reds}</td><td>${x.taxa}%</td><td>${x.score_medio}</td></tr>`}h+='</table><p class="muted">* Taxa = WIN/(WIN+RED) no teste direcional de 1 candle. Não representa probabilidade nem garante desempenho futuro.</p>';out.innerHTML=h}catch(e){out.innerHTML='❌ Falha ao executar o teste.'}}
+async function rodar(){const out=document.getElementById('out');out.innerHTML='⏳ Buscando dados reais e executando análise...';try{const a=document.getElementById('ativo').value,t=document.getElementById('tf').value;const r=await fetch('/api/backtest?ativo='+encodeURIComponent(a)+'&tf='+t);const d=await r.json();if(!d.ok){out.innerHTML='❌ '+d.erro;return}let h='<h3>'+a+' — M'+t+'</h3><div class="muted">'+d.amostras+' pontos históricos avaliados.</div><table><tr><th>Estratégia</th><th>Sinais</th><th>WIN</th><th>RED</th><th>Taxa*</th><th>Score médio</th></tr>';for(const k in d.resultados){const x=d.resultados[k];h+=`<tr><td>${x.nome}</td><td>${x.sinais}</td><td class="win">${x.wins}</td><td class="red">${x.reds}</td><td>${x.taxa}%</td><td>${x.score_medio}</td></tr>`}h+='</table>';for(const k in d.resultados){const z=d.resultados[k].setups||{};const ks=Object.keys(z);if(ks.length){h+='<h4>Setups — '+d.resultados[k].nome+'</h4><table><tr><th>Setup</th><th>Sinais</th><th>WIN</th><th>RED</th><th>Taxa*</th></tr>';for(const q of ks){const v=z[q];h+=`<tr><td>${q}</td><td>${v.sinais}</td><td class="win">${v.wins}</td><td class="red">${v.reds}</td><td>${v.taxa}%</td></tr>`}h+='</table>';}}h+='<p class="muted">* Taxa = WIN/(WIN+RED) no teste direcional de 1 candle. Não representa probabilidade nem garante desempenho futuro. V4 separa resultados por setup.</p>';out.innerHTML=h}catch(e){out.innerHTML='❌ Falha ao executar o teste.'}}
 </script></body></html>''', ativos=sorted(set(sum(ATIVOS_BASE.values(),[]))), tf=st.get('timeframe',5))
 
 @app.route('/api/backtest')
@@ -1797,13 +1885,16 @@ def confirmar_alerta_agendado(user_email, alert_id):
         if not st.get("bot_iniciado") or st.get("bot_pausado"):
             return
 
-        ativo = alerta["ativo"]
-        sinal = alerta["sinal"]
-        est_fmt = alerta["estrategia_fmt"]
-        str_saida = alerta["str_saida"]
-        prob = alerta["probabilidade"]
-        tf = alerta["tf"]
-        str_entrada = alerta["str_entrada"]
+        alerta_snapshot = dict(alerta)
+        ativo = alerta_snapshot["ativo"]
+        sinal = alerta_snapshot["sinal"]
+        est_fmt = alerta_snapshot["estrategia_fmt"]
+        est_key = alerta_snapshot.get("estrategia", est_fmt)
+        str_saida = alerta_snapshot["str_saida"]
+        prob = alerta_snapshot["probabilidade"]
+        tf = alerta_snapshot["tf"]
+        str_entrada = alerta_snapshot["str_entrada"]
+        analysis_snapshot = dict(alerta_snapshot.get("analise") or {})
 
         cor_direcao = "#10b981" if sinal == "CALL" else "#ef4444"
 
@@ -1847,10 +1938,11 @@ def confirmar_alerta_agendado(user_email, alert_id):
             _est_fmt=est_fmt, _tf=tf, _msg=msg_sinal
         ):
             try:
-                sid = registrar_sinal_bd(
-                    _user,
-                    f"{_ativo} | {_sinal} | {_est_fmt} | M{_tf}"
-                )
+                _analysis=analysis_snapshot
+                sid=registrar_sinal_bd(_user,f"{_ativo} | {_sinal} | {_est_fmt} | M{_tf}",metadata={
+                    "ativo":_ativo,"timeframe":_tf,"estrategia":est_key,"direcao":_sinal,
+                    "score":prob,"setup":_analysis.get("setup") or _classificar_setup(_analysis),
+                    "analise":_analysis,"entrada_em":agora_brasilia().replace(tzinfo=None)})
                 if sid:
                     get_user_state(_user)["ultimo_sinal_id"] = sid
             except Exception as e:
@@ -1990,6 +2082,7 @@ def bot_loop():
                                 # O valor mostrado passa a representar SCORE DE
                                 # CONFLUÊNCIA, não uma probabilidade estatística.
                                 maior_prob = int(round((float(maior_prob) + float(adv_score)) / 2.0))
+                                maior_prob, adv_details = _enriquecer_score_adaptativo(ativo, tf, est_nome_encontrada, sinal_encontrado, maior_prob, adv_details)
 
                         if sinal_encontrado and not bloquear_novos_alertas:
                             agora = agora_brasilia()
