@@ -1448,8 +1448,8 @@ def _strategy_score(data, estrategia):
         # Mantém a estratégia, mas exige alinhamento de momentum, evitando RSI extremo isolado.
         if mom_sig: signal=mom_sig; raw=mom_pts+25
         rsi=mom['rsi']
-        if signal=='CALL' and 35<=rsi<=65: raw+=8
-        if signal=='PUT' and 35<=rsi<=65: raw+=8
+        if signal=='CALL' and 35<=rsi<=65: raw+=10
+        if signal=='PUT' and 35<=rsi<=65: raw+=10
     elif estrategia=='MHI1':
         # MHI é tratado como padrão de curto prazo, com filtro estrutural e candle neutro proibido.
         colors=[]
@@ -1460,7 +1460,7 @@ def _strategy_score(data, estrategia):
             if signal=='CALL' and trend.startswith('ALTA'): raw+=12
             if signal=='PUT' and trend.startswith('BAIXA'): raw+=12
             # Sequência 3 contra a tendência é melhor tratada como possível correção, não reversão automática.
-            if len(set(colors))==1: raw-=8
+            if len(set(colors))==1: raw-=3
     elif estrategia in ('REVERSAO','RETRACAO'):
         mid=np.mean(c[-20:]); std=np.std(c[-20:]);
         if std>0:
@@ -1473,8 +1473,10 @@ def _strategy_score(data, estrategia):
             if signal=='PUT' and trend=='ALTA' and bo_info.get('kind')!='FAKEOUT': raw-=10
     elif estrategia=='CONFLUENCIA_PRICE_ACTION':
         return _advanced_confluence(data)[:2]
-    if not signal or raw<60: return None,0
-    # Compatibilidade com o pipeline existente: score, não probabilidade.
+    # A estratégia produz um CANDIDATO; a validação final continua sendo feita pelo
+    # motor avançado. Não bloquear aqui por um score 60 que algumas estratégias
+    # matematicamente nunca conseguem atingir.
+    if not signal or raw < 25: return None,0
     return signal,min(98,int(raw))
 
 def analisar_estrategia(data, estrategia, i=-1):
@@ -2049,7 +2051,7 @@ def bot_loop():
                 time.sleep(1); continue
             now_ts=time.time()
             # Cache curto evita pedir o mesmo ativo repetidamente; a coleta abaixo é paralela.
-            ohlc_cache={k:v for k,v in ohlc_cache.items() if now_ts-v["time"]<5}
+            ohlc_cache={k:v for k,v in ohlc_cache.items() if now_ts-v["time"] < 5}
             for user_email, st in usuarios_ativos:
                 try:
                     if not st.get("bot_iniciado") or st.get("bot_pausado"): continue
@@ -2070,7 +2072,7 @@ def bot_loop():
 
                     # COLETA PARALELA: evita que 40–60 ativos levem vários minutos só em timeouts HTTP.
                     futuros={}
-                    with ThreadPoolExecutor(max_workers=min(12,max(1,len(ativos_scan)))) as ex:
+                    with ThreadPoolExecutor(max_workers=min(24,max(1,len(ativos_scan)))) as ex:
                         for ativo in ativos_scan:
                             ticker=MAPA_TICKERS.get(ativo,ativo); key=f"{ticker}_{tf}"
                             if key in ohlc_cache: continue
