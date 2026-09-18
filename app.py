@@ -2084,10 +2084,12 @@ def bot_loop():
                                 if d: ohlc_cache[key]={"data":d,"time":time.time()}
                             except Exception: pass
 
-                    alerta=st.get("alerta_ativo")
-                    bloquear_novos_alertas=st.get("aguardando_confirmacao",False)
                     for ativo in ativos_scan:
                         if not st.get("bot_iniciado") or st.get("bot_pausado"): break
+                        # Releia o estado a cada ativo. O timer de confirmação pode
+                        # mudar alerta_ativo/aguardando_confirmacao enquanto o scanner roda.
+                        alerta=st.get("alerta_ativo")
+                        bloquear_novos_alertas=st.get("aguardando_confirmacao",False)
                         st["ativo_atual"]=ativo; diag["ativos_analisados"]=diag.get("ativos_analisados",0)+1; diag["ultimo_ativo_analisado"]=ativo; diag["ultima_atualizacao"]=time.time()
                         ticker=MAPA_TICKERS.get(ativo,ativo); key=f"{ticker}_{tf}"
                         data=ohlc_cache.get(key,{}).get("data")
@@ -2105,16 +2107,44 @@ def bot_loop():
                         if not candidatos:
                             diag["ultimo_motivo"]=f"{ativo}: nenhuma estratégia encontrou oportunidade"; diag["ultimo_detalhe"]="Todas as estratégias ficaram sem candidato"; _diag_inc(diag,"SEM_CANDIDATO"); continue
                         diag["candidatos"]=diag.get("candidatos",0)+1; diag["ultima_oportunidade"]=time.time(); diag["ultimo_score"]=max(x[2] for x in candidatos)
-                        por_dir={"CALL":[],"PUT":[]}
-                        for item in candidatos: por_dir[item[1]].append(item)
-                        best_dir=max(por_dir,key=lambda d:(len(por_dir[d]),max([x[2] for x in por_dir[d]],default=0))); best_list=por_dir[best_dir]; best_item=max(best_list,key=lambda x:x[2])
-                        sinal_encontrado=best_dir; est_nome_encontrada=best_item[0]; concordancias=len(best_list); maior_prob=best_item[2]+min(10,max(0,concordancias-1)*5)
+                        # BUG CORRIGIDO: antes o robô escolhia primeiro a direção com
+                        # maior quantidade de candidatos e só depois consultava o motor
+                        # avançado. Se houvesse CALL numa estratégia e PUT em outra, ele
+                        # podia descartar a direção que o motor avançado realmente validava.
+                        # Agora o motor avançado participa da seleção da direção.
                         adv_sig,adv_score,adv_details=_advanced_confluence(data)
-                        if adv_sig!=sinal_encontrado or adv_score < (62 if concordancias<2 else 55):
+                        compativeis=[x for x in candidatos if adv_sig and x[1]==adv_sig]
+                        if compativeis:
+                            best_item=max(compativeis,key=lambda x:x[2])
+                            sinal_encontrado=adv_sig
+                            concordancias=len(compativeis)
+                            est_nome_encontrada=best_item[0]
+                            maior_prob=best_item[2]+min(10,max(0,concordancias-1)*5)
+                        else:
+                            # Sem candidato na direção do motor avançado: rejeição real.
+                            sinal_encontrado=max(("CALL","PUT"),key=lambda d:(sum(x[1]==d for x in candidatos),max([x[2] for x in candidatos if x[1]==d],default=0)))
+                            best_item=max([x for x in candidatos if x[1]==sinal_encontrado],key=lambda x:x[2])
+                            concordancias=sum(x[1]==sinal_encontrado for x in candidatos)
+                            est_nome_encontrada=best_item[0]; maior_prob=best_item[2]+min(10,max(0,concordancias-1)*5)
+
+                        # Duas estratégias apontando na mesma direção contam como
+                        # confluência de estratégia, mas não substituem o motor técnico.
+                        # Isolated strategy: keep strict validation. With 2+ strategies
+                        # agreeing on the same direction, allow the existing confluence
+                        # floor of 55 because strategy agreement itself is additional
+                        # contextual evidence; do not lower the score for isolated signals.
+                        min_adv=62 if concordancias < 2 else 55
+                        if not adv_sig or not compativeis:
                             diag["rejeitados"]=diag.get("rejeitados",0)+1; diag["ultimo_score"]=int(adv_score)
-                            if adv_sig!=sinal_encontrado: chave="DIRECAO_CONTRARIA"; motivo=f"{ativo}: candidato {sinal_encontrado}, motor avançado {adv_sig or 'NEUTRO'}"; detalhe=f"{concordancias} estratégia(s) | score avançado {adv_score}/100"
-                            else: chave="SCORE_BAIXO"; motivo=f"{ativo}: score avançado {adv_score}/100 abaixo do mínimo {(62 if concordancias<2 else 55)}"; detalhe=f"{concordancias} estratégia(s) concordaram | candidato {best_item[0]}"
+                            chave="DIRECAO_CONTRARIA" if adv_sig else "MOTOR_NEUTRO"
+                            motivo=(f"{ativo}: candidato {sinal_encontrado}, motor avançado {adv_sig or 'NEUTRO'}") if adv_sig else f"{ativo}: motor avançado não confirmou direção"
+                            detalhe=f"{concordancias} estratégia(s) na direção candidata | score avançado {adv_score}/100"
                             diag["ultimo_motivo"]=motivo; diag["ultimo_detalhe"]=detalhe; _diag_inc(diag,chave); continue
+                        if adv_score < min_adv:
+                            diag["rejeitados"]=diag.get("rejeitados",0)+1; diag["ultimo_score"]=int(adv_score)
+                            diag["ultimo_motivo"]=f"{ativo}: score avançado {adv_score}/100 abaixo do mínimo {min_adv}"
+                            diag["ultimo_detalhe"]=f"{concordancias} estratégia(s) concordaram | candidato {best_item[0]}"
+                            _diag_inc(diag,"SCORE_BAIXO"); continue
                         maior_prob=int(round((maior_prob+adv_score)/2.0)); maior_prob=min(100,maior_prob+min(6,max(0,concordancias-1)*3)); maior_prob,adv_details=_enriquecer_score_adaptativo(ativo,tf,est_nome_encontrada,sinal_encontrado,maior_prob,adv_details); adv_details["estrategias_concordantes"]=concordancias; adv_details["estrategias_analisadas"]=len(estrategias_para_analisar)
                         diag["ultimo_score"]=int(maior_prob); diag["estrategias_concordantes"]=concordancias; diag["ultimo_direcao"]=sinal_encontrado; diag["ultimo_setup"]=adv_details.get("setup"); diag["ultimo_detalhe"]=f"{concordancias} concordância(s) | estratégia principal: {est_nome_encontrada} | avançado {adv_score}/100"; diag["ultimo_motivo"]=f"{ativo}: oportunidade VALIDADA — {sinal_encontrado} | score {maior_prob}/100 | {concordancias} concordância(s)"; diag["oportunidades_validadas"]=diag.get("oportunidades_validadas",0)+1
                         if sinal_encontrado and bloquear_novos_alertas:
