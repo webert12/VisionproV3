@@ -23,8 +23,8 @@ def agora_brasilia():
     return datetime.now(FUSO_SP)
 
 # ================= CONFIGURAÇÕES DE AMBIENTE E BOT TELEGRAM =================
-TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU").strip()
-CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1003474284931")
+TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "").strip()
+CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
 
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
@@ -1645,12 +1645,22 @@ def resultado(res):
             enviar_telegram(msg_resultado, user_solicitante=user)
 
         elif res == 'pular':
-            # O alerta de preparação não deve permanecer no canal depois que
-            # o operador decidir pular a oportunidade. Capturamos o ID antes
-            # de invalidar o alerta para impedir que uma thread de envio em
-            # andamento publique o alerta antigo depois do PULAR.
+            # Ao PULAR, nenhuma mensagem relacionada à oportunidade deve permanecer
+            # no canal: apagamos o alerta de preparação e também a mensagem enviada
+            # quando o sinal foi confirmado.
             alerta_para_apagar = st.get("alerta_ativo") or {}
-            msg_alerta_id = alerta_para_apagar.get("msg_id")
+            ids_para_apagar = set()
+
+            for chave in ("msg_id", "msg_id_confirmacao", "msg_id_sinal_confirmado"):
+                valor = alerta_para_apagar.get(chave)
+                if valor:
+                    ids_para_apagar.add(valor)
+
+            dados_confirmados = st.get("sinal_confirmado_dados") or {}
+            for chave in ("msg_id", "msg_id_confirmacao", "msg_id_sinal_confirmado"):
+                valor = dados_confirmados.get(chave)
+                if valor:
+                    ids_para_apagar.add(valor)
 
             if st.get("timer_confirmacao"):
                 try:
@@ -1658,18 +1668,22 @@ def resultado(res):
                 except Exception:
                     pass
             st["timer_confirmacao"] = None
-            st["alerta_ativo"] = None
 
-            if msg_alerta_id:
-                deletar_mensagem_telegram(msg_alerta_id)
+            # Invalida primeiro o estado para impedir que uma thread assíncrona
+            # publique novamente uma mensagem que acabou de ser cancelada.
+            st["alerta_ativo"] = None
+            st["sinal_confirmado_dados"] = None
+
+            for msg_id in ids_para_apagar:
+                try:
+                    deletar_mensagem_telegram(msg_id)
+                except Exception as e:
+                    print(f"⚠️ Falha ao apagar mensagem do PULAR (ID {msg_id}): {e}")
 
             atualizar_ultimo_sinal_bd(user, "Ignorado")
-            enviar_telegram(
-                "⚪ <b>SINAL PULADO</b>\n\n"
-                "A oportunidade foi descartada e o alerta anterior foi removido do canal.\n"
-                "A operação não foi contabilizada como WIN ou RED.",
-                user_solicitante=user
-            )
+            # Não enviamos mensagem de PULAR ao canal: o usuário solicitou que
+            # tanto a confirmação quanto o aviso de PULAR sejam removidos.
+
 
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
