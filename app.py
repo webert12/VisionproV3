@@ -23,8 +23,8 @@ def agora_brasilia():
     return datetime.now(FUSO_SP)
 
 # ================= CONFIGURAÇÕES DE AMBIENTE E BOT TELEGRAM =================
-TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU").strip()
-CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1003474284931")
+TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "").strip()
+CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
 
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
@@ -58,7 +58,9 @@ def get_user_state(email):
             "alerta_ativo": None,  # Guarda informações do alerta ativo no ciclo
             "timer_confirmacao": None,  # Timer independente para não depender da varredura
             "notificacao": None,
-            "notificacao_ultima_hora": 0.0
+            "notificacao_ultima_hora": 0.0,
+            "sinal_confirmado_dados": None,
+            "ultimo_resumo_sessao": None
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -180,16 +182,25 @@ def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None, tentativa
     return None
 
 def deletar_mensagem_telegram(msg_id):
+    """Remove uma mensagem do canal e registra o resultado nos logs."""
     if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM or not msg_id:
-        return
+        return False
     try:
-        token = TOKEN_TELEGRAM.strip()
-        chat_id = CHAT_ID_TELEGRAM.strip()
-        url = f"https://api.telegram.org/bot{token}/deleteMessage"
-        payload = {"chat_id": chat_id, "message_id": msg_id}
-        requests.post(url, json=payload, timeout=5)
+        ok, _, erro = _telegram_request(
+            "deleteMessage",
+            {
+                "chat_id": str(CHAT_ID_TELEGRAM).strip(),
+                "message_id": int(msg_id)
+            },
+            timeout=8
+        )
+        if ok:
+            print(f"🗑️ Telegram: mensagem {msg_id} apagada com sucesso.")
+            return True
+        print(f"⚠️ Telegram: não foi possível apagar a mensagem {msg_id}: {erro}")
     except Exception as e:
-        print(f"Erro ao deletar mensagem Telegram: {e}")
+        print(f"⚠️ Erro ao deletar mensagem Telegram {msg_id}: {e}")
+    return False
 
 def deletar_mensagem_atrasada(msg_id, delay):
     if delay > 0: time.sleep(delay)
@@ -885,6 +896,27 @@ def atualizar_estatisticas_usuario(email, is_win):
     except Exception:
         pass
 
+def obter_estatisticas_usuario(email):
+    """Retorna um snapshot das estatísticas atuais do usuário."""
+    try:
+        email_clean = email.strip().lower()
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT wins, reds, winrate FROM usuarios WHERE email = %s;", (email_clean,))
+        res = cur.fetchone()
+        cur.close()
+        conn.close()
+        if res:
+            wins = int(res.get("wins") or 0)
+            reds = int(res.get("reds") or 0)
+            total = wins + reds
+            winrate = round((wins / total) * 100, 1) if total else 0.0
+            return {"wins": wins, "reds": reds, "total": total, "winrate": winrate}
+    except Exception as e:
+        print(f"⚠️ Erro ao obter estatísticas de {email}: {e}")
+    return {"wins": 0, "reds": 0, "total": 0, "winrate": 0.0}
+
+
 def zerar_estatisticas_usuario(email):
     try:
         email_clean = email.strip().lower()
@@ -1448,6 +1480,10 @@ def command(cmd):
         return jsonify({"ok": False, "error": erro, "diagnostico": diagnostico_msg}), 502
 
     elif cmd == "start_bot":
+        # Cada START inicia uma nova sessão de estatísticas.
+        zerar_estatisticas_usuario(user)
+        st["sinal_confirmado_dados"] = None
+        st["ultimo_resumo_sessao"] = None
         st["bot_iniciado"] = True
         st["bot_pausado"] = False
         st["aguardando_confirmacao"] = False
@@ -1486,6 +1522,10 @@ def command(cmd):
         return jsonify({"ok": True})
 
     elif cmd == "stop_bot":
+        # Captura as estatísticas ANTES de encerrar a sessão.
+        stats = obter_estatisticas_usuario(user)
+        st["ultimo_resumo_sessao"] = stats.copy()
+
         st["bot_iniciado"] = False
         st["bot_pausado"] = True
         st["aguardando_confirmacao"] = False
@@ -1496,15 +1536,44 @@ def command(cmd):
             except Exception:
                 pass
         st["timer_confirmacao"] = None
-        if st.get("alerta_ativo") and st["alerta_ativo"].get("msg_id"):
-            deletar_mensagem_telegram(st["alerta_ativo"]["msg_id"])
+
+        alerta_para_apagar = st.get("alerta_ativo") or {}
+        msg_alerta_id = alerta_para_apagar.get("msg_id")
+        if msg_alerta_id:
+            deletar_mensagem_telegram(msg_alerta_id)
         st["alerta_ativo"] = None
         st["ativo_atual"] = "DESCONECTADO"
-        st["ultimo_sinal"] = "Aguardando Comando..."
-        
-        zerar_estatisticas_usuario(user)
-        enviar_telegram("🔴 <b>ROBÔ ENCERRADO!</b>", user_solicitante=user)
-        return jsonify({"ok": True})
+
+        if stats["total"] > 0:
+            emoji_desempenho = "🏆" if stats["winrate"] >= 70 else ("📊" if stats["winrate"] >= 50 else "⚠️")
+            msg_encerramento = (
+                f"🛑 <b>SESSÃO ENCERRADA — VISION PRO V3 ULTRA</b>\n\n"
+                f"{emoji_desempenho} <b>RESUMO DA SESSÃO</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"📌 <b>Operações:</b> {stats['total']}\n"
+                f"🟢 <b>WIN:</b> {stats['wins']}\n"
+                f"🔴 <b>RED:</b> {stats['reds']}\n"
+                f"📈 <b>Assertividade:</b> {stats['winrate']:.1f}%\n"
+                f"━━━━━━━━━━━━━━━━━━\n\n"
+                f"🤖 O robô foi encerrado e a sessão de análise foi finalizada.\n"
+                f"⚠️ <i>Os resultados são apenas o registro desta sessão e não representam garantia de resultados futuros.</i>"
+            )
+        else:
+            msg_encerramento = (
+                "🛑 <b>SESSÃO ENCERRADA — VISION PRO V3 ULTRA</b>\n\n"
+                "📊 <b>Resumo da sessão:</b> nenhuma operação foi registrada.\n\n"
+                "🤖 O robô foi encerrado com segurança."
+            )
+
+        st["ultimo_sinal"] = (
+            f"<div class='system-console' style='color:#00f2fe;'>"
+            f"🛑 <b>ROBÔ ENCERRADO</b><br>"
+            f"Operações: {stats['total']} | WIN: {stats['wins']} | RED: {stats['reds']} | "
+            f"Assertividade: {stats['winrate']:.1f}%"
+            f"</div>"
+        )
+        enviar_telegram(msg_encerramento, user_solicitante=user)
+        return jsonify({"ok": True, "estatisticas": stats})
 
     elif cmd.startswith("tf_"): 
         st["timeframe"] = int(cmd.split('_')[1])
@@ -1520,24 +1589,57 @@ def resultado(res):
     user = session.get('user')
     if user:
         st = get_user_state(user)
-        if res == 'win':
-            atualizar_estatisticas_usuario(user, True)
-            atualizar_ultimo_sinal_bd(user, "Win")
-            enviar_telegram("💎 <b>RESULTADO: WIN DIRETO!</b> ✅", user_solicitante=user)
-        elif res == 'g1':
-            atualizar_estatisticas_usuario(user, True)
-            atualizar_ultimo_sinal_bd(user, "WinG1")
-            enviar_telegram("🔄 <b>RESULTADO: WIN NO GALE 1!</b> ✅", user_solicitante=user)
-        elif res == 'red':
-            atualizar_estatisticas_usuario(user, False)
-            atualizar_ultimo_sinal_bd(user, "Red")
-            enviar_telegram("📉 <b>RESULTADO: STOP LOSS / RED</b> ❌", user_solicitante=user)
+        operacao = st.get("sinal_confirmado_dados") or {}
+
+        if res in ("win", "g1", "red"):
+            is_win = res in ("win", "g1")
+            atualizar_estatisticas_usuario(user, is_win)
+            resultado_bd = "Win" if res == "win" else ("WinG1" if res == "g1" else "Red")
+            atualizar_ultimo_sinal_bd(user, resultado_bd)
+
+            stats = obter_estatisticas_usuario(user)
+            if res == "win":
+                titulo = "🏆 WIN — OPERAÇÃO ENCERRADA COM RESULTADO POSITIVO"
+                icone = "🟢"
+                detalhe = "WIN DIRETO"
+            elif res == "g1":
+                titulo = "🔄 WIN G1 — OPERAÇÃO ENCERRADA COM RESULTADO POSITIVO"
+                icone = "🟡"
+                detalhe = "WIN G1"
+            else:
+                titulo = "🔴 RED — OPERAÇÃO ENCERRADA COM RESULTADO NEGATIVO"
+                icone = "🔴"
+                detalhe = "RED"
+
+            msg_resultado = (
+                f"{icone} <b>{titulo}</b>\n\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"📌 <b>RESULTADO:</b> {detalhe}\n"
+                f"💱 <b>Paridade:</b> {operacao.get('ativo', 'N/D')}\n"
+                f"↕️ <b>Direção:</b> {operacao.get('sinal', 'N/D')}\n"
+                f"🧠 <b>Estratégia:</b> {operacao.get('estrategia_fmt', 'N/D')}\n"
+                f"⏱ <b>Timeframe:</b> M{operacao.get('tf', st.get('timeframe', 5))}\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"📊 <b>DESEMPENHO DA SESSÃO</b>\n"
+                f"🟢 WIN: <b>{stats['wins']}</b>\n"
+                f"🔴 RED: <b>{stats['reds']}</b>\n"
+                f"📈 Assertividade: <b>{stats['winrate']:.1f}%</b>\n"
+                f"📋 Total de operações: <b>{stats['total']}</b>\n\n"
+                f"⚠️ <i>Resultado registrado no histórico. Operações envolvem risco e não há garantia de resultados futuros.</i>"
+            )
+            enviar_telegram(msg_resultado, user_solicitante=user)
+
         elif res == 'pular':
             atualizar_ultimo_sinal_bd(user, "Ignorado")
-            enviar_telegram("⚠️ <b>SINAL IGNORADO / PULADO</b>", user_solicitante=user)
+            enviar_telegram(
+                "⚪ <b>SINAL IGNORADO / PULADO</b>\n\n"
+                "A operação não foi contabilizada como WIN ou RED.",
+                user_solicitante=user
+            )
 
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
+        st["sinal_confirmado_dados"] = None
         if st.get("timer_confirmacao"):
             try:
                 st["timer_confirmacao"].cancel()
@@ -1545,9 +1647,9 @@ def resultado(res):
                 pass
         st["timer_confirmacao"] = None
         st["alerta_ativo"] = None
-        
+
         st["ultimo_sinal"] = f"<div class='system-console'>🔍 ANALISANDO VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[RETOMANDO VARREDURA COMPLETA]</span></div><div class='tech-scanner'></div>"
-    
+
     return redirect('/')
 
 # ================= ENVIO TELEGRAM ASSÍNCRONO =================
@@ -1560,18 +1662,22 @@ def enviar_telegram_em_background(mensagem, user_email, alert_id=None, deletar_m
                     deletar_mensagem_telegram(deletar_msg_id)
                 except Exception as e:
                     print(f"⚠️ Falha ao deletar alerta antigo no Telegram: {e}")
-            # Se o alerta já foi substituído enquanto o Telegram estava processando,
-            # não envia a mensagem antiga.
+            # Se o alerta já foi substituído ou confirmado enquanto o Telegram
+            # estava processando, NÃO envia a mensagem antiga.
             if st is not None and alert_id is not None:
                 atual = st.get("alerta_ativo")
-                if atual and atual.get("alert_id") != alert_id:
+                if not atual or atual.get("alert_id") != alert_id:
                     return
 
             novo_id = enviar_telegram(mensagem, auto_delete=None, user_solicitante=user_email)
-            if st is not None and alert_id is not None:
+            if st is not None and alert_id is not None and novo_id:
                 atual = st.get("alerta_ativo")
                 if atual and atual.get("alert_id") == alert_id:
                     atual["msg_id"] = novo_id
+                else:
+                    # A confirmação/substituição aconteceu durante o envio.
+                    # Apaga imediatamente a mensagem que acabou de chegar.
+                    deletar_mensagem_telegram(novo_id)
         except Exception as e:
             print(f"⚠️ Erro no envio Telegram em background: {e}")
     threading.Thread(target=worker, daemon=True).start()
@@ -1602,6 +1708,12 @@ def confirmar_alerta_agendado(user_email, alert_id):
         prob = alerta["probabilidade"]
         tf = alerta["tf"]
         str_entrada = alerta["str_entrada"]
+        msg_alerta_id = alerta.get("msg_id")
+
+        # Assim que a confirmação aparecer, o alerta de preparação deixa de ser
+        # necessário no canal e é removido.
+        if msg_alerta_id:
+            deletar_mensagem_telegram(msg_alerta_id)
 
         cor_direcao = "#10b981" if sinal == "CALL" else "#ef4444"
 
@@ -1616,6 +1728,15 @@ def confirmar_alerta_agendado(user_email, alert_id):
             f"</div>"
         )
         st["aguardando_confirmacao"] = True
+        st["sinal_confirmado_dados"] = {
+            "ativo": ativo,
+            "sinal": sinal,
+            "estrategia_fmt": est_fmt,
+            "probabilidade": prob,
+            "tf": tf,
+            "str_entrada": str_entrada,
+            "str_saida": str_saida
+        }
         st["alerta_ativo"] = None
         st["timer_confirmacao"] = None
 
@@ -1791,20 +1912,35 @@ def bot_loop():
 
                             nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
 
-                            # Substituição se houver um sinal com probabilidade superior no mesmo ciclo
+                            # O canal mantém SOMENTE um alerta de preparação por vez.
+                            # Se o ativo mudar, o alerta anterior é substituído mesmo que
+                            # a probabilidade do novo ativo seja menor. Se for o mesmo
+                            # ativo, só substituímos quando surgir uma probabilidade maior.
                             if alerta:
-                                if maior_prob > alerta.get("probabilidade", 0):
+                                ativo_anterior = alerta.get("ativo")
+                                prob_anterior = alerta.get("probabilidade", 0)
+                                deve_substituir = (
+                                    ativo != ativo_anterior
+                                    or maior_prob > prob_anterior
+                                )
+
+                                if deve_substituir:
                                     msg_antigo_id = alerta.get("msg_id")
                                     novo_alert_id = str(time.time_ns())
+                                    motivo_alerta = (
+                                        "NOVO ATIVO DETECTADO"
+                                        if ativo != ativo_anterior
+                                        else "MAIOR PROBABILIDADE DETECTADA"
+                                    )
 
                                     msg_pre_alerta = (
-                                        f"⚡ <b>ALERTA ATUALIZADO: MAIOR PROBABILIDADE DETECTADA!</b> ⚡\n\n"
+                                        f"⚡ <b>ALERTA ATUALIZADO — {motivo_alerta}!</b> ⚡\n\n"
                                         f"<b>Ativo:</b> {ativo} ({maior_prob}% de Assertividade)\n"
                                         f"<b>Timeframe:</b> M{tf}\n"
                                         f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
                                         f"<b>Estratégia:</b> {nome_est_formatado}\n"
                                         f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
-                                        f"👉 <i>Alerta anterior cancelado. Abra o ativo {ativo} na corretora!</i>"
+                                        f"👉 <i>O alerta anterior foi cancelado. Considere somente este novo alerta.</i>"
                                     )
 
                                     # Troca o alerta no painel imediatamente.
