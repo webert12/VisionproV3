@@ -82,45 +82,74 @@ def get_client_ip():
 
 # ================= ENVIO E DELEÇÃO TELEGRAM =================
 def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
+    """
+    Envia mensagem ao Telegram com retry curto.
+    O envio fica tolerante a falhas transitórias de rede/Render sem bloquear
+    o motor por longos períodos.
+    """
     if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
         print("⚠️ Telegram: TOKEN_TELEGRAM ou CHAT_ID_TELEGRAM não configurado.")
         return None
-        
+
     token = TOKEN_TELEGRAM.strip()
     chat_id = CHAT_ID_TELEGRAM.strip()
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    
-    payload = {
-        "chat_id": chat_id, 
-        "text": mensagem, 
+
+    def _post(payload):
+        try:
+            res = requests.post(url, json=payload, timeout=(2.5, 4.5))
+            try:
+                data = res.json()
+            except Exception:
+                data = {"ok": False, "description": f"HTTP {res.status_code}"}
+            return data
+        except Exception as exc:
+            print(f"⚠️ Telegram tentativa falhou: {exc}")
+            return None
+
+    payload_html = {
+        "chat_id": chat_id,
+        "text": mensagem,
         "parse_mode": "HTML",
         "disable_web_page_preview": True
     }
-    
-    try:
-        res = requests.post(url, json=payload, timeout=10)
-        r = res.json()
-        if r.get("ok"):
-            msg_id = r["result"]["message_id"]
+
+    # Duas tentativas rápidas para erro transitório.
+    for tentativa in range(2):
+        resposta = _post(payload_html)
+        if resposta and resposta.get("ok"):
+            msg_id = resposta["result"]["message_id"]
             if auto_delete:
-                threading.Thread(target=deletar_mensagem_atrasada, args=(msg_id, auto_delete), daemon=True).start()
+                threading.Thread(
+                    target=deletar_mensagem_atrasada,
+                    args=(msg_id, auto_delete),
+                    daemon=True
+                ).start()
             return msg_id
-        else:
-            print(f"⚠️ Telegram API Recusou HTML ({r.get('description')}). Tentando formato Texto...")
-            texto_limpo = re.sub('<[^<]+?>', '', mensagem)
-            payload_plain = {
-                "chat_id": chat_id, 
-                "text": texto_limpo,
-                "disable_web_page_preview": True
-            }
-            res_plain = requests.post(url, json=payload_plain, timeout=10)
-            r_plain = res_plain.json()
-            if r_plain.get("ok"):
-                return r_plain["result"]["message_id"]
-            else:
-                print(f"❌ Telegram API Erro no Fallback: {r_plain}")
-    except Exception as e:
-        print(f"❌ Erro de conexão com o Telegram: {e}")
+
+        if tentativa == 0:
+            time.sleep(0.35)
+
+    # Fallback sem HTML para mensagens que contenham alguma marcação inválida.
+    texto_limpo = re.sub(r"<[^<]+?>", "", mensagem)
+    payload_plain = {
+        "chat_id": chat_id,
+        "text": texto_limpo,
+        "disable_web_page_preview": True
+    }
+
+    resposta_plain = _post(payload_plain)
+    if resposta_plain and resposta_plain.get("ok"):
+        msg_id = resposta_plain["result"]["message_id"]
+        if auto_delete:
+            threading.Thread(
+                target=deletar_mensagem_atrasada,
+                args=(msg_id, auto_delete),
+                daemon=True
+            ).start()
+        return msg_id
+
+    print(f"❌ Telegram não confirmou o envio: {resposta_plain}")
     return None
 
 def deletar_mensagem_telegram(msg_id):
@@ -701,8 +730,8 @@ HTML_INDEX = """
             } catch (err) {
                 console.warn('Falha ao atualizar o painel:', err);
             } finally {
-                // Nova consulta 250ms após a resposta, sem acumular requisições.
-                setTimeout(atualizarPainel, 250);
+                // Atualização rápida sem sobrecarregar o banco a cada poucos milissegundos.
+                setTimeout(atualizarPainel, 750);
             }
         }
 
@@ -1144,8 +1173,11 @@ def get_data_v2(ticker, tf, velas_minimas=60):
             if len(ohlc["close"]) >= velas_minimas:
                 return ohlc
 
-        if "-USD" in base_ticker or "USD" in ticker:
-            crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
+        # Fallback CryptoCompare somente para cripto. Antes, qualquer par Forex
+        # contendo "USD" também entrava aqui, causando uma segunda requisição
+        # inútil e aumentando muito o tempo da varredura.
+        if base_ticker.endswith("-USD"):
+            crypto_symbol = base_ticker[:-4].replace("-", "")
             url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=100&aggregate={tf}"
             r_alt = requests.get(url_alt, timeout=5.0).json()
             
@@ -2064,193 +2096,584 @@ def _diag_strategy_inc(diag, key, amount=1):
     sc=diag.setdefault("estrategia_contagem", {})
     sc[key]=sc.get(key,0)+amount
 
+# ================= DADOS FECHADOS PARA O MOTOR EM TEMPO REAL =================
+def _somente_velas_fechadas(data, tf):
+    """
+    Remove a vela que ainda está em formação.
+    Isso evita que um sinal mude por causa de OHLC parcial e deixa a decisão
+    baseada em uma vela realmente fechada.
+    """
+    try:
+        duracao = int(tf) * 60
+        if duracao <= 0 or not data or len(data.get("close", [])) < 45:
+            return None
+
+        tempos = np.asarray(data["time"], dtype=np.int64)
+        agora_ts = int(time.time())
+        inicio_candle_atual = agora_ts - (agora_ts % duracao)
+        mascara = tempos < inicio_candle_atual
+
+        if int(np.sum(mascara)) < 40:
+            return None
+
+        return {
+            chave: np.asarray(valor)[mascara]
+            for chave, valor in data.items()
+        }
+    except Exception:
+        return None
+
+
 # ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT =================
 def bot_loop():
+    """
+    Scanner contínuo e orientado por conclusão de requisições.
+
+    Melhorias principais:
+    - não espera todos os ativos terminarem para começar a analisar;
+    - cada ativo é analisado assim que seus dados chegam;
+    - não usa vela em formação;
+    - cache curto por ativo/timeframe;
+    - estado de bloqueio do sinal é consultado dinamicamente;
+    - evita contar duas vezes a mesma oportunidade validada;
+    - uma falha de um ativo não interrompe o restante da varredura.
+    """
     ohlc_cache = {}
+    CACHE_TTL = 8.0
+
     while True:
         try:
             usuarios_ativos = list(DADOS_USUARIOS.items())
             if not usuarios_ativos:
-                time.sleep(1); continue
-            now_ts=time.time()
-            # Cache curto evita pedir o mesmo ativo repetidamente; a coleta abaixo é paralela.
-            ohlc_cache={k:v for k,v in ohlc_cache.items() if now_ts-v["time"]<5}
+                time.sleep(1.0)
+                continue
+
+            agora_ts = time.time()
+            ohlc_cache = {
+                k: v for k, v in ohlc_cache.items()
+                if agora_ts - v.get("time", 0) < CACHE_TTL
+            }
+
             for user_email, st in usuarios_ativos:
                 try:
-                    if not st.get("bot_iniciado") or st.get("bot_pausado"): continue
-                    if time.time() < st.get("inicio_varredura",0): continue
-                    tf=st.get("timeframe",5); mkt=st.get("tipo_mercado","TODOS"); user_est=st.get("estrategia","TODAS")
-                    diag=st.setdefault("diagnostico",{}); cycle_start=time.time()
-                    if mkt=="TODOS": ativos=ATIVOS_BASE["FOREX_ABERTO"]+ATIVOS_BASE["CRIPTO_ABERTO"]+ATIVOS_BASE["FOREX_OTC"]+ATIVOS_BASE["CRIPTO_OTC"]
-                    elif mkt=="ABERTO_TODOS": ativos=ATIVOS_BASE["FOREX_ABERTO"]+ATIVOS_BASE["CRIPTO_ABERTO"]
-                    elif mkt=="OTC_TODOS": ativos=ATIVOS_BASE["FOREX_OTC"]+ATIVOS_BASE["CRIPTO_OTC"]
-                    else: ativos=ATIVOS_BASE.get(mkt,ATIVOS_BASE["FOREX_ABERTO"])
-                    ativos_scan=ativos.copy(); random.shuffle(ativos_scan)
+                    if not st.get("bot_iniciado") or st.get("bot_pausado"):
+                        continue
+                    if time.time() < st.get("inicio_varredura", 0):
+                        continue
 
-                    if user_est=="TODAS": estrategias_para_analisar=LISTA_ESTRATEGIAS.copy(); random.shuffle(estrategias_para_analisar)
-                    elif "," in str(user_est): estrategias_para_analisar=[e.strip() for e in user_est.split(",") if e.strip() in LISTA_ESTRATEGIAS]
-                    elif user_est in LISTA_ESTRATEGIAS: estrategias_para_analisar=[user_est]
-                    else: estrategias_para_analisar=LISTA_ESTRATEGIAS.copy()
-                    diag["estrategias_analisadas"]=len(estrategias_para_analisar)
+                    tf = int(st.get("timeframe", 5))
+                    mkt = st.get("tipo_mercado", "TODOS")
+                    user_est = st.get("estrategia", "TODAS")
+                    diag = st.setdefault("diagnostico", {})
+                    cycle_start = time.time()
 
-                    # COLETA PARALELA: evita que 40–60 ativos levem vários minutos só em timeouts HTTP.
-                    futuros={}
-                    with ThreadPoolExecutor(max_workers=min(24,max(1,len(ativos_scan)))) as ex:
-                        for ativo in ativos_scan:
-                            ticker=MAPA_TICKERS.get(ativo,ativo); key=f"{ticker}_{tf}"
-                            if key in ohlc_cache: continue
-                            futuros[ex.submit(get_data_v2,ticker,tf,60)]=(ativo,key)
-                        for fut in as_completed(futuros):
-                            ativo,key=futuros[fut]
-                            try:
-                                d=fut.result()
-                                if d: ohlc_cache[key]={"data":d,"time":time.time()}
-                            except Exception: pass
+                    if mkt == "TODOS":
+                        ativos = (
+                            ATIVOS_BASE["FOREX_ABERTO"]
+                            + ATIVOS_BASE["CRIPTO_ABERTO"]
+                            + ATIVOS_BASE["FOREX_OTC"]
+                            + ATIVOS_BASE["CRIPTO_OTC"]
+                        )
+                    elif mkt == "ABERTO_TODOS":
+                        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
+                    elif mkt == "OTC_TODOS":
+                        ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+                    else:
+                        ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
 
-                    alerta=st.get("alerta_ativo")
-                    bloquear_novos_alertas=st.get("aguardando_confirmacao",False)
+                    # Remove duplicatas preservando a ordem.
+                    ativos_scan = list(dict.fromkeys(ativos))
+                    random.shuffle(ativos_scan)
+
+                    if user_est == "TODAS":
+                        estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+                        random.shuffle(estrategias_para_analisar)
+                    elif "," in str(user_est):
+                        estrategias_para_analisar = [
+                            e.strip() for e in user_est.split(",")
+                            if e.strip() in LISTA_ESTRATEGIAS
+                        ]
+                    elif user_est in LISTA_ESTRATEGIAS:
+                        estrategias_para_analisar = [user_est]
+                    else:
+                        estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+
+                    # Diagnóstico representa o CICLO ATUAL, não um acumulado indefinido.
+                    diag.update({
+                        "ciclo_inicio": cycle_start,
+                        "ativos_analisados": 0,
+                        "dados_ok": 0,
+                        "dados_falha": 0,
+                        "candidatos": 0,
+                        "rejeitados": 0,
+                        "oportunidades_validadas": 0,
+                        "ultima_oportunidade": None,
+                        "motivo_contagem": {},
+                        "estrategia_contagem": {},
+                        "ultimo_score": 0,
+                        "ultimo_direcao": None,
+                        "estrategias_concordantes": 0,
+                        "estrategias_analisadas": len(estrategias_para_analisar),
+                        "ultimo_ativo_analisado": None,
+                        "ultimo_setup": None,
+                        "ultimo_detalhe": "Coletando dados em paralelo...",
+                        "score_bruto": 0
+                    })
+                    diag["ciclo_num"] = diag.get("ciclo_num", 0) + 1
+
+                    # Requisições antigas são reaproveitadas; as demais são buscadas
+                    # em paralelo e processadas imediatamente quando terminam.
+                    futuros = {}
                     for ativo in ativos_scan:
-                        if not st.get("bot_iniciado") or st.get("bot_pausado"): break
-                        st["ativo_atual"]=ativo; diag["ativos_analisados"]=diag.get("ativos_analisados",0)+1; diag["ultimo_ativo_analisado"]=ativo; diag["ultima_atualizacao"]=time.time()
-                        ticker=MAPA_TICKERS.get(ativo,ativo); key=f"{ticker}_{tf}"
-                        data=ohlc_cache.get(key,{}).get("data")
-                        if not alerta and not st.get("aguardando_confirmacao"):
-                            st["ultimo_sinal"]=f"<div class='system-console'>🔍 VARRENDO 60 VELAS EM: <b style='color:#00f2fe;font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
-                        if not data:
-                            diag["dados_falha"]=diag.get("dados_falha",0)+1; diag["ultimo_motivo"]=f"{ativo}: sem dados reais suficientes"; diag["ultimo_detalhe"]="Fonte de dados não retornou 60 velas"; _diag_inc(diag,"SEM_DADOS"); continue
-                        diag["dados_ok"]=diag.get("dados_ok",0)+1
-                        candidatos=[]
-                        for est_nome in estrategias_para_analisar:
-                            try:
-                                sig, p = analisar_estrategia(data, est_nome)
-                            except Exception:
-                                sig, p = None, 0
-                            if sig:
-                                candidatos.append((est_nome, sig, int(p)))
-                                _diag_strategy_inc(diag, est_nome)
-
-                        if not candidatos:
-                            diag["ultimo_motivo"] = f"{ativo}: nenhuma estratégia encontrou oportunidade"
-                            diag["ultimo_detalhe"] = "Todas as estratégias ficaram sem candidato"
-                            _diag_inc(diag, "SEM_CANDIDATO")
-                            continue
-
-                        # Um candidato não é uma entrada. É apenas uma oportunidade
-                        # para o motor avançado validar.
-                        diag["candidatos"] = diag.get("candidatos", 0) + 1
-                        diag["ultima_oportunidade"] = time.time()
-                        diag["ultimo_score"] = max(x[2] for x in candidatos)
-
-                        por_dir = {"CALL": [], "PUT": []}
-                        for item in candidatos:
-                            por_dir[item[1]].append(item)
-
-                        # Primeiro descobre a leitura estrutural avançada.
-                        adv_sig, adv_score, adv_details = _advanced_confluence(data)
-                        diag["score_bruto"] = int(adv_score)
-
-                        if adv_sig not in ("CALL", "PUT"):
-                            diag["rejeitados"] = diag.get("rejeitados", 0) + 1
-                            diag["ultimo_score"] = int(adv_score)
-                            diag["motivo_rejeicao"] = "MOTOR_NEUTRO"
-                            diag["ultimo_motivo"] = f"{ativo}: motor avançado não confirmou direção"
-                            diag["ultimo_detalhe"] = (
-                                f"{len(candidatos)} candidato(s) | score avançado {adv_score}/100"
+                        ticker = MAPA_TICKERS.get(ativo, ativo)
+                        key = f"{ticker}_{tf}"
+                        if key not in ohlc_cache:
+                            futuros_key = f"{ativo}|{key}"
+                            futuros[futuros_key] = (
+                                ativo,
+                                key,
+                                ticker
                             )
-                            _diag_inc(diag, "MOTOR_NEUTRO")
-                            continue
 
-                        # Não descarta automaticamente um ativo só porque a estratégia
-                        # de maior score estava no lado oposto. Procuramos as estratégias
-                        # que concordam com a direção estrutural.
-                        lado = por_dir.get(adv_sig, [])
-                        if not lado:
-                            diag["rejeitados"] = diag.get("rejeitados", 0) + 1
-                            diag["ultimo_score"] = int(adv_score)
-                            diag["motivo_rejeicao"] = "SEM_ESTRATEGIA_NA_DIRECAO"
+                    if futuros:
+                        executor = ThreadPoolExecutor(
+                            max_workers=min(24, max(1, len(futuros)))
+                        )
+                        future_map = {}
+                        for _, (ativo, key, ticker) in futuros.items():
+                            future = executor.submit(get_data_v2, ticker, tf, 60)
+                            future_map[future] = (ativo, key)
+
+                        # Dados em cache também entram no mesmo fluxo de análise.
+                        resultados_cache = []
+                        for ativo in ativos_scan:
+                            ticker = MAPA_TICKERS.get(ativo, ativo)
+                            key = f"{ticker}_{tf}"
+                            if key in ohlc_cache:
+                                resultados_cache.append(
+                                    (ativo, key, ohlc_cache[key].get("data"))
+                                )
+
+                        def processar_resultado(ativo, key, data):
+                            # Mantém a análise no thread principal do bot.
+                            if not st.get("bot_iniciado") or st.get("bot_pausado"):
+                                return
+
+                            diag["ativos_analisados"] = diag.get("ativos_analisados", 0) + 1
+                            diag["ultimo_ativo_analisado"] = ativo
+                            diag["ultima_atualizacao"] = time.time()
+                            st["ativo_atual"] = ativo
+
+                            if not data:
+                                diag["dados_falha"] = diag.get("dados_falha", 0) + 1
+                                diag["ultimo_motivo"] = f"{ativo}: sem dados reais suficientes"
+                                diag["ultimo_detalhe"] = "Fonte de dados não retornou 60 velas"
+                                _diag_inc(diag, "SEM_DADOS")
+                                return
+
+                            dados_fechados = _somente_velas_fechadas(data, tf)
+                            if not dados_fechados:
+                                diag["dados_falha"] = diag.get("dados_falha", 0) + 1
+                                diag["ultimo_motivo"] = f"{ativo}: aguardando vela fechada"
+                                diag["ultimo_detalhe"] = "A última vela ainda está em formação"
+                                _diag_inc(diag, "VELA_EM_FORMACAO")
+                                return
+
+                            diag["dados_ok"] = diag.get("dados_ok", 0) + 1
+
+                            if not st.get("alerta_ativo") and not st.get("aguardando_confirmacao"):
+                                st["ultimo_sinal"] = (
+                                    f"<div class='system-console'>"
+                                    f"🔍 VARRENDO 60 VELAS EM: "
+                                    f"<b style='color:#00f2fe;font-size:16px;'>{ativo}</b> (M{tf})<br>"
+                                    f"<span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span>"
+                                    f"</div><div class='tech-scanner'></div>"
+                                )
+
+                            candidatos = []
+                            for est_nome in estrategias_para_analisar:
+                                try:
+                                    sig, score_est = analisar_estrategia(
+                                        dados_fechados, est_nome
+                                    )
+                                except Exception as exc:
+                                    print(f"⚠️ Estratégia {est_nome}/{ativo}: {exc}")
+                                    sig, score_est = None, 0
+
+                                if sig in ("CALL", "PUT"):
+                                    candidatos.append(
+                                        (est_nome, sig, int(score_est))
+                                    )
+                                    _diag_strategy_inc(diag, est_nome)
+
+                            if not candidatos:
+                                diag["ultimo_motivo"] = (
+                                    f"{ativo}: nenhuma estratégia encontrou oportunidade"
+                                )
+                                diag["ultimo_detalhe"] = (
+                                    "Todas as estratégias ficaram sem candidato"
+                                )
+                                _diag_inc(diag, "SEM_CANDIDATO")
+                                return
+
+                            diag["candidatos"] = diag.get("candidatos", 0) + 1
+                            diag["ultima_oportunidade"] = time.time()
+                            diag["ultimo_score"] = max(x[2] for x in candidatos)
+
+                            por_dir = {"CALL": [], "PUT": []}
+                            for item in candidatos:
+                                por_dir[item[1]].append(item)
+
+                            adv_sig, adv_score, adv_details = _advanced_confluence(
+                                dados_fechados
+                            )
+                            diag["score_bruto"] = int(adv_score)
+
+                            if adv_sig not in ("CALL", "PUT"):
+                                diag["rejeitados"] = diag.get("rejeitados", 0) + 1
+                                diag["ultimo_score"] = int(adv_score)
+                                diag["motivo_rejeicao"] = "MOTOR_NEUTRO"
+                                diag["ultimo_motivo"] = (
+                                    f"{ativo}: motor avançado não confirmou direção"
+                                )
+                                diag["ultimo_detalhe"] = (
+                                    f"{len(candidatos)} candidato(s) | "
+                                    f"score avançado {adv_score}/100"
+                                )
+                                _diag_inc(diag, "MOTOR_NEUTRO")
+                                return
+
+                            lado = por_dir.get(adv_sig, [])
+                            if not lado:
+                                diag["rejeitados"] = diag.get("rejeitados", 0) + 1
+                                diag["ultimo_score"] = int(adv_score)
+                                diag["motivo_rejeicao"] = "SEM_ESTRATEGIA_NA_DIRECAO"
+                                diag["ultimo_motivo"] = (
+                                    f"{ativo}: motor confirmou {adv_sig}, "
+                                    f"mas nenhuma estratégia selecionada concordou"
+                                )
+                                diag["ultimo_detalhe"] = (
+                                    f"{len(candidatos)} candidato(s) | "
+                                    f"avançado {adv_score}/100"
+                                )
+                                _diag_inc(diag, "SEM_ESTRATEGIA_NA_DIRECAO")
+                                return
+
+                            lado.sort(key=lambda x: x[2], reverse=True)
+                            best_item = lado[0]
+                            sinal_encontrado = adv_sig
+                            est_nome_encontrada = best_item[0]
+                            concordancias = len(lado)
+                            maior_prob = (
+                                best_item[2]
+                                + min(10, max(0, concordancias - 1) * 5)
+                            )
+
+                            min_adv = 55 if concordancias >= 2 else 62
+                            if int(adv_score) < min_adv:
+                                diag["rejeitados"] = diag.get("rejeitados", 0) + 1
+                                diag["ultimo_score"] = int(adv_score)
+                                diag["motivo_rejeicao"] = "SCORE_BAIXO"
+                                diag["ultimo_motivo"] = (
+                                    f"{ativo}: score avançado {adv_score}/100 "
+                                    f"abaixo do mínimo {min_adv}"
+                                )
+                                diag["ultimo_detalhe"] = (
+                                    f"{concordancias} estratégia(s) concordaram | "
+                                    f"principal: {est_nome_encontrada}"
+                                )
+                                _diag_inc(diag, "SCORE_BAIXO")
+                                return
+
+                            maior_prob = int(
+                                round((maior_prob + adv_score) / 2.0)
+                            )
+                            maior_prob = min(
+                                100,
+                                maior_prob
+                                + min(6, max(0, concordancias - 1) * 3)
+                            )
+
+                            maior_prob, adv_details = _enriquecer_score_adaptativo(
+                                ativo,
+                                tf,
+                                est_nome_encontrada,
+                                sinal_encontrado,
+                                maior_prob,
+                                adv_details
+                            )
+                            adv_details["estrategias_concordantes"] = concordancias
+                            adv_details["estrategias_analisadas"] = len(
+                                estrategias_para_analisar
+                            )
+
+                            diag["ultimo_score"] = int(maior_prob)
+                            diag["estrategias_concordantes"] = concordancias
+                            diag["ultimo_direcao"] = sinal_encontrado
+                            diag["ultimo_setup"] = adv_details.get("setup")
+                            diag["ultimo_detalhe"] = (
+                                f"{concordancias} concordância(s) | "
+                                f"estratégia principal: {est_nome_encontrada} | "
+                                f"avançado {adv_score}/100"
+                            )
                             diag["ultimo_motivo"] = (
-                                f"{ativo}: motor confirmou {adv_sig}, mas nenhuma estratégia "
-                                f"selecionada concordou"
+                                f"{ativo}: oportunidade VALIDADA — "
+                                f"{sinal_encontrado} | score {maior_prob}/100 | "
+                                f"{concordancias} concordância(s)"
                             )
-                            diag["ultimo_detalhe"] = (
-                                f"{len(candidatos)} candidato(s) | avançado {adv_score}/100"
+
+                            # Conta a oportunidade uma única vez.
+                            diag["oportunidades_validadas"] = (
+                                diag.get("oportunidades_validadas", 0) + 1
                             )
-                            _diag_inc(diag, "SEM_ESTRATEGIA_NA_DIRECAO")
-                            continue
 
-                        lado.sort(key=lambda x: x[2], reverse=True)
-                        best_item = lado[0]
-                        sinal_encontrado = adv_sig
-                        est_nome_encontrada = best_item[0]
-                        concordancias = len(lado)
-                        maior_prob = best_item[2] + min(10, max(0, concordancias - 1) * 5)
+                            # Estado é consultado aqui, e não uma vez por ciclo.
+                            if st.get("aguardando_confirmacao"):
+                                diag["ultimo_motivo"] = (
+                                    f"{ativo}: sinal válido encontrado, "
+                                    f"mas existe uma entrada em andamento"
+                                )
+                                _diag_inc(diag, "AGUARDANDO_CONFIRM")
+                                return
 
-                        # Com 2+ estratégias concordando, o contexto ganha um filtro
-                        # um pouco menos rígido; com uma só, mantém o filtro forte.
-                        min_adv = 55 if concordancias >= 2 else 62
+                            agora = agora_brasilia()
+                            min_pass = agora.minute % tf
+                            seg_pass = min_pass * 60 + agora.second
+                            total_seg = tf * 60
+                            seg_restantes = total_seg - seg_pass
 
-                        if int(adv_score) < min_adv:
-                            diag["rejeitados"] = diag.get("rejeitados", 0) + 1
-                            diag["ultimo_score"] = int(adv_score)
-                            diag["motivo_rejeicao"] = "SCORE_BAIXO"
-                            diag["ultimo_motivo"] = (
-                                f"{ativo}: score avançado {adv_score}/100 abaixo do mínimo {min_adv}"
+                            if seg_restantes <= 5:
+                                diag["rejeitados"] = diag.get("rejeitados", 0) + 1
+                                diag["ultimo_motivo"] = (
+                                    f"{ativo}: oportunidade encontrada, mas faltavam "
+                                    f"{int(seg_restantes)}s para a virada — janela perdida"
+                                )
+                                diag["ultimo_detalhe"] = (
+                                    f"Score {maior_prob}/100 | "
+                                    f"{concordancias} concordância(s)"
+                                )
+                                _diag_inc(diag, "JANELA_PERDIDA")
+                                return
+
+                            prox_minuto_entrada = agora + timedelta(seconds=seg_restantes)
+                            momento_confirmacao = (
+                                prox_minuto_entrada - timedelta(seconds=5)
                             )
-                            diag["ultimo_detalhe"] = (
-                                f"{concordancias} estratégia(s) concordaram | "
-                                f"principal: {est_nome_encontrada}"
+                            horario_saida = prox_minuto_entrada + timedelta(minutes=tf)
+                            str_entrada = momento_confirmacao.strftime("%H:%M:%S")
+                            str_saida = horario_saida.strftime("%H:%M")
+                            nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(
+                                est_nome_encontrada, est_nome_encontrada
                             )
-                            _diag_inc(diag, "SCORE_BAIXO")
-                            continue
 
-                        maior_prob = int(round((maior_prob + adv_score) / 2.0))
-                        maior_prob = min(100, maior_prob + min(6, max(0, concordancias - 1) * 3))
-                        maior_prob, adv_details = _enriquecer_score_adaptativo(
-                            ativo, tf, est_nome_encontrada, sinal_encontrado,
-                            maior_prob, adv_details
-                        )
-                        adv_details["estrategias_concordantes"] = concordancias
-                        adv_details["estrategias_analisadas"] = len(estrategias_para_analisar)
+                            alerta_atual = st.get("alerta_ativo")
 
-                        diag["ultimo_score"] = int(maior_prob)
-                        diag["estrategias_concordantes"] = concordancias
-                        diag["ultimo_direcao"] = sinal_encontrado
-                        diag["ultimo_setup"] = adv_details.get("setup")
-                        diag["ultimo_detalhe"] = (
-                            f"{concordancias} concordância(s) | estratégia principal: "
-                            f"{est_nome_encontrada} | avançado {adv_score}/100"
-                        )
-                        diag["ultimo_motivo"] = (
-                            f"{ativo}: oportunidade VALIDADA — {sinal_encontrado} | "
-                            f"score {maior_prob}/100 | {concordancias} concordância(s)"
-                        )
-                        diag["oportunidades_validadas"] = diag.get("oportunidades_validadas", 0) + 1
-                        diag["ultimo_score"]=int(maior_prob); diag["estrategias_concordantes"]=concordancias; diag["ultimo_direcao"]=sinal_encontrado; diag["ultimo_setup"]=adv_details.get("setup"); diag["ultimo_detalhe"]=f"{concordancias} concordância(s) | estratégia principal: {est_nome_encontrada} | avançado {adv_score}/100"; diag["ultimo_motivo"]=f"{ativo}: oportunidade VALIDADA — {sinal_encontrado} | score {maior_prob}/100 | {concordancias} concordância(s)"; diag["oportunidades_validadas"]=diag.get("oportunidades_validadas",0)+1
-                        if sinal_encontrado and bloquear_novos_alertas:
-                            diag["ultimo_motivo"]=f"{ativo}: sinal válido encontrado, mas existe uma entrada aguardando confirmação"; _diag_inc(diag,"AGUARDANDO_CONFIRM"); continue
-                        if not sinal_encontrado or bloquear_novos_alertas: continue
-                        agora=agora_brasilia(); min_pass=agora.minute%tf; seg_pass=min_pass*60+agora.second; total_seg=tf*60; seg_restantes=total_seg-seg_pass
-                        if seg_restantes<=5:
-                            diag["rejeitados"]=diag.get("rejeitados",0)+1; diag["ultimo_motivo"]=f"{ativo}: oportunidade encontrada, mas faltavam {int(seg_restantes)}s para a virada — janela perdida"; diag["ultimo_detalhe"]=f"Score {maior_prob}/100 | {concordancias} concordância(s)"; _diag_inc(diag,"JANELA_PERDIDA"); continue
-                        prox_minuto_entrada=agora+timedelta(seconds=seg_restantes); momento_confirmacao=prox_minuto_entrada-timedelta(seconds=5); horario_saida=prox_minuto_entrada+timedelta(minutes=tf); str_entrada=momento_confirmacao.strftime("%H:%M:%S"); str_saida=horario_saida.strftime("%H:%M"); nome_est_formatado=NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada,est_nome_encontrada)
-                        if alerta:
-                            if maior_prob>alerta.get("probabilidade",0):
-                                msg_antigo_id=alerta.get("msg_id"); novo_alert_id=str(time.time_ns()); msg_pre_alerta=f"⚡ <b>ALERTA ATUALIZADO: MAIOR CONFLUÊNCIA DETECTADA!</b> ⚡\n\n<b>Ativo:</b> {ativo} (Score {maior_prob}/100)\n<b>Timeframe:</b> M{tf}\n<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n<b>Estratégia:</b> {nome_est_formatado}\n<b>Horário da Entrada:</b> {str_entrada}\n\n👉 <i>Alerta anterior cancelado. Abra o ativo {ativo} na corretora!</i>"
-                                st["alerta_ativo"]={"ativo":ativo,"sinal":sinal_encontrado,"estrategia":est_nome_encontrada,"estrategia_fmt":nome_est_formatado,"probabilidade":maior_prob,"msg_id":None,"str_entrada":str_entrada,"str_saida":str_saida,"prox_minuto_entrada":prox_minuto_entrada,"momento_confirmacao":momento_confirmacao,"alert_id":novo_alert_id,"tf":tf,"analise":adv_details}
+                            # Se já existe um alerta, só substitui quando o novo
+                            # score é realmente superior.
+                            if alerta_atual:
+                                if maior_prob <= int(alerta_atual.get("probabilidade", 0)):
+                                    diag["ultimo_motivo"] = (
+                                        f"{ativo}: oportunidade válida, mas abaixo "
+                                        f"do alerta ativo"
+                                    )
+                                    _diag_inc(diag, "ABAIXO_ALERTA_ATIVO")
+                                    return
+
+                                msg_antigo_id = alerta_atual.get("msg_id")
+                                novo_alert_id = str(time.time_ns())
+                                msg_pre_alerta = (
+                                    "⚡ <b>ALERTA ATUALIZADO: MAIOR CONFLUÊNCIA DETECTADA!</b> ⚡\n\n"
+                                    f"<b>Ativo:</b> {ativo} (Score {maior_prob}/100)\n"
+                                    f"<b>Timeframe:</b> M{tf}\n"
+                                    f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
+                                    f"<b>Estratégia:</b> {nome_est_formatado}\n"
+                                    f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
+                                    "<i>Alerta anterior cancelado.</i>"
+                                )
+
+                                st["alerta_ativo"] = {
+                                    "ativo": ativo,
+                                    "sinal": sinal_encontrado,
+                                    "estrategia": est_nome_encontrada,
+                                    "estrategia_fmt": nome_est_formatado,
+                                    "probabilidade": maior_prob,
+                                    "msg_id": None,
+                                    "str_entrada": str_entrada,
+                                    "str_saida": str_saida,
+                                    "prox_minuto_entrada": prox_minuto_entrada,
+                                    "momento_confirmacao": momento_confirmacao,
+                                    "alert_id": novo_alert_id,
+                                    "tf": tf,
+                                    "analise": adv_details
+                                }
+
                                 if st.get("timer_confirmacao"):
-                                    try: st["timer_confirmacao"].cancel()
-                                    except Exception: pass
-                                atraso=max(0.0,(momento_confirmacao-agora_brasilia()).total_seconds()); t=threading.Timer(atraso,confirmar_alerta_agendado,args=(user_email,novo_alert_id)); t.daemon=True; st["timer_confirmacao"]=t; t.start(); enviar_telegram_em_background(msg_pre_alerta,user_email,alert_id=novo_alert_id,deletar_msg_id=msg_antigo_id,st=st); alerta=st["alerta_ativo"]
-                                st["ultimo_sinal"]=f"<div style='text-align:center;color:#f59e0b;'>⚡ <b>ALERTA SUBSTITUÍDO — {maior_prob}/100</b> ⚡<br><b>{ativo}</b> | <b>{sinal_encontrado}</b> | Entrada <b>{str_entrada}</b><br><span style='font-size:12px;color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span></div>"
-                        else:
-                            if st["sinais_enviados"].get(ativo)==str_entrada: continue
-                            st["sinais_enviados"][ativo]=str_entrada; novo_alert_id=str(time.time_ns()); msg_pre_alerta=f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n<b>Ativo:</b> {ativo}\n<b>Timeframe:</b> M{tf}\n<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n<b>Estratégia Identificada:</b> {nome_est_formatado}\n<b>Score de Confluência:</b> {maior_prob}/100\n<b>Horário da Entrada:</b> {str_entrada}\n\n👉 <i>Abra o ativo na corretora e prepare-se!</i>"; st["alerta_ativo"]={"ativo":ativo,"sinal":sinal_encontrado,"estrategia":est_nome_encontrada,"estrategia_fmt":nome_est_formatado,"probabilidade":maior_prob,"msg_id":None,"str_entrada":str_entrada,"str_saida":str_saida,"prox_minuto_entrada":prox_minuto_entrada,"momento_confirmacao":momento_confirmacao,"alert_id":novo_alert_id,"tf":tf,"analise":adv_details}; atraso=max(0.0,(momento_confirmacao-agora_brasilia()).total_seconds()); t=threading.Timer(atraso,confirmar_alerta_agendado,args=(user_email,novo_alert_id)); t.daemon=True; st["timer_confirmacao"]=t; t.start(); enviar_telegram_em_background(msg_pre_alerta,user_email,alert_id=novo_alert_id,st=st); st["ultimo_sinal"]=f"<div style='text-align:center;color:#f59e0b;'>⚠️ <b>PREPARE O ATIVO: {ativo} ({maior_prob}/100)</b> ⚠️<br><span style='color:#fff;'>DIREÇÃO: <b>{sinal_encontrado}</b> | Entrada <b>{str_entrada}</b> (M{tf})</span><br><span style='font-size:12px;color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span></div>"; st["notificacao"]={"id":str(time.time()),"titulo":f"⚠️ PREPARE-SE: {ativo}","corpo":f"Direção: {sinal_encontrado} | Entrada às {str_entrada} (M{tf}) via {nome_est_formatado} ({maior_prob}/100)."}; alerta=st["alerta_ativo"]
-                    elapsed=time.time()-cycle_start; diag["ciclo_num"]=diag.get("ciclo_num",0)+1; diag["ultimo_ciclo_segundos"]=round(elapsed,2); diag["ativos_por_ciclo"]=len(ativos_scan); diag["ultima_atualizacao"]=time.time()
+                                    try:
+                                        st["timer_confirmacao"].cancel()
+                                    except Exception:
+                                        pass
+
+                                atraso = max(
+                                    0.0,
+                                    (
+                                        momento_confirmacao
+                                        - agora_brasilia()
+                                    ).total_seconds()
+                                )
+                                timer = threading.Timer(
+                                    atraso,
+                                    confirmar_alerta_agendado,
+                                    args=(user_email, novo_alert_id)
+                                )
+                                timer.daemon = True
+                                st["timer_confirmacao"] = timer
+                                timer.start()
+
+                                enviar_telegram_em_background(
+                                    msg_pre_alerta,
+                                    user_email,
+                                    alert_id=novo_alert_id,
+                                    deletar_msg_id=msg_antigo_id,
+                                    st=st
+                                )
+
+                                st["ultimo_sinal"] = (
+                                    f"<div style='text-align:center;color:#f59e0b;'>"
+                                    f"⚡ <b>ALERTA SUBSTITUÍDO — {maior_prob}/100</b> ⚡<br>"
+                                    f"<b>{ativo}</b> | <b>{sinal_encontrado}</b> | "
+                                    f"Entrada <b>{str_entrada}</b><br>"
+                                    f"<span style='font-size:12px;color:#00f2fe;'>"
+                                    f"Estratégia: <b>{nome_est_formatado}</b></span></div>"
+                                )
+                                return
+
+                            # Primeiro alerta do ciclo.
+                            chave_envio = f"{str_entrada}|{sinal_encontrado}|{tf}"
+                            if st["sinais_enviados"].get(ativo) == chave_envio:
+                                return
+
+                            st["sinais_enviados"][ativo] = chave_envio
+                            novo_alert_id = str(time.time_ns())
+
+                            msg_pre_alerta = (
+                                "⚠️ <b>ATENÇÃO: OPORTUNIDADE VALIDADA</b> ⚠️\n\n"
+                                f"<b>Ativo:</b> {ativo}\n"
+                                f"<b>Timeframe:</b> M{tf}\n"
+                                f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
+                                f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
+                                f"<b>Score de Confluência:</b> {maior_prob}/100\n"
+                                f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
+                                "<i>Prepare o ativo na plataforma.</i>"
+                            )
+
+                            st["alerta_ativo"] = {
+                                "ativo": ativo,
+                                "sinal": sinal_encontrado,
+                                "estrategia": est_nome_encontrada,
+                                "estrategia_fmt": nome_est_formatado,
+                                "probabilidade": maior_prob,
+                                "msg_id": None,
+                                "str_entrada": str_entrada,
+                                "str_saida": str_saida,
+                                "prox_minuto_entrada": prox_minuto_entrada,
+                                "momento_confirmacao": momento_confirmacao,
+                                "alert_id": novo_alert_id,
+                                "tf": tf,
+                                "analise": adv_details
+                            }
+
+                            atraso = max(
+                                0.0,
+                                (
+                                    momento_confirmacao
+                                    - agora_brasilia()
+                                ).total_seconds()
+                            )
+                            timer = threading.Timer(
+                                atraso,
+                                confirmar_alerta_agendado,
+                                args=(user_email, novo_alert_id)
+                            )
+                            timer.daemon = True
+                            st["timer_confirmacao"] = timer
+                            timer.start()
+
+                            enviar_telegram_em_background(
+                                msg_pre_alerta,
+                                user_email,
+                                alert_id=novo_alert_id,
+                                st=st
+                            )
+
+                            st["ultimo_sinal"] = (
+                                f"<div style='text-align:center;color:#f59e0b;'>"
+                                f"⚠️ <b>PREPARE O ATIVO: {ativo} ({maior_prob}/100)</b> ⚠️<br>"
+                                f"<span style='color:#fff;'>DIREÇÃO: <b>{sinal_encontrado}</b> | "
+                                f"Entrada <b>{str_entrada}</b> (M{tf})</span><br>"
+                                f"<span style='font-size:12px;color:#00f2fe;'>"
+                                f"Estratégia: <b>{nome_est_formatado}</b></span></div>"
+                            )
+                            st["notificacao"] = {
+                                "id": str(time.time_ns()),
+                                "titulo": f"⚠️ PREPARE-SE: {ativo}",
+                                "corpo": (
+                                    f"Direção: {sinal_encontrado} | Entrada às "
+                                    f"{str_entrada} (M{tf}) via "
+                                    f"{nome_est_formatado} ({maior_prob}/100)."
+                                )
+                            }
+
+                        # Processa primeiro os dados que já estavam em cache.
+                        for ativo, key, data in resultados_cache:
+                            processar_resultado(ativo, key, data)
+
+                        # Depois processa cada resposta assim que chega.
+                        for future in as_completed(future_map):
+                            ativo, key = future_map[future]
+                            try:
+                                data = future.result()
+                            except Exception as exc:
+                                print(f"⚠️ Coleta {ativo} falhou: {exc}")
+                                data = None
+
+                            if data:
+                                ohlc_cache[key] = {
+                                    "data": data,
+                                    "time": time.time()
+                                }
+
+                            processar_resultado(ativo, key, data)
+
+                        # Não deixa futures presos no executor após o ciclo.
+                        executor.shutdown(wait=False, cancel_futures=True)
+
+                    else:
+                        # Todos os ativos estão no cache.
+                        for ativo in ativos_scan:
+                            ticker = MAPA_TICKERS.get(ativo, ativo)
+                            key = f"{ticker}_{tf}"
+                            processar_resultado(
+                                ativo,
+                                key,
+                                ohlc_cache.get(key, {}).get("data")
+                            )
+
+                    elapsed = time.time() - cycle_start
+                    diag["ultimo_ciclo_segundos"] = round(elapsed, 2)
+                    diag["ativos_por_ciclo"] = len(ativos_scan)
+                    diag["ultima_atualizacao"] = time.time()
+
                 except Exception as e_usr:
-                    print(f"Erro no loop do usuario {user_email}: {e_usr}")
-            time.sleep(0.5)
+                    print(f"❌ Erro no loop do usuário {user_email}: {e_usr}")
+
+            # Pequena pausa; o scanner volta rapidamente para capturar a próxima
+            # atualização de mercado.
+            time.sleep(0.20)
+
         except Exception as err:
-            print(f"Erro no loop global do bot: {err}"); time.sleep(2)
+            print(f"❌ Erro no loop global do bot: {err}")
+            time.sleep(1.0)
+
 
 # ================= THREAD BACKGROUND =================
 thread_iniciada = False
