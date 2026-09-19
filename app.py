@@ -24,7 +24,7 @@ def agora_brasilia():
 
 # ================= CONFIGURAÇÕES DE AMBIENTE E BOT TELEGRAM =================
 TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU").strip()
-CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1003474284931")
+CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
 
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
@@ -1650,6 +1650,8 @@ def resultado(res):
             # quando o sinal foi confirmado.
             alerta_para_apagar = st.get("alerta_ativo") or {}
             ids_para_apagar = set()
+            # Invalida qualquer confirmação em andamento antes de apagar os IDs.
+            st["confirmacao_em_processamento"] = None
 
             for chave in ("msg_id", "msg_id_confirmacao", "msg_id_sinal_confirmado"):
                 valor = alerta_para_apagar.get(chave)
@@ -1731,6 +1733,23 @@ def enviar_telegram_em_background(mensagem, user_email, alert_id=None, deletar_m
     threading.Thread(target=worker, daemon=True).start()
 
 
+# ================= CLASSIFICAÇÃO DO MOVIMENTO =================
+def classificar_movimento(estrategia, estrategias_confluentes=None):
+    """Classifica a natureza técnica do sinal para exibição ao cliente.
+    É uma descrição da lógica que gerou o sinal, não uma garantia de resultado.
+    """
+    nomes = [str(estrategia or "").upper()]
+    if estrategias_confluentes:
+        nomes.extend(str(x).upper() for x in estrategias_confluentes)
+    if "REVERSAO" in nomes or "REVERSÃO" in nomes:
+        return "REVERSÃO", "🔄"
+    if "RETRACAO" in nomes or "RETRAÇÃO" in nomes or "LOGICA_DO_PRECO" in nomes:
+        return "RETRAÇÃO", "↩️"
+    if "RSI_MACD_MA" in nomes or "MHI1" in nomes:
+        return "CONTINUAÇÃO", "➡️"
+    return "CONTINUAÇÃO", "➡️"
+
+
 # ================= CONFIRMAÇÃO PRECISA DO SINAL =================
 def confirmar_alerta_agendado(user_email, alert_id):
     """
@@ -1746,7 +1765,15 @@ def confirmar_alerta_agendado(user_email, alert_id):
         if not alerta or alerta.get("alert_id") != alert_id:
             return
 
+        # Impede que o Timer e o fallback do bot confirmem o mesmo alerta duas vezes.
+        if alerta.get("confirmacao_em_processamento") or st.get("confirmacao_em_processamento") == alert_id:
+            return
+        alerta["confirmacao_em_processamento"] = True
+        st["confirmacao_em_processamento"] = alert_id
+
         if not st.get("bot_iniciado") or st.get("bot_pausado"):
+            alerta.pop("confirmacao_em_processamento", None)
+            st["confirmacao_em_processamento"] = None
             return
 
         ativo = alerta["ativo"]
@@ -1757,6 +1784,9 @@ def confirmar_alerta_agendado(user_email, alert_id):
         tf = alerta["tf"]
         str_entrada = alerta["str_entrada"]
         msg_alerta_id = alerta.get("msg_id")
+        tipo_movimento, icone_movimento = classificar_movimento(
+            alerta.get("estrategia"), alerta.get("estrategias_confluentes")
+        )
 
         # Assim que a confirmação aparecer, o alerta de preparação deixa de ser
         # necessário no canal e é removido.
@@ -1772,6 +1802,7 @@ def confirmar_alerta_agendado(user_email, alert_id):
             f"<b>ATIVO:</b> {ativo}<br>"
             f"<b>DIREÇÃO DE ENTRADA:</b> <span style='color:{cor_direcao}; font-size:18px;'>{sinal}</span><br>"
             f"<b>ESTRATÉGIA:</b> <span style='color:#38ef7d;'>{est_fmt} ({prob}%)</span><br>"
+            f"<b>MOVIMENTO:</b> {icone_movimento} <span style='color:#00f2fe;'>{tipo_movimento}</span><br>"
             f"<b>TIMEFRAME:</b> M{tf} | <b>ENTRADA:</b> {str_entrada} | <b>EXPIRAÇÃO:</b> {str_saida}"
             f"</div>"
         )
@@ -1783,10 +1814,15 @@ def confirmar_alerta_agendado(user_email, alert_id):
             "probabilidade": prob,
             "tf": tf,
             "str_entrada": str_entrada,
-            "str_saida": str_saida
+            "str_saida": str_saida,
+            "tipo_movimento": tipo_movimento,
+            "icone_movimento": icone_movimento,
+            "msg_id_confirmacao": None,
+            "msg_id_sinal_confirmado": None
         }
         st["alerta_ativo"] = None
         st["timer_confirmacao"] = None
+        st["confirmacao_em_processamento"] = None
 
         st["notificacao"] = {
             "id": str(time.time_ns()),
@@ -1818,9 +1854,19 @@ def confirmar_alerta_agendado(user_email, alert_id):
             except Exception as e:
                 print(f"⚠️ Erro ao registrar sinal confirmado: {e}")
             try:
-                enviar_telegram(
+                msg_confirmacao_id = enviar_telegram(
                     _msg, auto_delete=None, user_solicitante=_user
                 )
+                # Guarda o ID fora de alerta_ativo porque ele é zerado após a confirmação.
+                dados = st.get("sinal_confirmado_dados") or {}
+                if msg_confirmacao_id:
+                    dados["msg_id_confirmacao"] = msg_confirmacao_id
+                    dados["msg_id_sinal_confirmado"] = msg_confirmacao_id
+                    st["sinal_confirmado_dados"] = dados
+                    # Se o sinal foi pulado enquanto o envio estava em andamento,
+                    # remove imediatamente a mensagem recém-chegada.
+                    if not st.get("aguardando_confirmacao"):
+                        deletar_mensagem_telegram(msg_confirmacao_id)
             except Exception as e:
                 print(f"⚠️ Erro ao enviar confirmação Telegram: {e}")
 
@@ -2056,6 +2102,7 @@ def bot_loop():
                                         f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
                                         f"<b>Estratégia principal:</b> {nome_est_formatado}\n"
                                         f"<b>Confluência:</b> {confluencia_txt}\n"
+                                        f"<b>Tipo de movimento:</b> {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[1]} {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[0]}\n"
                                         f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
                                         f"👉 <i>O alerta anterior foi cancelado. Considere somente este novo alerta.</i>"
                                     )
@@ -2076,7 +2123,10 @@ def bot_loop():
                                         "prox_minuto_entrada": prox_minuto_entrada,
                                         "momento_confirmacao": momento_confirmacao,
                                         "alert_id": novo_alert_id,
-                                        "tf": tf
+                                        "tf": tf,
+                                        "tipo_movimento": classificar_movimento(est_nome_encontrada, estrategias_confluentes)[0],
+                                        "icone_movimento": classificar_movimento(est_nome_encontrada, estrategias_confluentes)[1],
+                                        "confirmacao_em_processamento": False
                                     }
 
                                     # Reagenda a confirmação para o novo alerta.
@@ -2133,6 +2183,7 @@ def bot_loop():
                                     f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
                                     f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
                                     f"<b>Confluência:</b> {confluencia_txt}\n"
+                                    f"<b>Tipo de movimento:</b> {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[1]} {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[0]}\n"
                                     f"<b>Assertividade Estimada:</b> {maior_prob}%\n"
                                     f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
                                     f"👉 <i>Abra o ativo na corretora e prepare-se!</i>"
@@ -2152,7 +2203,10 @@ def bot_loop():
                                     "prox_minuto_entrada": prox_minuto_entrada,
                                     "momento_confirmacao": momento_confirmacao,
                                     "alert_id": novo_alert_id,
-                                    "tf": tf
+                                    "tf": tf,
+                                    "tipo_movimento": classificar_movimento(est_nome_encontrada, estrategias_confluentes)[0],
+                                    "icone_movimento": classificar_movimento(est_nome_encontrada, estrategias_confluentes)[1],
+                                    "confirmacao_em_processamento": False
                                 }
 
                                 # Agenda a confirmação independente da varredura.
