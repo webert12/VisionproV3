@@ -64,7 +64,7 @@ def get_user_state(email):
             "diagnostico": {
                 "ciclo_inicio": time.time(), "ciclo_num": 0, "ativos_analisados": 0, "dados_ok": 0,
                 "dados_falha": 0, "candidatos": 0, "rejeitados": 0,
-                "oportunidades_validadas": 0, "ultima_oportunidade": None,
+                "oportunidades_validadas": 0, "ultima_oportunidade": None, "sinais_prontos": 0, "sinais_enviados": 0, "confirmacoes": 0, "bloqueados_alerta": 0,
                 "ultimo_motivo": "Aguardando análise...", "motivo_contagem": {},
                 "estrategia_contagem": {}, "ultima_atualizacao": time.time(),
                 "ultimo_score": 0, "ultimo_direcao": None, "estrategias_concordantes": 0,
@@ -1880,7 +1880,7 @@ def command(cmd):
         st["sinais_enviados"].clear()
         st["diagnostico"] = {
             "ciclo_inicio": time.time(), "ciclo_num": 0, "ativos_analisados": 0, "dados_ok": 0, "dados_falha": 0,
-            "candidatos": 0, "rejeitados": 0, "oportunidades_validadas": 0, "ultima_oportunidade": None,
+            "candidatos": 0, "rejeitados": 0, "oportunidades_validadas": 0, "ultima_oportunidade": None, "sinais_prontos": 0, "sinais_enviados": 0, "confirmacoes": 0, "bloqueados_alerta": 0,
             "ultimo_motivo": "Iniciando diagnóstico...", "motivo_contagem": {}, "estrategia_contagem": {},
             "ultimo_score": 0, "ultimo_direcao": None, "ultima_atualizacao": time.time(),
             "estrategias_concordantes": 0, "estrategias_analisadas": 0, "ultimo_ativo_analisado": None,
@@ -2046,6 +2046,15 @@ def confirmar_alerta_agendado(user_email, alert_id):
             f"</span></div>"
         )
         st["aguardando_confirmacao"] = True
+        try:
+            diag = st.setdefault("diagnostico", {})
+            diag["confirmacoes"] = diag.get("confirmacoes", 0) + 1
+            diag["ultimo_motivo"] = (
+                f"{ativo}: SINAL CONFIRMADO — {sinal} | score {prob}/100"
+            )
+            diag["ultima_atualizacao"] = time.time()
+        except Exception:
+            pass
         st["alerta_ativo"] = None
         st["timer_confirmacao"] = None
 
@@ -2178,7 +2187,7 @@ def bot_loop():
         diag.update({
             "ciclo_inicio": cycle_start, "ativos_analisados": 0, "dados_ok": 0,
             "dados_falha": 0, "candidatos": 0, "rejeitados": 0,
-            "oportunidades_validadas": 0, "ultima_oportunidade": None,
+            "oportunidades_validadas": 0, "ultima_oportunidade": None, "sinais_prontos": 0, "sinais_enviados": 0, "confirmacoes": 0, "bloqueados_alerta": 0,
             "motivo_contagem": {}, "estrategia_contagem": {}, "ultimo_score": 0,
             "ultimo_direcao": None, "estrategias_concordantes": 0,
             "estrategias_analisadas": len(estrategias), "ultimo_ativo_analisado": None,
@@ -2222,7 +2231,15 @@ def bot_loop():
                                 except Exception: pass
                             pipe["futures"].clear(); pipe["next_due"].clear(); pipe["seen"].clear()
                             pipe["config"] = config_sig
-                            pipe["ordem"] = ativos_scan.copy(); random.shuffle(pipe["ordem"])
+                            # Ordem estável para reduzir a latência percebida e facilitar diagnóstico.
+                            # A cada ciclo fazemos uma rotação, em vez de embaralhar,
+                            # para que todos os ativos tenham prioridade equivalente.
+                            base_ordem = ativos_scan.copy()
+                            if base_ordem:
+                                rot = (pipe["cycle_num"] - 1) % len(base_ordem)
+                                pipe["ordem"] = base_ordem[rot:] + base_ordem[:rot]
+                            else:
+                                pipe["ordem"] = []
                             pipe["cycle_start"] = time.time(); pipe["cycle_num"] = 1
                             _reset_diag(st.setdefault("diagnostico", {}), pipe["cycle_start"], pipe["cycle_num"], estrategias_para_analisar)
 
@@ -2299,7 +2316,11 @@ def bot_loop():
 
                             diag["candidatos"] = diag.get("candidatos", 0) + 1
                             diag["ultima_oportunidade"] = time.time()
-                            diag["ultimo_score"] = max(x[2] for x in candidatos)
+                            score_candidato = max(x[2] for x in candidatos)
+                            # Não zerar o diagnóstico só porque o próximo ativo foi
+                            # rejeitado pelo motor avançado.
+                            diag["ultimo_score"] = int(score_candidato)
+                            diag["score_candidato"] = int(score_candidato)
 
                             por_dir = {"CALL": [], "PUT": []}
                             for item in candidatos:
@@ -2312,7 +2333,7 @@ def bot_loop():
 
                             if adv_sig not in ("CALL", "PUT"):
                                 diag["rejeitados"] = diag.get("rejeitados", 0) + 1
-                                diag["ultimo_score"] = int(adv_score)
+                                diag["ultimo_score"] = int(max(score_candidato, adv_score))
                                 diag["motivo_rejeicao"] = "MOTOR_NEUTRO"
                                 diag["ultimo_motivo"] = (
                                     f"{ativo}: motor avançado não confirmou direção"
@@ -2403,9 +2424,14 @@ def bot_loop():
                                 f"{concordancias} concordância(s)"
                             )
 
-                            # Conta a oportunidade uma única vez.
+                            # A oportunidade só é considerada "pronta" depois de passar
+                            # por estratégia + direção + score. Candidatos anteriores
+                            # não são confundidos com sinais realmente prontos.
                             diag["oportunidades_validadas"] = (
                                 diag.get("oportunidades_validadas", 0) + 1
+                            )
+                            diag["sinais_prontos"] = (
+                                diag.get("sinais_prontos", 0) + 1
                             )
 
                             # Estado é consultado aqui, e não uma vez por ciclo.
@@ -2414,6 +2440,7 @@ def bot_loop():
                                     f"{ativo}: sinal válido encontrado, "
                                     f"mas existe uma entrada em andamento"
                                 )
+                                diag["bloqueados_alerta"] = diag.get("bloqueados_alerta", 0) + 1
                                 _diag_inc(diag, "AGUARDANDO_CONFIRM")
                                 return
 
@@ -2423,23 +2450,36 @@ def bot_loop():
                             total_seg = tf * 60
                             seg_restantes = total_seg - seg_pass
 
-                            if seg_restantes <= 5:
-                                diag["rejeitados"] = diag.get("rejeitados", 0) + 1
-                                diag["ultimo_motivo"] = (
-                                    f"{ativo}: oportunidade encontrada, mas faltavam "
-                                    f"{int(seg_restantes)}s para a virada — janela perdida"
-                                )
-                                diag["ultimo_detalhe"] = (
-                                    f"Score {maior_prob}/100 | "
-                                    f"{concordancias} concordância(s)"
-                                )
-                                _diag_inc(diag, "JANELA_PERDIDA")
-                                return
-
                             prox_minuto_entrada = agora + timedelta(seconds=seg_restantes)
-                            momento_confirmacao = (
-                                prox_minuto_entrada - timedelta(seconds=5)
-                            )
+
+                            # Se a análise terminou nos últimos 5 segundos da vela,
+                            # não descartamos automaticamente um sinal já validado.
+                            # A confirmação é disparada imediatamente (com pequeno
+                            # atraso técnico) e a entrada continua sendo a abertura
+                            # da próxima vela.
+                            if seg_restantes <= 5:
+                                if seg_restantes < 0.8:
+                                    diag["rejeitados"] = diag.get("rejeitados", 0) + 1
+                                    diag["ultimo_motivo"] = (
+                                        f"{ativo}: sinal validado, mas a próxima vela "
+                                        f"começa em {seg_restantes:.1f}s"
+                                    )
+                                    diag["ultimo_detalhe"] = (
+                                        f"Score {maior_prob}/100 | "
+                                        f"{concordancias} concordância(s)"
+                                    )
+                                    _diag_inc(diag, "JANELA_INVIAVEL")
+                                    return
+                                momento_confirmacao = agora + timedelta(seconds=0.15)
+                                diag["ultimo_motivo"] = (
+                                    f"{ativo}: sinal VALIDADO em janela curta — "
+                                    f"confirmação imediata | entrada em {seg_restantes:.1f}s"
+                                )
+                                _diag_inc(diag, "JANELA_CURTA_CAPTURADA")
+                            else:
+                                momento_confirmacao = (
+                                    prox_minuto_entrada - timedelta(seconds=5)
+                                )
                             horario_saida = prox_minuto_entrada + timedelta(minutes=tf)
                             str_entrada = momento_confirmacao.strftime("%H:%M:%S")
                             str_saida = horario_saida.strftime("%H:%M")
@@ -2510,6 +2550,7 @@ def bot_loop():
                                 st["timer_confirmacao"] = timer
                                 timer.start()
 
+                                diag["sinais_enviados"] = diag.get("sinais_enviados", 0) + 1
                                 enviar_telegram_em_background(
                                     msg_pre_alerta,
                                     user_email,
@@ -2579,6 +2620,7 @@ def bot_loop():
                             st["timer_confirmacao"] = timer
                             timer.start()
 
+                            diag["sinais_enviados"] = diag.get("sinais_enviados", 0) + 1
                             enviar_telegram_em_background(
                                 msg_pre_alerta,
                                 user_email,
