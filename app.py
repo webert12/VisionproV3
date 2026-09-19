@@ -700,7 +700,7 @@ HTML_INDEX = """
                 if(document.getElementById('diag-fill')) document.getElementById('diag-fill').style.width = Math.min(100, d.ultimo_score || 0) + '%';
                 if(document.getElementById('diag-reason')) document.getElementById('diag-reason').innerText = 'Status: ' + (d.ultimo_motivo || 'Aguardando análise...');
                 if(document.getElementById('diag-detail')) document.getElementById('diag-detail').innerText = (d.ultimo_ativo_analisado || '—') + ' | ' + (d.ultimo_detalhe || 'Sem detalhe') + (d.ultimo_setup ? ' | Setup: ' + d.ultimo_setup : '');
-                 if(document.getElementById('diag-cycle')) document.getElementById('diag-cycle').innerText = 'Ciclo: ' + (d.ciclo_num || 0) + ' | Duração: ' + Number(d.ultimo_ciclo_segundos || 0).toFixed(1) + 's | Dados reais: ' + (d.dados_ok || 0) + '/' + (d.ativos_por_ciclo || 0) + ' | Histórico: ' + (d.historico_ativos || 0);
+                 if(document.getElementById('diag-cycle')) document.getElementById('diag-cycle').innerText = 'Ciclo: ' + (d.ciclo_num || 0) + ' | Duração: ' + Number(d.ultimo_ciclo_segundos || 0).toFixed(1) + 's | Dados reais: ' + (d.dados_ok || 0) + '/' + (d.ativos_por_ciclo || 0) + (d.aguardando_nova_vela ? ' | AGUARDANDO NOVA VELA' : '') + ' | Histórico: ' + (d.historico_ativos || 0);
                  if(document.getElementById('diag-strategies')) { const sc=d.estrategia_contagem||{}; const parts=Object.entries(sc).map(([k,v]) => k.replace('CONFLUENCIA_PRICE_ACTION','PRICE ACTION').replace('LOGICA_DO_PRECO','LÓGICA').replace('RSI_MACD_MA','RSI/MACD').replace('MHI1','MHI1').replace('REVERSAO','REVERSÃO')+': '+v); document.getElementById('diag-strategies').innerText='Estratégias com candidato: '+(parts.join(' | ')||'nenhuma'); }
                 
                 if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
@@ -2177,7 +2177,7 @@ def _somente_velas_fechadas(data, tf):
 # ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT V4 =================
 def bot_loop():
     """
-    Scanner V4 em pipeline contínuo.
+    Scanner V4.1 em pipeline contínuo, com ciclos sem janela artificial 0/0.
 
     Não espera o ciclo inteiro terminar: as coletas HTTP ficam em voo e cada
     resposta é analisada imediatamente. O ativo volta para a fila somente
@@ -2304,6 +2304,21 @@ def bot_loop():
                             # Mantém a análise no thread principal do bot.
                             if not st.get("bot_iniciado") or st.get("bot_pausado"):
                                 return
+
+                            # Não zera a tela no instante em que a rodada termina.
+                            # O próximo ciclo começa visualmente quando o primeiro
+                            # ativo realmente retorna com uma nova vela.
+                            if pipe.get("cycle_transition"):
+                                historico_preservado = {k: diag.get(k, 0) for k in (
+                                    "historico_ativos", "historico_dados_ok", "historico_candidatos",
+                                    "historico_rejeitados", "historico_sinais_prontos",
+                                    "historico_sinais_enviados", "historico_ciclos"
+                                )}
+                                _reset_diag(diag, pipe["cycle_start"], pipe["cycle_num"], estrategias_para_analisar)
+                                diag.update(historico_preservado)
+                                pipe["cycle_transition"] = False
+                                diag["aguardando_nova_vela"] = False
+                                diag["ultimo_detalhe"] = "Novo ciclo recebido — analisando ativos..."
 
                             diag["ativos_analisados"] = diag.get("ativos_analisados", 0) + 1
                             diag["ultimo_ativo_analisado"] = ativo
@@ -2747,30 +2762,29 @@ def bot_loop():
                                     diag["historico_ciclos"] = diag.get("historico_ciclos", 0) + 1
 
                                     pipe["cycle_num"] += 1
-                                    # Rotação real: muda a prioridade somente quando
-                                    # todos os ativos da rodada anterior foram vistos.
+                                    # A rodada terminou, mas NÃO zeramos a tela aqui.
+                                    # O próximo ativo pode só ficar disponível quando a próxima
+                                    # vela fechar; zerar imediatamente criava uma tela em 0/0
+                                    # durante dezenas de segundos. O próximo ciclo passa a
+                                    # valer no primeiro resultado novo.
                                     if pipe["ordem"]:
                                         rot = (pipe["cycle_num"] - 1) % len(pipe["ordem"])
                                         base_ordem = pipe["ordem"][:]
                                         pipe["ordem"] = base_ordem[rot:] + base_ordem[:rot]
                                     pipe["cycle_start"] = time.time()
                                     pipe["seen"].clear()
-
-                                    # Reinicia os contadores do ciclo, preservando o histórico.
-                                    historico_preservado = {k: diag.get(k, 0) for k in (
-                                        "historico_ativos", "historico_dados_ok", "historico_candidatos",
-                                        "historico_rejeitados", "historico_sinais_prontos",
-                                        "historico_sinais_enviados", "historico_ciclos"
-                                    )}
-                                    _reset_diag(diag, pipe["cycle_start"], pipe["cycle_num"], estrategias_para_analisar)
-                                    diag.update(historico_preservado)
+                                    pipe["cycle_transition"] = True
+                                    pipe["last_cycle_count"] = diag.get("ativos_analisados", 0)
                                     diag["ultimo_ciclo_segundos"] = duracao_ciclo
-                                    diag["ultimo_detalhe"] = f"Novo ciclo iniciado; histórico: {historico_preservado['historico_ativos']} ativos analisados"
+                                    diag["ultimo_detalhe"] = (
+                                        f"Ciclo {pipe['cycle_num'] - 1} concluído: "
+                                        f"{pipe['last_cycle_count']} ativos. Aguardando novas velas..."
+                                    )
 
                         # Preenche vagas imediatamente. Assim que um ativo termina,
                         # outro entra sem esperar o restante da lista.
                         futures_user = pipe["futures"]
-                        max_inflight = min(24, max(1, len(ativos_scan)))
+                        max_inflight = min(8, max(1, len(ativos_scan)))
                         ativos_inflight = {meta[0] for meta in futures_user.values()}
                         for ativo in pipe["ordem"]:
                             if len(futures_user) >= max_inflight:
@@ -2785,6 +2799,7 @@ def bot_loop():
                             futures_user[future] = (ativo, key, pipe["config"])
                             ativos_inflight.add(ativo)
 
+                        diag["aguardando_nova_vela"] = bool(pipe.get("cycle_transition"))
                         diag["ultima_atualizacao"] = time.time()
 
                     except Exception as e_usr:
