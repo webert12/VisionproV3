@@ -68,46 +68,115 @@ def get_client_ip():
     return request.remote_addr
 
 # ================= ENVIO E DELEÇÃO TELEGRAM =================
-def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
+def _telegram_request(method, payload=None, timeout=12):
+    """Executa uma chamada à API do Telegram e devolve resposta estruturada."""
     if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
-        print("⚠️ Telegram: TOKEN_TELEGRAM ou CHAT_ID_TELEGRAM não configurado.")
-        return None
-        
+        return False, None, "TOKEN_TELEGRAM ou CHAT_ID_TELEGRAM não configurado no ambiente."
+
     token = TOKEN_TELEGRAM.strip()
-    chat_id = CHAT_ID_TELEGRAM.strip()
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    
-    payload = {
-        "chat_id": chat_id, 
-        "text": mensagem, 
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
-    
+    url = f"https://api.telegram.org/bot{token}/{method}"
     try:
-        res = requests.post(url, json=payload, timeout=10)
-        r = res.json()
-        if r.get("ok"):
-            msg_id = r["result"]["message_id"]
-            if auto_delete:
-                threading.Thread(target=deletar_mensagem_atrasada, args=(msg_id, auto_delete), daemon=True).start()
-            return msg_id
-        else:
-            print(f"⚠️ Telegram API Recusou HTML ({r.get('description')}). Tentando formato Texto...")
-            texto_limpo = re.sub('<[^<]+?>', '', mensagem)
-            payload_plain = {
-                "chat_id": chat_id, 
-                "text": texto_limpo,
-                "disable_web_page_preview": True
-            }
-            res_plain = requests.post(url, json=payload_plain, timeout=10)
-            r_plain = res_plain.json()
-            if r_plain.get("ok"):
-                return r_plain["result"]["message_id"]
-            else:
-                print(f"❌ Telegram API Erro no Fallback: {r_plain}")
+        res = requests.post(url, json=payload or {}, timeout=timeout)
+        try:
+            data = res.json()
+        except ValueError:
+            return False, None, f"Telegram retornou HTTP {res.status_code} sem JSON válido."
+
+        if data.get("ok"):
+            return True, data.get("result"), None
+
+        descricao = data.get("description") or f"Erro HTTP {res.status_code}"
+        codigo = data.get("error_code", res.status_code)
+        return False, None, f"Telegram HTTP {codigo}: {descricao}"
+    except requests.exceptions.Timeout:
+        return False, None, "Tempo esgotado ao conectar com a API do Telegram."
+    except requests.exceptions.RequestException as e:
+        return False, None, f"Erro de conexão com o Telegram: {e}"
     except Exception as e:
-        print(f"❌ Erro de conexão com o Telegram: {e}")
+        return False, None, f"Erro inesperado no Telegram: {e}"
+
+
+def diagnosticar_telegram():
+    """Valida token, chat e permissões sem expor o token nos logs."""
+    if not TOKEN_TELEGRAM:
+        return False, "TOKEN_TELEGRAM não está configurado no Render."
+    if not CHAT_ID_TELEGRAM or not str(CHAT_ID_TELEGRAM).strip():
+        return False, "CHAT_ID_TELEGRAM não está configurado no Render."
+
+    ok_me, bot_info, err_me = _telegram_request("getMe", {}, timeout=10)
+    if not ok_me:
+        return False, f"Token do bot inválido ou inacessível: {err_me}"
+
+    ok_chat, chat_info, err_chat = _telegram_request(
+        "getChat", {"chat_id": str(CHAT_ID_TELEGRAM).strip()}, timeout=10
+    )
+    if not ok_chat:
+        return False, f"CHAT_ID_TELEGRAM inválido ou chat inacessível: {err_chat}"
+
+    bot_name = bot_info.get("username", "bot") if isinstance(bot_info, dict) else "bot"
+    chat_title = chat_info.get("title") or chat_info.get("username") or chat_info.get("first_name") or str(CHAT_ID_TELEGRAM)
+    return True, f"Bot @{bot_name} conectado ao chat {chat_title}."
+
+
+def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None, tentativas=3):
+    """Envia mensagem ao Telegram com retry e diagnóstico detalhado nos logs."""
+    if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
+        print("❌ Telegram não configurado: TOKEN_TELEGRAM ou CHAT_ID_TELEGRAM ausente.")
+        return None
+
+    chat_id = str(CHAT_ID_TELEGRAM).strip()
+    texto_html = str(mensagem)
+    ultimo_erro = "erro desconhecido"
+
+    for tentativa in range(1, max(1, tentativas) + 1):
+        ok, result, erro = _telegram_request(
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": texto_html,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True
+            },
+            timeout=15
+        )
+
+        if ok and isinstance(result, dict) and result.get("message_id"):
+            msg_id = result["message_id"]
+            print(f"✅ Telegram: mensagem enviada com sucesso (ID {msg_id}).")
+            if auto_delete:
+                threading.Thread(
+                    target=deletar_mensagem_atrasada,
+                    args=(msg_id, auto_delete),
+                    daemon=True
+                ).start()
+            return msg_id
+
+        ultimo_erro = erro or "Telegram não retornou message_id."
+
+        # Se o problema for HTML inválido, tenta texto puro imediatamente.
+        if tentativa == 1 and (erro and ("parse" in erro.lower() or "entities" in erro.lower() or "html" in erro.lower())):
+            texto_limpo = re.sub(r"<[^<]+?>", "", texto_html)
+            ok_plain, result_plain, erro_plain = _telegram_request(
+                "sendMessage",
+                {
+                    "chat_id": chat_id,
+                    "text": texto_limpo,
+                    "disable_web_page_preview": True
+                },
+                timeout=15
+            )
+            if ok_plain and isinstance(result_plain, dict) and result_plain.get("message_id"):
+                msg_id = result_plain["message_id"]
+                print(f"✅ Telegram: mensagem enviada em texto puro (ID {msg_id}).")
+                if auto_delete:
+                    threading.Thread(target=deletar_mensagem_atrasada, args=(msg_id, auto_delete), daemon=True).start()
+                return msg_id
+            ultimo_erro = erro_plain or ultimo_erro
+
+        if tentativa < max(1, tentativas):
+            time.sleep(1.2 * tentativa)
+
+    print(f"❌ Telegram: falha definitiva após {max(1, tentativas)} tentativa(s): {ultimo_erro}")
     return None
 
 def deletar_mensagem_telegram(msg_id):
@@ -1360,12 +1429,23 @@ def command(cmd):
             f"👤 Usuário: {user}\n"
             f"⏰ Horário: {agora_brasilia().strftime('%H:%M:%S')}"
         )
+        diagnostico_ok, diagnostico_msg = diagnosticar_telegram()
+        if not diagnostico_ok:
+            st["ultimo_sinal"] = (
+                "<div class='system-console' style='color:#ef4444;'>"
+                f"❌ TELEGRAM NÃO CONFIGURADO/ACESSÍVEL.<br>{diagnostico_msg}"
+                "</div>"
+            )
+            return jsonify({"ok": False, "error": diagnostico_msg}), 502
+
         msg_id = enviar_telegram(msg_teste, user_solicitante=user)
         if msg_id:
             st["ultimo_sinal"] = "<div class='system-console' style='color:#10b981;'>✅ MENSAGEM DE TESTE ENVIADA AO TELEGRAM COM SUCESSO!</div>"
-        else:
-            st["ultimo_sinal"] = "<div class='system-console' style='color:#ef4444;'>❌ FALHA AO ENVIAR PARA O TELEGRAM. VERIFIQUE SE O BOT É ADMINISTRADOR DO CANAL.</div>"
-        return jsonify({"ok": True})
+            return jsonify({"ok": True, "message_id": msg_id, "diagnostico": diagnostico_msg})
+
+        erro = "A API do Telegram foi validada, mas o envio da mensagem falhou. Veja os logs do Render."
+        st["ultimo_sinal"] = f"<div class='system-console' style='color:#ef4444;'>❌ FALHA NO ENVIO TELEGRAM.<br>{erro}</div>"
+        return jsonify({"ok": False, "error": erro, "diagnostico": diagnostico_msg}), 502
 
     elif cmd == "start_bot":
         st["bot_iniciado"] = True
