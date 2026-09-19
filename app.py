@@ -23,7 +23,7 @@ def agora_brasilia():
     return datetime.now(FUSO_SP)
 
 # ================= CONFIGURAÇÕES DE AMBIENTE E BOT TELEGRAM =================
-TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "").strip()
+TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU").strip()
 CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
 
