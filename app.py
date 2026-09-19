@@ -23,8 +23,8 @@ def agora_brasilia():
     return datetime.now(FUSO_SP)
 
 # ================= CONFIGURAÇÕES DE AMBIENTE E BOT TELEGRAM =================
-TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU").strip()
-CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1003474284931")
+TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "").strip()
+CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
 
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
@@ -57,6 +57,7 @@ def get_user_state(email):
             "sinais_enviados": {},
             "alerta_ativo": None,  # Guarda informações do alerta ativo no ciclo
             "timer_confirmacao": None,  # Timer independente para não depender da varredura
+            "sinal_confirmado_dados": None,
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
             "sinal_confirmado_dados": None,
@@ -1038,6 +1039,20 @@ NOME_ESTRATEGIAS_DISPLAY = {
     "TODAS": "Análise Dinâmica Múltipla"
 }
 
+# Peso relativo usado SOMENTE para desempatar sinais com a mesma probabilidade.
+# A porcentagem continua sendo o primeiro critério; em empate, confluência e
+# força da estratégia ajudam a decidir se um novo ativo realmente merece
+# substituir o alerta atual. Esses pesos são configuráveis.
+FORCA_ESTRATEGIA = {
+    "RSI_MACD_MA": 4,
+    "LOGICA_DO_PRECO": 3,
+    "REVERSAO": 2,
+    "MHI1": 1,
+}
+
+def forca_estrategia(nome):
+    return FORCA_ESTRATEGIA.get(nome, 0)
+
 # ================= ATIVOS DIVIDIDOS ABERTO E OTC =================
 ATIVOS_BASE = {
     "FOREX_ABERTO": [
@@ -1630,9 +1645,28 @@ def resultado(res):
             enviar_telegram(msg_resultado, user_solicitante=user)
 
         elif res == 'pular':
+            # O alerta de preparação não deve permanecer no canal depois que
+            # o operador decidir pular a oportunidade. Capturamos o ID antes
+            # de invalidar o alerta para impedir que uma thread de envio em
+            # andamento publique o alerta antigo depois do PULAR.
+            alerta_para_apagar = st.get("alerta_ativo") or {}
+            msg_alerta_id = alerta_para_apagar.get("msg_id")
+
+            if st.get("timer_confirmacao"):
+                try:
+                    st["timer_confirmacao"].cancel()
+                except Exception:
+                    pass
+            st["timer_confirmacao"] = None
+            st["alerta_ativo"] = None
+
+            if msg_alerta_id:
+                deletar_mensagem_telegram(msg_alerta_id)
+
             atualizar_ultimo_sinal_bd(user, "Ignorado")
             enviar_telegram(
-                "⚪ <b>SINAL IGNORADO / PULADO</b>\n\n"
+                "⚪ <b>SINAL PULADO</b>\n\n"
+                "A oportunidade foi descartada e o alerta anterior foi removido do canal.\n"
                 "A operação não foi contabilizada como WIN ou RED.",
                 user_solicitante=user
             )
@@ -1872,10 +1906,12 @@ def bot_loop():
                         sinal_encontrado = None
                         est_nome_encontrada = None
                         maior_prob = 0
+                        confluencia_encontrada = 0
+                        forca_encontrada = 0
+                        estrategias_confluentes = []
 
                         if user_est == "TODAS":
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
-                            random.shuffle(estrategias_para_analisar)
                         elif "," in str(user_est):
                             estrategias_para_analisar = [e.strip() for e in user_est.split(",") if e.strip() in LISTA_ESTRATEGIAS]
                         elif user_est in LISTA_ESTRATEGIAS:
@@ -1883,12 +1919,47 @@ def bot_loop():
                         else:
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
 
+                        # Analisa todas as estratégias para identificar não apenas
+                        # a maior probabilidade, mas também confluência de direção.
+                        candidatos = []
                         for est_nome in estrategias_para_analisar:
                             sinal_test, prob_test = analisar_estrategia(data, est_nome)
-                            if sinal_test and prob_test > maior_prob:
-                                sinal_encontrado = sinal_test
-                                est_nome_encontrada = est_nome
-                                maior_prob = prob_test
+                            if sinal_test and prob_test:
+                                candidatos.append({
+                                    "estrategia": est_nome,
+                                    "sinal": sinal_test,
+                                    "probabilidade": prob_test,
+                                    "forca": forca_estrategia(est_nome)
+                                })
+
+                        if candidatos:
+                            # Para cada direção, conta quantas estratégias concordam.
+                            for candidato in candidatos:
+                                candidato["confluencia"] = sum(
+                                    1 for outro in candidatos
+                                    if outro["sinal"] == candidato["sinal"]
+                                )
+
+                            # Probabilidade é o critério principal. Em empate,
+                            # confluência e força da estratégia desempatarão.
+                            escolhido = max(
+                                candidatos,
+                                key=lambda x: (
+                                    x["probabilidade"],
+                                    x["confluencia"],
+                                    x["forca"]
+                                )
+                            )
+
+                            sinal_encontrado = escolhido["sinal"]
+                            est_nome_encontrada = escolhido["estrategia"]
+                            maior_prob = escolhido["probabilidade"]
+                            confluencia_encontrada = escolhido["confluencia"]
+                            forca_encontrada = escolhido["forca"]
+                            estrategias_confluentes = [
+                                c["estrategia"] for c in candidatos
+                                if c["sinal"] == sinal_encontrado
+                            ]
 
                         if sinal_encontrado and not bloquear_novos_alertas:
                             agora = agora_brasilia()
@@ -1913,32 +1984,64 @@ def bot_loop():
                             nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
 
                             # O canal mantém SOMENTE um alerta de preparação por vez.
-                            # Se o ativo mudar, o alerta anterior é substituído mesmo que
-                            # a probabilidade do novo ativo seja menor. Se for o mesmo
-                            # ativo, só substituímos quando surgir uma probabilidade maior.
+                            # REGRA DE SUBSTITUIÇÃO:
+                            # 1) Probabilidade maior -> substitui.
+                            # 2) Probabilidade menor -> NÃO substitui.
+                            # 3) Probabilidade igual -> só substitui se houver
+                            #    estratégia mais forte OU maior confluência.
+                            # Assim, um ativo novo com a mesma porcentagem não toma
+                            # o lugar do alerta atual sem um diferencial técnico.
                             if alerta:
                                 ativo_anterior = alerta.get("ativo")
                                 prob_anterior = alerta.get("probabilidade", 0)
-                                deve_substituir = (
-                                    ativo != ativo_anterior
-                                    or maior_prob > prob_anterior
-                                )
+                                confluencia_anterior = alerta.get("confluencia", 1)
+                                forca_anterior = alerta.get("forca_estrategia", 0)
+
+                                if maior_prob > prob_anterior:
+                                    deve_substituir = True
+                                    motivo_alerta = "MAIOR PROBABILIDADE DETECTADA"
+                                elif maior_prob < prob_anterior:
+                                    deve_substituir = False
+                                    motivo_alerta = "PROBABILIDADE INFERIOR — ALERTA MANTIDO"
+                                else:
+                                    deve_substituir = (
+                                        confluencia_encontrada > confluencia_anterior
+                                        or forca_encontrada > forca_anterior
+                                    )
+                                    if confluencia_encontrada > confluencia_anterior and forca_encontrada > forca_anterior:
+                                        motivo_alerta = "MESMA PROBABILIDADE + MAIOR CONFLUÊNCIA E FORÇA"
+                                    elif confluencia_encontrada > confluencia_anterior:
+                                        motivo_alerta = "MESMA PROBABILIDADE + MAIOR CONFLUÊNCIA"
+                                    elif forca_encontrada > forca_anterior:
+                                        motivo_alerta = "MESMA PROBABILIDADE + ESTRATÉGIA MAIS FORTE"
+                                    else:
+                                        motivo_alerta = "MESMA PROBABILIDADE — ALERTA MANTIDO"
+
+                                # Se for o mesmo ativo e houver apenas a mesma
+                                # qualidade, não cria um novo alerta desnecessariamente.
+                                if ativo == ativo_anterior and maior_prob == prob_anterior and not deve_substituir:
+                                    continue
 
                                 if deve_substituir:
                                     msg_antigo_id = alerta.get("msg_id")
                                     novo_alert_id = str(time.time_ns())
-                                    motivo_alerta = (
-                                        "NOVO ATIVO DETECTADO"
-                                        if ativo != ativo_anterior
-                                        else "MAIOR PROBABILIDADE DETECTADA"
-                                    )
+                                    if ativo != ativo_anterior and maior_prob > prob_anterior:
+                                        motivo_alerta = "NOVO ATIVO + MAIOR PROBABILIDADE"
+                                    elif ativo != ativo_anterior and maior_prob == prob_anterior:
+                                        motivo_alerta = motivo_alerta
 
+                                    confluencia_txt = (
+                                        f"{confluencia_encontrada} estratégias em confluência"
+                                        if confluencia_encontrada > 1
+                                        else "1 estratégia identificada"
+                                    )
                                     msg_pre_alerta = (
-                                        f"⚡ <b>ALERTA ATUALIZADO — {motivo_alerta}!</b> ⚡\n\n"
+                                        f"⚡ <b>ALERTA ATUALIZADO — {motivo_alerta}</b> ⚡\n\n"
                                         f"<b>Ativo:</b> {ativo} ({maior_prob}% de Assertividade)\n"
                                         f"<b>Timeframe:</b> M{tf}\n"
                                         f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
-                                        f"<b>Estratégia:</b> {nome_est_formatado}\n"
+                                        f"<b>Estratégia principal:</b> {nome_est_formatado}\n"
+                                        f"<b>Confluência:</b> {confluencia_txt}\n"
                                         f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
                                         f"👉 <i>O alerta anterior foi cancelado. Considere somente este novo alerta.</i>"
                                     )
@@ -1950,6 +2053,9 @@ def bot_loop():
                                         "estrategia": est_nome_encontrada,
                                         "estrategia_fmt": nome_est_formatado,
                                         "probabilidade": maior_prob,
+                                        "confluencia": confluencia_encontrada,
+                                        "forca_estrategia": forca_encontrada,
+                                        "estrategias_confluentes": estrategias_confluentes,
                                         "msg_id": None,
                                         "str_entrada": str_entrada,
                                         "str_saida": str_saida,
@@ -1988,9 +2094,9 @@ def bot_loop():
 
                                     st["ultimo_sinal"] = (
                                         f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
-                                        f"⚡ <b>ALERTA SUBSTITUÍDO (MAIOR PROBABILIDADE: {maior_prob}%)</b> ⚡<br>"
+                                        f"⚡ <b>ALERTA SUBSTITUÍDO ({motivo_alerta})</b> ⚡<br>"
                                         f"<b>NOVO ATIVO: {ativo}</b> | <b>DIREÇÃO: <span style='color:{'#10b981' if sinal_encontrado=='CALL' else '#ef4444'}'>{sinal_encontrado}</span></b> | Entrada às <b>{str_entrada}</b> (M{tf})<br>"
-                                        f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span>"
+                                        f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b> | Confluência: <b>{confluencia_encontrada}</b></span>"
                                         f"</div>"
                                     )
                                     alerta = st["alerta_ativo"]
@@ -2001,12 +2107,18 @@ def bot_loop():
 
                                 st["sinais_enviados"][ativo] = str_entrada
 
+                                confluencia_txt = (
+                                    f"{confluencia_encontrada} estratégias em confluência"
+                                    if confluencia_encontrada > 1
+                                    else "1 estratégia identificada"
+                                )
                                 msg_pre_alerta = (
                                     f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n"
                                     f"<b>Ativo:</b> {ativo}\n"
                                     f"<b>Timeframe:</b> M{tf}\n"
                                     f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
                                     f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
+                                    f"<b>Confluência:</b> {confluencia_txt}\n"
                                     f"<b>Assertividade Estimada:</b> {maior_prob}%\n"
                                     f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
                                     f"👉 <i>Abra o ativo na corretora e prepare-se!</i>"
