@@ -2230,14 +2230,11 @@ def bot_loop():
                         diag["ativos_por_ciclo"] = len(ativos_scan)
                         diag["estrategias_analisadas"] = len(estrategias_para_analisar)
 
-                        for ativo in ativos_scan:
-                            ticker = MAPA_TICKERS.get(ativo, ativo)
-                            key = f"{ticker}_{tf}"
-                            if key in ohlc_cache:
-                                resultados_cache.append(
-                                    (ativo, key, ohlc_cache[key].get("data"))
-                                )
-
+                        # Os dados são obtidos pelo pipeline abaixo. Não há uma
+                        # lista de cache aqui: a versão anterior referenciava
+                        # `resultados_cache`/`ohlc_cache` sem inicializá-los, o que
+                        # interrompia silenciosamente esta etapa e deixava a tela
+                        # presa em "INICIANDO VARREDURA...".
                         def processar_resultado(ativo, key, data):
                             # Mantém a análise no thread principal do bot.
                             if not st.get("bot_iniciado") or st.get("bot_pausado"):
