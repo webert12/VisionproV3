@@ -1149,8 +1149,16 @@ def get_data_v2(ticker, tf, velas_minimas=60):
             'Accept': 'application/json, text/plain, */*'
         }
         
-        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d"
-        res = requests.get(url, headers=headers, timeout=5.0)
+        # Para M1/M5, baixar 5 dias inteiros é desnecessário e deixa cada ciclo
+        # pesado. O motor precisa somente das últimas velas fechadas.
+        if int(tf) <= 1:
+            yahoo_range = "1d"
+        elif int(tf) <= 5:
+            yahoo_range = "2d"
+        else:
+            yahoo_range = "5d"
+        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range={yahoo_range}"
+        res = requests.get(url, headers=headers, timeout=(1.8, 2.8))
         
         if res.status_code == 200 and 'chart' in res.json():
             data_json = res.json()
@@ -1179,7 +1187,7 @@ def get_data_v2(ticker, tf, velas_minimas=60):
         if base_ticker.endswith("-USD"):
             crypto_symbol = base_ticker[:-4].replace("-", "")
             url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=100&aggregate={tf}"
-            r_alt = requests.get(url_alt, timeout=5.0).json()
+            r_alt = requests.get(url_alt, timeout=(1.8, 2.8)).json()
             
             if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
                 data_list = r_alt['Data']['Data']
@@ -2124,128 +2132,104 @@ def _somente_velas_fechadas(data, tf):
         return None
 
 
-# ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT =================
+# ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT V2 =================
 def bot_loop():
     """
-    Scanner contínuo e orientado por conclusão de requisições.
+    Scanner V2 em pipeline contínuo.
 
-    Melhorias principais:
-    - não espera todos os ativos terminarem para começar a analisar;
-    - cada ativo é analisado assim que seus dados chegam;
-    - não usa vela em formação;
-    - cache curto por ativo/timeframe;
-    - estado de bloqueio do sinal é consultado dinamicamente;
-    - evita contar duas vezes a mesma oportunidade validada;
-    - uma falha de um ativo não interrompe o restante da varredura.
+    Não espera o ciclo inteiro terminar: as coletas HTTP ficam em voo e cada
+    resposta é analisada imediatamente. O ativo volta para a fila somente
+    quando houver uma nova vela fechada para analisar.
     """
-    ohlc_cache = {}
-    CACHE_TTL = 8.0
+    executor = ThreadPoolExecutor(max_workers=24)
+    pipelines = {}
 
-    while True:
+    def _ativos_do_mercado(mkt):
+        if mkt == "TODOS":
+            ativos = (ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] +
+                      ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"])
+        elif mkt == "ABERTO_TODOS":
+            ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
+        elif mkt == "OTC_TODOS":
+            ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+        else:
+            ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
+        return list(dict.fromkeys(ativos))
+
+    def _estrategias(user_est):
+        if user_est == "TODAS":
+            return LISTA_ESTRATEGIAS.copy()
+        if "," in str(user_est):
+            return [e.strip() for e in str(user_est).split(",") if e.strip() in LISTA_ESTRATEGIAS]
+        if user_est in LISTA_ESTRATEGIAS:
+            return [user_est]
+        return LISTA_ESTRATEGIAS.copy()
+
+    def _proxima_atualizacao(tf):
         try:
-            usuarios_ativos = list(DADOS_USUARIOS.items())
-            if not usuarios_ativos:
-                time.sleep(1.0)
-                continue
+            dur = max(60, int(tf) * 60)
+            agora = time.time()
+            proxima = (int(agora) // dur + 1) * dur
+            return max(0.5, proxima - agora + 0.8)
+        except Exception:
+            return 2.0
 
-            agora_ts = time.time()
-            ohlc_cache = {
-                k: v for k, v in ohlc_cache.items()
-                if agora_ts - v.get("time", 0) < CACHE_TTL
-            }
+    def _reset_diag(diag, cycle_start, ciclo_num, estrategias):
+        diag.update({
+            "ciclo_inicio": cycle_start, "ativos_analisados": 0, "dados_ok": 0,
+            "dados_falha": 0, "candidatos": 0, "rejeitados": 0,
+            "oportunidades_validadas": 0, "ultima_oportunidade": None,
+            "motivo_contagem": {}, "estrategia_contagem": {}, "ultimo_score": 0,
+            "ultimo_direcao": None, "estrategias_concordantes": 0,
+            "estrategias_analisadas": len(estrategias), "ultimo_ativo_analisado": None,
+            "ultimo_setup": None,
+            "ultimo_detalhe": "Pipeline ativo — coletando e analisando em paralelo...",
+            "score_bruto": 0, "ultimo_motivo": "Coletando dados...",
+            "ultima_atualizacao": time.time(), "ciclo_num": ciclo_num,
+            "ativos_por_ciclo": 0, "ultimo_ciclo_segundos": 0.0
+        })
 
-            for user_email, st in usuarios_ativos:
-                try:
-                    if not st.get("bot_iniciado") or st.get("bot_pausado"):
-                        continue
-                    if time.time() < st.get("inicio_varredura", 0):
-                        continue
+    try:
+        while True:
+            try:
+                usuarios_ativos = list(DADOS_USUARIOS.items())
+                agora_ts = time.time()
+                if not usuarios_ativos:
+                    time.sleep(0.5); continue
 
-                    tf = int(st.get("timeframe", 5))
-                    mkt = st.get("tipo_mercado", "TODOS")
-                    user_est = st.get("estrategia", "TODAS")
-                    diag = st.setdefault("diagnostico", {})
-                    cycle_start = time.time()
+                for user_email, st in usuarios_ativos:
+                    try:
+                        if not st.get("bot_iniciado") or st.get("bot_pausado"):
+                            continue
+                        if agora_ts < st.get("inicio_varredura", 0):
+                            continue
 
-                    if mkt == "TODOS":
-                        ativos = (
-                            ATIVOS_BASE["FOREX_ABERTO"]
-                            + ATIVOS_BASE["CRIPTO_ABERTO"]
-                            + ATIVOS_BASE["FOREX_OTC"]
-                            + ATIVOS_BASE["CRIPTO_OTC"]
-                        )
-                    elif mkt == "ABERTO_TODOS":
-                        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
-                    elif mkt == "OTC_TODOS":
-                        ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
-                    else:
-                        ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
+                        tf = int(st.get("timeframe", 5))
+                        mkt = st.get("tipo_mercado", "TODOS")
+                        user_est = st.get("estrategia", "TODAS")
+                        ativos_scan = _ativos_do_mercado(mkt)
+                        estrategias_para_analisar = _estrategias(user_est)
+                        config_sig = (tf, mkt, str(user_est), tuple(ativos_scan), tuple(estrategias_para_analisar))
 
-                    # Remove duplicatas preservando a ordem.
-                    ativos_scan = list(dict.fromkeys(ativos))
-                    random.shuffle(ativos_scan)
+                        pipe = pipelines.setdefault(user_email, {
+                            "config": None, "futures": {}, "next_due": {}, "seen": set(),
+                            "cycle_start": time.time(), "cycle_num": 0, "ordem": []
+                        })
 
-                    if user_est == "TODAS":
-                        estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
-                        random.shuffle(estrategias_para_analisar)
-                    elif "," in str(user_est):
-                        estrategias_para_analisar = [
-                            e.strip() for e in user_est.split(",")
-                            if e.strip() in LISTA_ESTRATEGIAS
-                        ]
-                    elif user_est in LISTA_ESTRATEGIAS:
-                        estrategias_para_analisar = [user_est]
-                    else:
-                        estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+                        if pipe["config"] != config_sig:
+                            for fut in list(pipe["futures"]):
+                                try: fut.cancel()
+                                except Exception: pass
+                            pipe["futures"].clear(); pipe["next_due"].clear(); pipe["seen"].clear()
+                            pipe["config"] = config_sig
+                            pipe["ordem"] = ativos_scan.copy(); random.shuffle(pipe["ordem"])
+                            pipe["cycle_start"] = time.time(); pipe["cycle_num"] = 1
+                            _reset_diag(st.setdefault("diagnostico", {}), pipe["cycle_start"], pipe["cycle_num"], estrategias_para_analisar)
 
-                    # Diagnóstico representa o CICLO ATUAL, não um acumulado indefinido.
-                    diag.update({
-                        "ciclo_inicio": cycle_start,
-                        "ativos_analisados": 0,
-                        "dados_ok": 0,
-                        "dados_falha": 0,
-                        "candidatos": 0,
-                        "rejeitados": 0,
-                        "oportunidades_validadas": 0,
-                        "ultima_oportunidade": None,
-                        "motivo_contagem": {},
-                        "estrategia_contagem": {},
-                        "ultimo_score": 0,
-                        "ultimo_direcao": None,
-                        "estrategias_concordantes": 0,
-                        "estrategias_analisadas": len(estrategias_para_analisar),
-                        "ultimo_ativo_analisado": None,
-                        "ultimo_setup": None,
-                        "ultimo_detalhe": "Coletando dados em paralelo...",
-                        "score_bruto": 0
-                    })
-                    diag["ciclo_num"] = diag.get("ciclo_num", 0) + 1
+                        diag = st.setdefault("diagnostico", {})
+                        diag["ativos_por_ciclo"] = len(ativos_scan)
+                        diag["estrategias_analisadas"] = len(estrategias_para_analisar)
 
-                    # Requisições antigas são reaproveitadas; as demais são buscadas
-                    # em paralelo e processadas imediatamente quando terminam.
-                    futuros = {}
-                    for ativo in ativos_scan:
-                        ticker = MAPA_TICKERS.get(ativo, ativo)
-                        key = f"{ticker}_{tf}"
-                        if key not in ohlc_cache:
-                            futuros_key = f"{ativo}|{key}"
-                            futuros[futuros_key] = (
-                                ativo,
-                                key,
-                                ticker
-                            )
-
-                    if futuros:
-                        executor = ThreadPoolExecutor(
-                            max_workers=min(24, max(1, len(futuros)))
-                        )
-                        future_map = {}
-                        for _, (ativo, key, ticker) in futuros.items():
-                            future = executor.submit(get_data_v2, ticker, tf, 60)
-                            future_map[future] = (ativo, key)
-
-                        # Dados em cache também entram no mesmo fluxo de análise.
-                        resultados_cache = []
                         for ativo in ativos_scan:
                             ticker = MAPA_TICKERS.get(ativo, ativo)
                             key = f"{ticker}_{tf}"
@@ -2623,58 +2607,72 @@ def bot_loop():
                                 )
                             }
 
-                        # Processa primeiro os dados que já estavam em cache.
-                        for ativo, key, data in resultados_cache:
-                            processar_resultado(ativo, key, data)
-
-                        # Depois processa cada resposta assim que chega.
-                        for future in as_completed(future_map):
-                            ativo, key = future_map[future]
+                        # Consome apenas futures concluídos. Nenhum request lento
+                        # bloqueia a análise dos demais ativos.
+                        futures_user = pipe["futures"]
+                        for future in list(futures_user.keys()):
+                            if not future.done():
+                                continue
+                            ativo, key, generation = futures_user.pop(future)
                             try:
                                 data = future.result()
                             except Exception as exc:
-                                print(f"⚠️ Coleta {ativo} falhou: {exc}")
-                                data = None
+                                print(f"⚠️ Coleta {ativo} falhou: {exc}"); data = None
 
-                            if data:
-                                ohlc_cache[key] = {
-                                    "data": data,
-                                    "time": time.time()
-                                }
+                            if generation != pipe.get("config"):
+                                continue
 
+                            pipe["next_due"][key] = (
+                                time.time() + _proxima_atualizacao(tf) if data else time.time() + 1.5
+                            )
                             processar_resultado(ativo, key, data)
 
-                        # Não deixa futures presos no executor após o ciclo.
-                        executor.shutdown(wait=False, cancel_futures=True)
+                            if key not in pipe["seen"]:
+                                pipe["seen"].add(key)
+                                if len(pipe["seen"]) >= len(ativos_scan):
+                                    diag["ultimo_ciclo_segundos"] = round(time.time() - pipe["cycle_start"], 2)
+                                    pipe["cycle_num"] += 1
+                                    diag["ciclo_num"] = pipe["cycle_num"]
+                                    pipe["cycle_start"] = time.time()
+                                    pipe["seen"].clear()
 
-                    else:
-                        # Todos os ativos estão no cache.
-                        for ativo in ativos_scan:
+                        # Preenche vagas imediatamente. Assim que um ativo termina,
+                        # outro entra sem esperar o restante da lista.
+                        futures_user = pipe["futures"]
+                        max_inflight = min(24, max(1, len(ativos_scan)))
+                        ativos_inflight = {meta[0] for meta in futures_user.values()}
+                        for ativo in pipe["ordem"]:
+                            if len(futures_user) >= max_inflight:
+                                break
+                            if ativo in ativos_inflight:
+                                continue
                             ticker = MAPA_TICKERS.get(ativo, ativo)
                             key = f"{ticker}_{tf}"
-                            processar_resultado(
-                                ativo,
-                                key,
-                                ohlc_cache.get(key, {}).get("data")
-                            )
+                            if agora_ts < pipe["next_due"].get(key, 0):
+                                continue
+                            future = executor.submit(get_data_v2, ticker, tf, 60)
+                            futures_user[future] = (ativo, key, pipe["config"])
+                            ativos_inflight.add(ativo)
 
-                    elapsed = time.time() - cycle_start
-                    diag["ultimo_ciclo_segundos"] = round(elapsed, 2)
-                    diag["ativos_por_ciclo"] = len(ativos_scan)
-                    diag["ultima_atualizacao"] = time.time()
+                        diag["ultima_atualizacao"] = time.time()
 
-                except Exception as e_usr:
-                    print(f"❌ Erro no loop do usuário {user_email}: {e_usr}")
+                    except Exception as e_usr:
+                        print(f"❌ Erro no pipeline do usuário {user_email}: {e_usr}")
 
-            # Pequena pausa; o scanner volta rapidamente para capturar a próxima
-            # atualização de mercado.
-            time.sleep(0.20)
+                emails_atuais = {e for e, _ in usuarios_ativos}
+                for email in list(pipelines.keys()):
+                    if email not in emails_atuais:
+                        pipe = pipelines.pop(email)
+                        for fut in list(pipe.get("futures", {})):
+                            try: fut.cancel()
+                            except Exception: pass
 
-        except Exception as err:
-            print(f"❌ Erro no loop global do bot: {err}")
-            time.sleep(1.0)
-
-
+                time.sleep(0.10)
+            except Exception as err:
+                print(f"❌ Erro no loop global do bot: {err}"); time.sleep(0.5)
+    finally:
+        try: executor.shutdown(wait=False, cancel_futures=True)
+        except Exception: pass
 # ================= THREAD BACKGROUND =================
 thread_iniciada = False
 lock_thread = threading.Lock()
