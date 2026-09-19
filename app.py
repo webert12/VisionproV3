@@ -70,7 +70,7 @@ def get_user_state(email):
                 "ultimo_score": 0, "ultimo_direcao": None, "estrategias_concordantes": 0,
                 "estrategias_analisadas": 0, "ultimo_ativo_analisado": None,
                 "ultimo_setup": None, "ultimo_detalhe": "Nenhum ativo analisado ainda.",
-                "ultimo_ciclo_segundos": 0.0, "ativos_por_ciclo": 0
+                "ultimo_ciclo_segundos": 0.0, "ativos_por_ciclo": 0, "dados_atrasados": 0, "sem_dados": 0, "historico_ativos": 0, "historico_dados_ok": 0, "historico_candidatos": 0, "historico_rejeitados": 0, "historico_sinais_prontos": 0, "historico_sinais_enviados": 0, "historico_ciclos": 0
             }
         }
     return DADOS_USUARIOS[email_clean]
@@ -700,7 +700,7 @@ HTML_INDEX = """
                 if(document.getElementById('diag-fill')) document.getElementById('diag-fill').style.width = Math.min(100, d.ultimo_score || 0) + '%';
                 if(document.getElementById('diag-reason')) document.getElementById('diag-reason').innerText = 'Status: ' + (d.ultimo_motivo || 'Aguardando análise...');
                 if(document.getElementById('diag-detail')) document.getElementById('diag-detail').innerText = (d.ultimo_ativo_analisado || '—') + ' | ' + (d.ultimo_detalhe || 'Sem detalhe') + (d.ultimo_setup ? ' | Setup: ' + d.ultimo_setup : '');
-                 if(document.getElementById('diag-cycle')) document.getElementById('diag-cycle').innerText = 'Ciclo: ' + (d.ciclo_num || 0) + ' | Duração: ' + Number(d.ultimo_ciclo_segundos || 0).toFixed(1) + 's | Dados reais: ' + (d.dados_ok || 0) + '/' + (d.ativos_analisados || 0);
+                 if(document.getElementById('diag-cycle')) document.getElementById('diag-cycle').innerText = 'Ciclo: ' + (d.ciclo_num || 0) + ' | Duração: ' + Number(d.ultimo_ciclo_segundos || 0).toFixed(1) + 's | Dados reais: ' + (d.dados_ok || 0) + '/' + (d.ativos_por_ciclo || 0) + ' | Histórico: ' + (d.historico_ativos || 0);
                  if(document.getElementById('diag-strategies')) { const sc=d.estrategia_contagem||{}; const parts=Object.entries(sc).map(([k,v]) => k.replace('CONFLUENCIA_PRICE_ACTION','PRICE ACTION').replace('LOGICA_DO_PRECO','LÓGICA').replace('RSI_MACD_MA','RSI/MACD').replace('MHI1','MHI1').replace('REVERSAO','REVERSÃO')+': '+v); document.getElementById('diag-strategies').innerText='Estratégias com candidato: '+(parts.join(' | ')||'nenhuma'); }
                 
                 if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
@@ -1141,31 +1141,56 @@ for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X
 for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
-def get_data_v2(ticker, tf, velas_minimas=60):
+def get_data_v2(ticker, tf, velas_minimas=60, return_meta=False):
+    """Obtém OHLC real e, opcionalmente, metadados da fonte.
+
+    return_meta=True -> (ohlc_or_none, meta)
+    return_meta=False -> comportamento compatível com as chamadas antigas.
+    """
+    meta = {
+        "fonte": "Yahoo Finance",
+        "ticker": ticker,
+        "status": "ERRO",
+        "erro": None,
+        "velas": 0,
+        "ultima_vela": None,
+    }
+
+    def _ret(data, **extra):
+        meta.update(extra)
+        if data:
+            try:
+                meta["velas"] = int(len(data.get("close", [])))
+                if len(data.get("time", [])):
+                    meta["ultima_vela"] = int(np.asarray(data["time"])[-1])
+            except Exception:
+                pass
+            meta["status"] = "OK"
+        return (data, meta) if return_meta else data
+
     try:
         base_ticker = ticker
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*'
         }
-        
-        # Para M1/M5, baixar 5 dias inteiros é desnecessário e deixa cada ciclo
-        # pesado. O motor precisa somente das últimas velas fechadas.
+
         if int(tf) <= 1:
             yahoo_range = "1d"
         elif int(tf) <= 5:
             yahoo_range = "2d"
         else:
             yahoo_range = "5d"
+
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range={yahoo_range}"
         res = requests.get(url, headers=headers, timeout=(1.8, 2.8))
-        
+
         if res.status_code == 200 and 'chart' in res.json():
             data_json = res.json()
             result = data_json['chart']['result'][0]
-            timestamps = result['timestamp']
+            timestamps = result.get('timestamp') or []
             quote = result['indicators']['quote'][0]
-            
+
             ohlc = {
                 "time": np.array(timestamps),
                 "open": np.array(quote['open'], dtype=float),
@@ -1173,22 +1198,24 @@ def get_data_v2(ticker, tf, velas_minimas=60):
                 "low": np.array(quote['low'], dtype=float),
                 "close": np.array(quote['close'], dtype=float)
             }
-            
-            idx = ~np.isnan(ohlc["close"])
-            for k in ohlc: 
-                ohlc[k] = ohlc[k][idx]
-                
-            if len(ohlc["close"]) >= velas_minimas:
-                return ohlc
 
-        # Fallback CryptoCompare somente para cripto. Antes, qualquer par Forex
-        # contendo "USD" também entrava aqui, causando uma segunda requisição
-        # inútil e aumentando muito o tempo da varredura.
+            idx = ~np.isnan(ohlc["close"])
+            for k in ohlc:
+                ohlc[k] = ohlc[k][idx]
+
+            if len(ohlc["close"]) >= velas_minimas:
+                return _ret(ohlc, fonte="Yahoo Finance")
+
+            meta["erro"] = f"Yahoo retornou {len(ohlc['close'])} velas; mínimo {velas_minimas}"
+        else:
+            meta["erro"] = f"Yahoo HTTP {res.status_code}"
+
+        # Fallback somente para cripto.
         if base_ticker.endswith("-USD"):
             crypto_symbol = base_ticker[:-4].replace("-", "")
             url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=100&aggregate={tf}"
             r_alt = requests.get(url_alt, timeout=(1.8, 2.8)).json()
-            
+
             if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
                 data_list = r_alt['Data']['Data']
                 closes = np.array([x['close'] for x in data_list], dtype=float)
@@ -1196,16 +1223,22 @@ def get_data_v2(ticker, tf, velas_minimas=60):
                 highs = np.array([x['high'] for x in data_list], dtype=float)
                 lows = np.array([x['low'] for x in data_list], dtype=float)
                 times = np.array([x['time'] for x in data_list])
-                
-                if len(closes) >= velas_minimas:
-                    return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
-        
-        # IMPORTANTE: nunca gerar candles artificiais. Um sinal deve ser baseado
-        # exclusivamente em dados reais; se a fonte falhar, aguardamos novos dados.
-        return None
 
-    except Exception:
-        return None
+                if len(closes) >= velas_minimas:
+                    return _ret(
+                        {"time": times, "open": opens, "high": highs,
+                         "low": lows, "close": closes},
+                        fonte="CryptoCompare"
+                    )
+                meta["erro"] = f"CryptoCompare retornou {len(closes)} velas; mínimo {velas_minimas}"
+            else:
+                meta["erro"] = meta.get("erro") or "CryptoCompare sem dados"
+
+        return _ret(None)
+
+    except Exception as exc:
+        meta["erro"] = f"{type(exc).__name__}: {str(exc)[:180]}"
+        return (None, meta) if return_meta else None
 
 def calcular_ema(dados, periodo):
     if len(dados) < periodo:
@@ -1884,13 +1917,13 @@ def command(cmd):
             "ultimo_motivo": "Iniciando diagnóstico...", "motivo_contagem": {}, "estrategia_contagem": {},
             "ultimo_score": 0, "ultimo_direcao": None, "ultima_atualizacao": time.time(),
             "estrategias_concordantes": 0, "estrategias_analisadas": 0, "ultimo_ativo_analisado": None,
-            "ultimo_setup": None, "ultimo_detalhe": "Preparando varredura...", "ultimo_ciclo_segundos": 0.0, "ativos_por_ciclo": 0
+            "ultimo_setup": None, "ultimo_detalhe": "Preparando varredura...", "ultimo_ciclo_segundos": 0.0, "ativos_por_ciclo": 0, "dados_atrasados": 0, "sem_dados": 0, "historico_ativos": 0, "historico_dados_ok": 0, "historico_candidatos": 0, "historico_rejeitados": 0, "historico_sinais_prontos": 0, "historico_sinais_enviados": 0, "historico_ciclos": 0
         }
         st["ativo_atual"] = "INICIANDO VARREDURA..."
         st["ultimo_sinal"] = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE DINÂMICA</b><br><span style='color:#00f2fe;'>[VARRENDO TODOS OS ATIVOS...]</span></div><div class='tech-scanner'></div>"
         
         msg_inicio_telegram = (
-            f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
+            f"🚀 <b>SISTEMA VISION PRO V4 INICIADO</b>\n\n"
             f"🟢 <b>Status:</b> Análise de 60 velas ativada\n"
             f"👤 <b>Usuário:</b> {user}\n"
             f"📊 <b>Timeframe:</b> M{st['timeframe']}\n"
@@ -2141,10 +2174,10 @@ def _somente_velas_fechadas(data, tf):
         return None
 
 
-# ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT V2 =================
+# ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT V4 =================
 def bot_loop():
     """
-    Scanner V2 em pipeline contínuo.
+    Scanner V4 em pipeline contínuo.
 
     Não espera o ciclo inteiro terminar: as coletas HTTP ficam em voo e cada
     resposta é analisada imediatamente. O ativo volta para a fila somente
@@ -2183,10 +2216,24 @@ def bot_loop():
         except Exception:
             return 2.0
 
+    def _dados_atualizados(data, tf):
+        """Valida se a última vela fechada ainda é recente o suficiente."""
+        try:
+            tempos = np.asarray(data.get("time", []), dtype=np.int64)
+            if tempos.size == 0:
+                return False, None
+            ultima = int(tempos[-1])
+            idade = max(0.0, time.time() - ultima)
+            limite = max(180.0, float(tf) * 60.0 * 2.0)
+            return idade <= limite, idade
+        except Exception:
+            return False, None
+
     def _reset_diag(diag, cycle_start, ciclo_num, estrategias):
         diag.update({
-            "ciclo_inicio": cycle_start, "ativos_analisados": 0, "dados_ok": 0,
-            "dados_falha": 0, "candidatos": 0, "rejeitados": 0,
+            "ciclo_inicio": cycle_start, "ativos_analisados": 0, "dados_ok": 0, "dados_falha": 0,
+            "dados_atrasados": 0, "sem_dados": 0, "candidatos": 0, "rejeitados": 0,
+            "sinais_prontos": 0, "sinais_enviados": 0, "confirmacoes": 0, "bloqueados_alerta": 0,
             "oportunidades_validadas": 0, "ultima_oportunidade": None, "sinais_prontos": 0, "sinais_enviados": 0, "confirmacoes": 0, "bloqueados_alerta": 0,
             "motivo_contagem": {}, "estrategia_contagem": {}, "ultimo_score": 0,
             "ultimo_direcao": None, "estrategias_concordantes": 0,
@@ -2231,17 +2278,18 @@ def bot_loop():
                                 except Exception: pass
                             pipe["futures"].clear(); pipe["next_due"].clear(); pipe["seen"].clear()
                             pipe["config"] = config_sig
-                            # Ordem estável para reduzir a latência percebida e facilitar diagnóstico.
-                            # A cada ciclo fazemos uma rotação, em vez de embaralhar,
-                            # para que todos os ativos tenham prioridade equivalente.
-                            base_ordem = ativos_scan.copy()
-                            if base_ordem:
-                                rot = (pipe["cycle_num"] - 1) % len(base_ordem)
-                                pipe["ordem"] = base_ordem[rot:] + base_ordem[:rot]
-                            else:
-                                pipe["ordem"] = []
+                            # Primeiro ciclo começa na ordem original. A rotação real
+                            # acontece somente quando uma rodada completa termina.
+                            pipe["ordem"] = ativos_scan.copy()
                             pipe["cycle_start"] = time.time(); pipe["cycle_num"] = 1
-                            _reset_diag(st.setdefault("diagnostico", {}), pipe["cycle_start"], pipe["cycle_num"], estrategias_para_analisar)
+                            diag_init = st.setdefault("diagnostico", {})
+                            historico_preservado = {k: diag_init.get(k, 0) for k in (
+                                "historico_ativos", "historico_dados_ok", "historico_candidatos",
+                                "historico_rejeitados", "historico_sinais_prontos",
+                                "historico_sinais_enviados", "historico_ciclos"
+                            )}
+                            _reset_diag(diag_init, pipe["cycle_start"], pipe["cycle_num"], estrategias_para_analisar)
+                            diag_init.update(historico_preservado)
 
                         diag = st.setdefault("diagnostico", {})
                         diag["ativos_por_ciclo"] = len(ativos_scan)
@@ -2262,10 +2310,15 @@ def bot_loop():
                             diag["ultima_atualizacao"] = time.time()
                             st["ativo_atual"] = ativo
 
+                            meta = {}
+                            if isinstance(data, tuple) and len(data) == 2:
+                                data, meta = data
                             if not data:
                                 diag["dados_falha"] = diag.get("dados_falha", 0) + 1
+                                diag["sem_dados"] = diag.get("sem_dados", 0) + 1
+                                detalhe_fonte = meta.get("erro") or "Fonte de dados não retornou 60 velas"
                                 diag["ultimo_motivo"] = f"{ativo}: sem dados reais suficientes"
-                                diag["ultimo_detalhe"] = "Fonte de dados não retornou 60 velas"
+                                diag["ultimo_detalhe"] = detalhe_fonte
                                 _diag_inc(diag, "SEM_DADOS")
                                 return
 
@@ -2275,6 +2328,16 @@ def bot_loop():
                                 diag["ultimo_motivo"] = f"{ativo}: aguardando vela fechada"
                                 diag["ultimo_detalhe"] = "A última vela ainda está em formação"
                                 _diag_inc(diag, "VELA_EM_FORMACAO")
+                                return
+
+                            atualizado, idade_dado = _dados_atualizados(dados_fechados, tf)
+                            if not atualizado:
+                                diag["dados_falha"] = diag.get("dados_falha", 0) + 1
+                                diag["dados_atrasados"] = diag.get("dados_atrasados", 0) + 1
+                                idade_txt = f"{idade_dado:.0f}s" if idade_dado is not None else "desconhecida"
+                                diag["ultimo_motivo"] = f"{ativo}: dados atrasados"
+                                diag["ultimo_detalhe"] = f"Última vela fechada tem {idade_txt}; limite para M{tf}: {max(180, tf*120)}s"
+                                _diag_inc(diag, "DADOS_ATRASADOS")
                                 return
 
                             diag["dados_ok"] = diag.get("dados_ok", 0) + 1
@@ -2656,7 +2719,7 @@ def bot_loop():
                             try:
                                 data = future.result()
                             except Exception as exc:
-                                print(f"⚠️ Coleta {ativo} falhou: {exc}"); data = None
+                                print(f"⚠️ Coleta {ativo} falhou: {exc}"); data = (None, {"erro": f"{type(exc).__name__}: {str(exc)[:180]}"})
 
                             if generation != pipe.get("config"):
                                 continue
@@ -2669,11 +2732,40 @@ def bot_loop():
                             if key not in pipe["seen"]:
                                 pipe["seen"].add(key)
                                 if len(pipe["seen"]) >= len(ativos_scan):
-                                    diag["ultimo_ciclo_segundos"] = round(time.time() - pipe["cycle_start"], 2)
+                                    duracao_ciclo = round(time.time() - pipe["cycle_start"], 2)
+                                    diag["ultimo_ciclo_segundos"] = duracao_ciclo
+
+                                    # Acumula histórico antes de zerar os contadores da
+                                    # próxima rodada. Isso evita o antigo "ATIVOS 242"
+                                    # parecer que existem 242 ativos no ciclo atual.
+                                    diag["historico_ativos"] = diag.get("historico_ativos", 0) + diag.get("ativos_analisados", 0)
+                                    diag["historico_dados_ok"] = diag.get("historico_dados_ok", 0) + diag.get("dados_ok", 0)
+                                    diag["historico_candidatos"] = diag.get("historico_candidatos", 0) + diag.get("candidatos", 0)
+                                    diag["historico_rejeitados"] = diag.get("historico_rejeitados", 0) + diag.get("rejeitados", 0)
+                                    diag["historico_sinais_prontos"] = diag.get("historico_sinais_prontos", 0) + diag.get("sinais_prontos", 0)
+                                    diag["historico_sinais_enviados"] = diag.get("historico_sinais_enviados", 0) + diag.get("sinais_enviados", 0)
+                                    diag["historico_ciclos"] = diag.get("historico_ciclos", 0) + 1
+
                                     pipe["cycle_num"] += 1
-                                    diag["ciclo_num"] = pipe["cycle_num"]
+                                    # Rotação real: muda a prioridade somente quando
+                                    # todos os ativos da rodada anterior foram vistos.
+                                    if pipe["ordem"]:
+                                        rot = (pipe["cycle_num"] - 1) % len(pipe["ordem"])
+                                        base_ordem = pipe["ordem"][:]
+                                        pipe["ordem"] = base_ordem[rot:] + base_ordem[:rot]
                                     pipe["cycle_start"] = time.time()
                                     pipe["seen"].clear()
+
+                                    # Reinicia os contadores do ciclo, preservando o histórico.
+                                    historico_preservado = {k: diag.get(k, 0) for k in (
+                                        "historico_ativos", "historico_dados_ok", "historico_candidatos",
+                                        "historico_rejeitados", "historico_sinais_prontos",
+                                        "historico_sinais_enviados", "historico_ciclos"
+                                    )}
+                                    _reset_diag(diag, pipe["cycle_start"], pipe["cycle_num"], estrategias_para_analisar)
+                                    diag.update(historico_preservado)
+                                    diag["ultimo_ciclo_segundos"] = duracao_ciclo
+                                    diag["ultimo_detalhe"] = f"Novo ciclo iniciado; histórico: {historico_preservado['historico_ativos']} ativos analisados"
 
                         # Preenche vagas imediatamente. Assim que um ativo termina,
                         # outro entra sem esperar o restante da lista.
@@ -2689,7 +2781,7 @@ def bot_loop():
                             key = f"{ticker}_{tf}"
                             if agora_ts < pipe["next_due"].get(key, 0):
                                 continue
-                            future = executor.submit(get_data_v2, ticker, tf, 60)
+                            future = executor.submit(get_data_v2, ticker, tf, 60, True)
                             futures_user[future] = (ativo, key, pipe["config"])
                             ativos_inflight.add(ativo)
 
