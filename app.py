@@ -52,6 +52,10 @@ def get_user_state(email):
             "aguardando_confirmacao": False,
             "sinal_permanente": None,
             "ultimo_sinal": "Aguardando Comando...",
+            "diagnostico_analise": [],
+            "ultimo_ativo_analisado": None,
+            "candidatos_ultima_varredura": 0,
+            "diagnostico_analise": [],
             "ativo_atual": "AGUARDANDO...",
             "inicio_varredura": 0,
             "sinais_enviados": {},
@@ -537,6 +541,7 @@ HTML_INDEX = """
         </div>
 
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
+        <div id="analysis-diagnostic" style="margin-top:8px;padding:9px;border:1px solid rgba(0,242,254,.15);border-radius:10px;font-size:10px;line-height:1.45;color:#9ca3af;background:rgba(0,0,0,.12);">DIAGNÓSTICO: aguardando análise...</div>
 
         <div id="result-area" class="result-grid" style="display:none;">
             <button class="btn-res btn-res-win" onclick="fetch('/resultado/win')">WIN</button>
@@ -600,7 +605,7 @@ HTML_INDEX = """
 
             <span class="section-label" style="margin-top: 5px;">Plataformas de Operação</span>
             <div class="broker-flex">
-                <button class="btn-broker" onclick="openBroker('https://qxbroker.com/pt/')">🌐 Quotex</button>
+                <button class="btn-broker" onclick="openBroker('https://qxbroker.com')">🌐 Quotex</button>
                 <button class="btn-broker" onclick="openBroker('https://iqoption.com')">📈 IQ Option</button>
                 <button class="btn-broker" onclick="openBroker('https://binomo.com')">🟡 Binomo</button>
                 <button class="btn-broker" onclick="openBroker('https://pocketoption.com')">🟦 Pocket Opt.</button>
@@ -688,9 +693,14 @@ HTML_INDEX = """
         }
 
         function openBroker(url) {
-            const brokerContainer = document.getElementById('broker-view-container');
-            document.getElementById('brokerIframe').src = url;
-            brokerContainer.style.display = 'flex';
+            // As plataformas de negociação normalmente bloqueiam iframe por
+            // políticas de segurança (X-Frame-Options/CSP). Abrimos no navegador
+            // em uma nova aba, preservando a sessão e evitando a tela de erro.
+            const novaAba = window.open(url, '_blank', 'noopener,noreferrer');
+            if (!novaAba) {
+                // Fallback caso o navegador bloqueie pop-up iniciado pelo webview.
+                window.location.href = url;
+            }
         }
 
         function closeBrokerView() {
@@ -719,6 +729,11 @@ HTML_INDEX = """
                 const data = await r.json();
                 const panel = document.getElementById('panel-text');
                 if(panel && data.html) panel.innerHTML = data.html;
+                const diag = document.getElementById('analysis-diagnostic');
+                if (diag) {
+                    const linhas = Array.isArray(data.diagnostico) ? data.diagnostico : [];
+                    diag.innerHTML = '<b>DIAGNÓSTICO:</b> ' + (linhas.length ? linhas.map(x => '• ' + x).join('<br>') : 'aguardando análise...');
+                }
                 if(document.getElementById('win-count')) document.getElementById('win-count').innerText = data.wins;
                 if(document.getElementById('loss-count')) document.getElementById('loss-count').innerText = data.reds;
                 if(document.getElementById('wr-text')) document.getElementById('wr-text').innerText = data.winrate + "%";
@@ -1236,18 +1251,29 @@ def analisar_estrategia(data,estrategia,i=-2):
     score+=min(8,max(0,(vr-1)*12))
     return sinal,int(min(96,max(75,round(score))))
 
-def analisar_mercado_profundo(data,estrategias,minimo_confluencia=2):
+def analisar_mercado_profundo(data,estrategias,minimo_confluencia=2,diagnostico=None):
     cand=[]
+    if diagnostico is None: diagnostico=[]
     for est in estrategias:
         sig,score=analisar_estrategia(data,est,-2)
-        if sig and score:cand.append({"estrategia":est,"sinal":sig,"probabilidade":score,"forca":forca_estrategia(est)})
-    if not cand:return None
+        if sig and score:
+            cand.append({"estrategia":est,"sinal":sig,"probabilidade":score,"forca":forca_estrategia(est)})
+        else:
+            diagnostico.append(f"{est}: sem candidato válido após filtros de estratégia/volume/ATR")
+    if not cand:
+        diagnostico.append("Nenhuma estratégia passou pelos filtros nesta vela fechada.")
+        return None
     grupos={}
     for x in cand:grupos.setdefault(x["sinal"],[]).append(x)
     grupo=max(grupos.values(),key=lambda g:(len(g),max(x["probabilidade"] for x in g),sum(x["forca"] for x in g)))
-    if len(grupo)<minimo_confluencia:return None
+    if len(grupo)<minimo_confluencia:
+        diagnostico.append(f"Confluência insuficiente: {len(grupo)} estratégia(s) na direção {grupo[0]["sinal"]}; mínimo={minimo_confluencia}.")
+        return None
     esc=max(grupo,key=lambda x:(x["probabilidade"],x["forca"])); reg=regime_mercado(data,-2); atr=max(reg["atr"],1e-12)
-    if abs(data["close"][-2]-reg["ema20"])/atr>2.5:return None
+    distancia_ema=abs(data["close"][-2]-reg["ema20"])/atr
+    if distancia_ema>2.5:
+        diagnostico.append(f"Bloqueado por extensão: preço a {distancia_ema:.2f} ATR da EMA20.")
+        return None
     out=dict(esc); out["estrategias_confluentes"]=[x["estrategia"] for x in grupo]; out["confluencia"]=len(grupo); out["forca"]=sum(x["forca"] for x in grupo); out["volume_ratio"]=volume_confluente(data,esc["sinal"],-2)[1]; out["rsi"]=reg["rsi"]; return out
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
@@ -1444,7 +1470,10 @@ def status():
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
         "notificacao": st["notificacao"],
         "telegram_enabled": bool(st.get("telegram_enabled", False)) if user == ADMIN_EMAIL else False,
-        "is_admin": user == ADMIN_EMAIL
+        "is_admin": user == ADMIN_EMAIL,
+        "diagnostico": st.get("diagnostico_analise", []),
+        "candidatos": st.get("candidatos_ultima_varredura", 0),
+        "ultimo_ativo_analisado": st.get("ultimo_ativo_analisado")
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -1521,7 +1550,7 @@ def command(cmd):
         
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
-            f"🟢 <b>Status:</b> Análise de 30 velas ativada\n"
+            f"🟢 <b>Status:</b> Análise de 80 velas ativada\n"
             f"👤 <b>Usuário:</b> {user}\n"
             f"📊 <b>Timeframe:</b> M{st['timeframe']}\n"
             f"🌐 <b>Mercado:</b> {st['tipo_mercado']}\n"
@@ -1534,7 +1563,7 @@ def command(cmd):
     elif cmd == "pause_bot":
         st["bot_pausado"] = not st["bot_pausado"]
         status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if st["bot_pausado"] else f"🔍 ANALISANDO: {st['ativo_atual']} (M{st['timeframe']})"
-        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO 30 VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
+        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO 80 VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
         msg_pause = "⏸ <b>SISTEMA PAUSADO</b>" if st["bot_pausado"] else "▶️ <b>SISTEMA RETOMADO!</b>"
         enviar_telegram(msg_pause, user_solicitante=user)
         return jsonify({"ok": True})
@@ -1976,13 +2005,13 @@ def bot_loop():
                         ticker = MAPA_TICKERS.get(ativo, ativo)
 
                         if not alerta and not st.get("aguardando_confirmacao"):
-                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[CONFLUÊNCIA + VOLUME + CONTEXTO + REVALIDAÇÃO]</span></div><div class='tech-scanner'></div>"
+                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 80 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[CONFLUÊNCIA + VOLUME + CONTEXTO + REVALIDAÇÃO]</span></div><div class='tech-scanner'></div>"
 
                         cache_key = f"{ticker}_{tf}"
                         if cache_key in ohlc_cache:
                             data = ohlc_cache[cache_key]["data"]
                         else:
-                            data = get_data_v2(ticker, tf, velas_minimas=30)
+                            data = get_data_v2(ticker, tf, velas_minimas=80)
                             if data:
                                 ohlc_cache[cache_key] = {"data": data, "time": time.time()}
 
@@ -2014,7 +2043,11 @@ def bot_loop():
                             estrategias_para_analisar = [user_est]; minimo_confluencia = 1
                         else:
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy(); minimo_confluencia = 2
-                        analise = analisar_mercado_profundo(data,estrategias_para_analisar,minimo_confluencia)
+                        diagnostico = []
+                        analise = analisar_mercado_profundo(data,estrategias_para_analisar,minimo_confluencia,diagnostico)
+                        st["ultimo_ativo_analisado"] = ativo
+                        st["diagnostico_analise"] = diagnostico[-5:]
+                        st["candidatos_ultima_varredura"] = 1 if analise else 0
                         sinal_encontrado = analise["sinal"] if analise else None
                         est_nome_encontrada = analise["estrategia"] if analise else None
                         maior_prob = analise["probabilidade"] if analise else 0
