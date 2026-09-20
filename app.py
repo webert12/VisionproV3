@@ -61,7 +61,11 @@ def get_user_state(email):
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
             "sinal_confirmado_dados": None,
-            "ultimo_resumo_sessao": None
+            "ultimo_resumo_sessao": None,
+            "telegram_ativo": False,
+            "candle_inicio": None,
+            "candle_decorrido": 0,
+            "candle_restante": 0
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -122,7 +126,10 @@ def diagnosticar_telegram():
 
 
 def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None, tentativas=3):
-    """Envia mensagem ao Telegram com retry e diagnóstico detalhado nos logs."""
+    """Envia mensagem ao Telegram somente quando autorizado pelo ADM."""
+    if user_solicitante != ADMIN_EMAIL or not telegram_envio_ativo():
+        print("ℹ️ Telegram: envio bloqueado (somente ADM + Telegram ativo).")
+        return None
     if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
         print("❌ Telegram não configurado: TOKEN_TELEGRAM ou CHAT_ID_TELEGRAM ausente.")
         return None
@@ -487,7 +494,10 @@ HTML_INDEX = """
         </div>
 
         <button class="btn-notify" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
+        {% if user == admin %}
+        <button class="btn-test-tg" id="btn-telegram-toggle" onclick="sendCommand('toggle_telegram')">📡 TELEGRAM: CARREGANDO...</button>
         <button class="btn-test-tg" onclick="sendCommand('test_telegram')">🧪 TESTAR CONEXÃO TELEGRAM</button>
+        {% endif %}
 
         <div class="placar-card">
             <div class="placar-grid">
@@ -513,8 +523,11 @@ HTML_INDEX = """
         </div>
 
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
-            MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
-            ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
+            MERCADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b><br>
+            ATIVO EM ANÁLISE: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
+            <div id="candle-timer" style="margin-top:7px; color:#94a3b8; font-family:'JetBrains Mono',monospace; font-size:11px;">
+                CANDLE M{{ tf }} • 00:00 DECORRIDOS • 00:00 RESTANTES
+            </div>
         </div>
 
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
@@ -570,6 +583,7 @@ HTML_INDEX = """
                     <div class="select-wrapper">
                         <select class="modern-select" onchange="sendCommand('set_est_' + this.value)">
                             <option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS (Analisar Todas as Estratégias)</option>
+                            <option value="PRICE_ACTION" {% if estrat == 'PRICE_ACTION' %}selected{% endif %}>🎯 Price Action Profissional</option>
                             <option value="LOGICA_DO_PRECO" {% if estrat == 'LOGICA_DO_PRECO' %}selected{% endif %}>Lógica do Preço</option>
                             <option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + Cruzamento MACD + MA</option>
                             <option value="MHI1" {% if estrat == 'MHI1' %}selected{% endif %}>MHI 1 (+ Filtro Tendência)</option>
@@ -714,6 +728,20 @@ HTML_INDEX = """
                         document.getElementById('current-asset').innerText = "SISTEMA PAUSADO";
                     }
                 }
+                if(document.getElementById('candle-timer')) {
+                    const tfAtual = data.timeframe || 5;
+                    const dec = data.candle_decorrido || 0;
+                    const rest = data.candle_restante || 0;
+                    const fmt = (v) => String(Math.max(0, Math.floor(v / 60))).padStart(2,'0') + ':' + String(Math.max(0, Math.floor(v % 60))).padStart(2,'0');
+                    document.getElementById('candle-timer').innerText = `CANDLE M${tfAtual} • ${fmt(dec)} DECORRIDOS • ${fmt(rest)} RESTANTES`;
+                }
+                if(document.getElementById('btn-telegram-toggle')) {
+                    const ativo = !!data.telegram_ativo;
+                    const btn = document.getElementById('btn-telegram-toggle');
+                    btn.innerText = ativo ? "📡 TELEGRAM: ATIVO" : "📡 TELEGRAM: DESATIVADO";
+                    btn.style.borderColor = ativo ? "#10b981" : "#ef4444";
+                    btn.style.color = ativo ? "#10b981" : "#ef4444";
+                }
 
                 if(data.notificacao && data.notificacao.id !== lastNotifId) {
                     lastNotifId = data.notificacao.id;
@@ -776,6 +804,11 @@ def init_db():
                 sinal VARCHAR(255) NOT NULL,
                 resultado VARCHAR(50) NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS configuracoes_sistema (
+                chave VARCHAR(100) PRIMARY KEY,
+                valor VARCHAR(50) NOT NULL
+            );
         """)
         conn.commit()
         cur.close()
@@ -787,6 +820,39 @@ try:
     init_db()
 except Exception:
     pass
+
+def telegram_envio_ativo():
+    """Retorna se o envio automático ao Telegram está habilitado pelo ADM."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT valor FROM configuracoes_sistema WHERE chave = 'telegram_ativo' LIMIT 1;")
+        res = cur.fetchone()
+        cur.close()
+        conn.close()
+        return str(res["valor"]).lower() == "true" if res else False
+    except Exception:
+        return False
+
+
+def definir_telegram_ativo(ativo):
+    """Altera o estado global do envio automático do Telegram. Somente o ADM chama esta função."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO configuracoes_sistema (chave, valor)
+            VALUES ('telegram_ativo', %s)
+            ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor;
+        """, ("true" if ativo else "false",))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"⚠️ Erro ao salvar configuração do Telegram: {e}")
+        return False
+
 
 def parse_ips(ips_raw):
     try:
@@ -1029,13 +1095,14 @@ def atualizar_ultimo_sinal_bd(email, resultado):
         pass
 
 # ================= BOT CONFIGS & ESTRATÉGIAS =================
-LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
+LISTA_ESTRATEGIAS = ["PRICE_ACTION", "LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
 
 NOME_ESTRATEGIAS_DISPLAY = {
     "LOGICA_DO_PRECO": "Lógica do Preço",
     "RSI_MACD_MA": "RSI + Cruzamento MACD + MA",
     "MHI1": "MHI 1 (+ Filtro Tendência)",
     "REVERSAO": "Reversão de Bandas",
+    "PRICE_ACTION": "Price Action Profissional",
     "TODAS": "Análise Dinâmica Múltipla"
 }
 
@@ -1044,6 +1111,7 @@ NOME_ESTRATEGIAS_DISPLAY = {
 # força da estratégia ajudam a decidir se um novo ativo realmente merece
 # substituir o alerta atual. Esses pesos são configuráveis.
 FORCA_ESTRATEGIA = {
+    "PRICE_ACTION": 5,
     "RSI_MACD_MA": 4,
     "LOGICA_DO_PRECO": 3,
     "REVERSAO": 2,
@@ -1163,6 +1231,54 @@ def calcular_ema(dados, periodo):
         ema[i] = (dados[i] - ema[i-1]) * multiplicador + ema[i-1]
     return ema
 
+# ================= PRICE ACTION PROFISSIONAL =================
+def analisar_price_action(data, i=-1):
+    """
+    Price Action baseado somente em leitura de preço: estrutura, rejeição,
+    engolfo e localização em suporte/resistência recente.
+    Exige pelo menos 3 confirmações independentes.
+    """
+    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
+    if len(c) < 30:
+        return None, 0, 0
+
+    idx = i if i >= 0 else len(c) - 1
+    if idx < 4:
+        return None, 0, 0
+
+    corpo = abs(c[idx] - o[idx])
+    amplitude = max(h[idx] - l[idx], 1e-9)
+    pavio_sup = h[idx] - max(o[idx], c[idx])
+    pavio_inf = min(o[idx], c[idx]) - l[idx]
+
+    hh_hl = h[idx] > h[idx-2] and l[idx] > l[idx-2]
+    lh_ll = h[idx] < h[idx-2] and l[idx] < l[idx-2]
+
+    suporte = float(np.min(l[max(0, idx-12):idx]))
+    resistencia = float(np.max(h[max(0, idx-12):idx]))
+    faixa_media = float(np.mean(h[max(0, idx-12):idx]) - np.mean(l[max(0, idx-12):idx]))
+    zona = max(faixa_media * 0.20, amplitude * 0.35)
+
+    perto_suporte = abs(l[idx] - suporte) <= zona or abs(c[idx] - suporte) <= zona
+    perto_resistencia = abs(h[idx] - resistencia) <= zona or abs(c[idx] - resistencia) <= zona
+
+    pin_call = pavio_inf >= amplitude * 0.55 and corpo <= amplitude * 0.40 and c[idx] > o[idx]
+    pin_put = pavio_sup >= amplitude * 0.55 and corpo <= amplitude * 0.40 and c[idx] < o[idx]
+
+    prev_body = abs(c[idx-1] - o[idx-1])
+    engulf_call = c[idx] > o[idx] and c[idx-1] < o[idx-1] and c[idx] >= o[idx-1] and o[idx] <= c[idx-1] and corpo >= prev_body * 1.05
+    engulf_put = c[idx] < o[idx] and c[idx-1] > o[idx-1] and o[idx] >= c[idx-1] and c[idx] <= o[idx-1] and corpo >= prev_body * 1.05
+
+    call_conf = sum([bool(pin_call or engulf_call), bool(perto_suporte), bool(hh_hl), bool(c[idx] > o[idx])])
+    put_conf = sum([bool(pin_put or engulf_put), bool(perto_resistencia), bool(lh_ll), bool(c[idx] < o[idx])])
+
+    if call_conf >= 3 and call_conf > put_conf:
+        return "CALL", min(96, 78 + call_conf * 5), call_conf
+    if put_conf >= 3 and put_conf > call_conf:
+        return "PUT", min(96, 78 + put_conf * 5), put_conf
+    return None, 0, max(call_conf, put_conf)
+
+
 # ================= MOTOR DE ESTRATÉGIAS COM SCORE DE PROBABILIDADE =================
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
@@ -1172,6 +1288,10 @@ def analisar_estrategia(data, estrategia, i=-1):
         
     sinal = None
     probabilidade = 0
+
+    if estrategia == "PRICE_ACTION":
+        sinal, probabilidade, _ = analisar_price_action(data, i)
+        return sinal, probabilidade
 
     if estrategia == "LOGICA_DO_PRECO":
         tamanho = abs(c[i] - o[i])
@@ -1455,6 +1575,10 @@ def status():
         "ativo_atual": st["ativo_atual"],
         "mercado": st["tipo_mercado"],
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
+        "timeframe": st["timeframe"],
+        "candle_decorrido": st.get("candle_decorrido", 0),
+        "candle_restante": st.get("candle_restante", st["timeframe"] * 60),
+        "telegram_ativo": telegram_envio_ativo() if user == ADMIN_EMAIL else False,
         "notificacao": st["notificacao"]
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -1469,7 +1593,23 @@ def command(cmd):
     
     st = get_user_state(user)
 
+    if cmd == "toggle_telegram":
+        if user != ADMIN_EMAIL:
+            return jsonify({"ok": False, "error": "Apenas o ADM pode alterar o Telegram."}), 403
+        novo_estado = not telegram_envio_ativo()
+        if definir_telegram_ativo(novo_estado):
+            st["telegram_ativo"] = novo_estado
+            st["ultimo_sinal"] = (
+                "<div class='system-console' style='color:#10b981;'>"
+                + ("📡 TELEGRAM ATIVADO PELO ADM." if novo_estado else "🔕 TELEGRAM DESATIVADO PELO ADM.")
+                + "</div>"
+            )
+            return jsonify({"ok": True, "telegram_ativo": novo_estado})
+        return jsonify({"ok": False, "error": "Não foi possível salvar a configuração."}), 500
+
     if cmd == "test_telegram":
+        if user != ADMIN_EMAIL or not telegram_envio_ativo():
+            return jsonify({"ok": False, "error": "O teste do Telegram é exclusivo do ADM e exige o envio ativado."}), 403
         msg_teste = (
             f"🧪 <b>TESTE DE COMUNICAÇÃO - VISION PRO V3</b>\n\n"
             f"✅ Conexão estabelecida com sucesso com o Telegram!\n"
@@ -1642,7 +1782,8 @@ def resultado(res):
                 f"📋 Total de operações: <b>{stats['total']}</b>\n\n"
                 f"⚠️ <i>Resultado registrado no histórico. Operações envolvem risco e não há garantia de resultados futuros.</i>"
             )
-            enviar_telegram(msg_resultado, user_solicitante=user)
+            if user == ADMIN_EMAIL and telegram_envio_ativo():
+                enviar_telegram(msg_resultado, user_solicitante=user)
 
         elif res == 'pular':
             # Ao PULAR, nenhuma mensagem relacionada à oportunidade deve permanecer
@@ -1947,10 +2088,14 @@ def bot_loop():
                             break
 
                         st["ativo_atual"] = ativo
+                        agora_candle = agora_brasilia()
+                        segundos_desde_inicio = (agora_candle.minute % tf) * 60 + agora_candle.second
+                        st["candle_decorrido"] = segundos_desde_inicio
+                        st["candle_restante"] = max(0, (tf * 60) - segundos_desde_inicio)
                         ticker = MAPA_TICKERS.get(ativo, ativo)
 
                         if not alerta and not st.get("aguardando_confirmacao"):
-                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
+                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[ANÁLISE PRICE ACTION + CONFIRMAÇÕES]</span></div><div class='tech-scanner'></div>"
 
                         cache_key = f"{ticker}_{tf}"
                         if cache_key in ohlc_cache:
@@ -2021,7 +2166,14 @@ def bot_loop():
                                 if c["sinal"] == sinal_encontrado
                             ]
 
-                        if sinal_encontrado and not bloquear_novos_alertas:
+                        price_action_qualificado = False
+                        if "PRICE_ACTION" in estrategias_para_analisar:
+                            pa_sinal, pa_prob, pa_conf = analisar_price_action(data)
+                            price_action_qualificado = bool(pa_sinal and pa_conf >= 3 and pa_sinal == sinal_encontrado)
+
+                        confluencia_real = (confluencia_encontrada >= 2 or price_action_qualificado)
+
+                        if sinal_encontrado and confluencia_real and not bloquear_novos_alertas:
                             agora = agora_brasilia()
                             
                             min_pass = agora.minute % tf
@@ -2090,18 +2242,12 @@ def bot_loop():
                                     elif ativo != ativo_anterior and maior_prob == prob_anterior:
                                         motivo_alerta = motivo_alerta
 
-                                    confluencia_txt = (
-                                        f"{confluencia_encontrada} estratégias em confluência"
-                                        if confluencia_encontrada > 1
-                                        else "1 estratégia identificada"
-                                    )
                                     msg_pre_alerta = (
                                         f"⚡ <b>ALERTA ATUALIZADO — {motivo_alerta}</b> ⚡\n\n"
                                         f"<b>Ativo:</b> {ativo} ({maior_prob}% de Assertividade)\n"
                                         f"<b>Timeframe:</b> M{tf}\n"
                                         f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
                                         f"<b>Estratégia principal:</b> {nome_est_formatado}\n"
-                                        f"<b>Confluência:</b> {confluencia_txt}\n"
                                         f"<b>Tipo de movimento:</b> {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[1]} {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[0]}\n"
                                         f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
                                         f"👉 <i>O alerta anterior foi cancelado. Considere somente este novo alerta.</i>"
@@ -2148,19 +2294,13 @@ def bot_loop():
                                     st["timer_confirmacao"] = timer_confirmacao
                                     timer_confirmacao.start()
 
-                                    enviar_telegram_em_background(
-                                        msg_pre_alerta,
-                                        user_email,
-                                        alert_id=novo_alert_id,
-                                        deletar_msg_id=msg_antigo_id,
-                                        st=st
-                                    )
+                                    # Pré-alertas não são enviados ao Telegram.
 
                                     st["ultimo_sinal"] = (
                                         f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
                                         f"⚡ <b>ALERTA SUBSTITUÍDO ({motivo_alerta})</b> ⚡<br>"
                                         f"<b>NOVO ATIVO: {ativo}</b> | <b>DIREÇÃO: <span style='color:{'#10b981' if sinal_encontrado=='CALL' else '#ef4444'}'>{sinal_encontrado}</span></b> | Entrada às <b>{str_entrada}</b> (M{tf})<br>"
-                                        f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b> | Confluência: <b>{confluencia_encontrada}</b></span>"
+                                        f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span>"
                                         f"</div>"
                                     )
                                     alerta = st["alerta_ativo"]
@@ -2171,18 +2311,12 @@ def bot_loop():
 
                                 st["sinais_enviados"][ativo] = str_entrada
 
-                                confluencia_txt = (
-                                    f"{confluencia_encontrada} estratégias em confluência"
-                                    if confluencia_encontrada > 1
-                                    else "1 estratégia identificada"
-                                )
                                 msg_pre_alerta = (
                                     f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n"
                                     f"<b>Ativo:</b> {ativo}\n"
                                     f"<b>Timeframe:</b> M{tf}\n"
                                     f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
                                     f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
-                                    f"<b>Confluência:</b> {confluencia_txt}\n"
                                     f"<b>Tipo de movimento:</b> {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[1]} {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[0]}\n"
                                     f"<b>Assertividade Estimada:</b> {maior_prob}%\n"
                                     f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
@@ -2223,12 +2357,8 @@ def bot_loop():
                                 st["timer_confirmacao"] = timer_confirmacao
                                 timer_confirmacao.start()
 
-                                enviar_telegram_em_background(
-                                    msg_pre_alerta,
-                                    user_email,
-                                    alert_id=novo_alert_id,
-                                    st=st
-                                )
+                                # Nenhum pré-alerta é enviado ao Telegram. O canal
+                                # só recebe o sinal confirmado, se o ADM habilitar.
 
                                 st["ultimo_sinal"] = (
                                     f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
