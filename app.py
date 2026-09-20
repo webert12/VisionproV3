@@ -600,7 +600,7 @@ HTML_INDEX = """
 
             <span class="section-label" style="margin-top: 5px;">Plataformas de Operação</span>
             <div class="broker-flex">
-                <button class="btn-broker" onclick="openBroker('https://qxbroker.com')">🌐 Quotex</button>
+                <button class="btn-broker" onclick="openBroker('https://qxbroker.com/pt/')">🌐 Quotex</button>
                 <button class="btn-broker" onclick="openBroker('https://iqoption.com')">📈 IQ Option</button>
                 <button class="btn-broker" onclick="openBroker('https://binomo.com')">🟡 Binomo</button>
                 <button class="btn-broker" onclick="openBroker('https://pocketoption.com')">🟦 Pocket Opt.</button>
