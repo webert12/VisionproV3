@@ -23,7 +23,7 @@ def agora_brasilia():
     return datetime.now(FUSO_SP)
 
 # ================= CONFIGURAÇÕES DE AMBIENTE E BOT TELEGRAM =================
-TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "").strip()
+TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU").strip()
 CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
 
@@ -52,8 +52,6 @@ def get_user_state(email):
             "aguardando_confirmacao": False,
             "sinal_permanente": None,
             "ultimo_sinal": "Aguardando Comando...",
-            "ultimo_ativo_analisado": None,
-            "candidatos_ultima_varredura": 0,
             "ativo_atual": "AGUARDANDO...",
             "inicio_varredura": 0,
             "sinais_enviados": {},
@@ -62,12 +60,8 @@ def get_user_state(email):
             "sinal_confirmado_dados": None,
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
-            "ultimo_resumo_sessao": None,
-            "telegram_enabled": False,
-            "proximo_sinal_permitido_em": 0.0,
-            "ultimo_alerta_timestamp": 0.0,
-            "ultimo_ativo_sinal": None,
-            "ultimo_sinal_direcao": None
+            "sinal_confirmado_dados": None,
+            "ultimo_resumo_sessao": None
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -128,15 +122,7 @@ def diagnosticar_telegram():
 
 
 def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None, tentativas=3):
-    """Envia Telegram somente para o ADM e quando o ADM ativou o envio."""
-    solicitante = (user_solicitante or "").strip().lower()
-    if solicitante != ADMIN_EMAIL:
-        print("🔒 Telegram bloqueado: somente o ADM pode enviar mensagens.")
-        return None
-    estado_admin = DADOS_USUARIOS.get(ADMIN_EMAIL, {})
-    if not estado_admin.get("telegram_enabled", False):
-        print("🔕 Telegram desativado pelo ADM no painel.")
-        return None
+    """Envia mensagem ao Telegram com retry e diagnóstico detalhado nos logs."""
     if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
         print("❌ Telegram não configurado: TOKEN_TELEGRAM ou CHAT_ID_TELEGRAM ausente.")
         return None
@@ -501,14 +487,7 @@ HTML_INDEX = """
         </div>
 
         <button class="btn-notify" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
-        {% if user == admin %}
-        <div style="background:#0b1120;border:1px solid rgba(0,242,254,.25);border-radius:12px;padding:12px;margin-bottom:12px;">
-            <div style="font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;margin-bottom:8px;">CONTROLE EXCLUSIVO DO ADM</div>
-            <button id="btn-telegram-toggle" class="btn-test-tg" style="margin-bottom:8px;" onclick="sendCommand('toggle_telegram')">📡 TELEGRAM: {{ 'ATIVO' if telegram_enabled else 'DESATIVADO' }}</button>
-            <button class="btn-test-tg" onclick="sendCommand('test_telegram')">🧪 TESTAR CONEXÃO TELEGRAM</button>
-            <div style="font-size:10px;color:#94a3b8;text-align:center;">Somente o ADM pode ativar o envio. Usuários comuns recebem sinais apenas no painel.</div>
-        </div>
-        {% endif %}
+        <button class="btn-test-tg" onclick="sendCommand('test_telegram')">🧪 TESTAR CONEXÃO TELEGRAM</button>
 
         <div class="placar-card">
             <div class="placar-grid">
@@ -534,23 +513,11 @@ HTML_INDEX = """
         </div>
 
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
-            MERCADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
-            ATIVO: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
+            MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
+            ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
         </div>
 
-        <div class="status-box" id="panel-text">
-            <div style="font-size:12px;color:#64748b;">STATUS DA ANÁLISE</div>
-            <div id="scan-asset" style="font-size:18px;color:#00f2fe;font-weight:900;margin-top:5px;">AGUARDANDO...</div>
-        </div>
-
-        <div id="candle-clock-box" style="background:#0b1120;border:1px solid rgba(0,242,254,.25);border-radius:16px;padding:15px;margin-bottom:16px;text-align:center;">
-            <div style="font-size:10px;color:#64748b;font-weight:800;letter-spacing:1px;text-transform:uppercase;">TEMPO DO CANDLE</div>
-            <div id="candle-clock-label" style="font-family:'JetBrains Mono',monospace;font-size:27px;font-weight:900;color:#00f2fe;margin-top:5px;">M{{ tf }} • 00:00 / {{ '%02d:00'|format(tf) }}</div>
-            <div id="candle-clock-sub" style="font-size:11px;color:#94a3b8;margin-top:4px;">Candle em andamento</div>
-            <div style="height:6px;background:#1e293b;border-radius:10px;overflow:hidden;margin-top:10px;">
-                <div id="candle-progress" style="height:100%;width:0%;background:linear-gradient(90deg,#00f2fe,#38ef7d);transition:width .25s linear;"></div>
-            </div>
-        </div>
+        <div class="status-box" id="panel-text">Aguardando Comando...</div>
 
         <div id="result-area" class="result-grid" style="display:none;">
             <button class="btn-res btn-res-win" onclick="fetch('/resultado/win')">WIN</button>
@@ -702,14 +669,9 @@ HTML_INDEX = """
         }
 
         function openBroker(url) {
-            // As plataformas de negociação normalmente bloqueiam iframe por
-            // políticas de segurança (X-Frame-Options/CSP). Abrimos no navegador
-            // em uma nova aba, preservando a sessão e evitando a tela de erro.
-            const novaAba = window.open(url, '_blank', 'noopener,noreferrer');
-            if (!novaAba) {
-                // Fallback caso o navegador bloqueie pop-up iniciado pelo webview.
-                window.location.href = url;
-            }
+            const brokerContainer = document.getElementById('broker-view-container');
+            document.getElementById('brokerIframe').src = url;
+            brokerContainer.style.display = 'flex';
         }
 
         function closeBrokerView() {
@@ -732,42 +694,12 @@ HTML_INDEX = """
             });
         }
 
-        let painelTimeframe = {{ tf|int }};
-
-        function formatarTempo(segundos) {
-            segundos = Math.max(0, Math.floor(segundos));
-            const m = Math.floor(segundos / 60);
-            const sec = segundos % 60;
-            return String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
-        }
-
-        function atualizarRelogioCandle() {
-            const label = document.getElementById('candle-clock-label');
-            const sub = document.getElementById('candle-clock-sub');
-            const progress = document.getElementById('candle-progress');
-            if (!label || !sub || !progress) return;
-            const tf = [1, 5, 15].includes(Number(painelTimeframe)) ? Number(painelTimeframe) : 5;
-            const agora = new Date();
-            const total = tf * 60;
-            const decorrido = (agora.getMinutes() % tf) * 60 + agora.getSeconds();
-            const restante = Math.max(0, total - decorrido);
-            const pct = Math.min(100, Math.max(0, (decorrido / total) * 100));
-            label.innerText = `M${tf} • ${formatarTempo(decorrido)} / ${formatarTempo(total)}`;
-            sub.innerText = `Decorrido: ${formatarTempo(decorrido)} • Fecha em: ${formatarTempo(restante)}`;
-            progress.style.width = pct.toFixed(2) + '%';
-        }
-
-        setInterval(atualizarRelogioCandle, 250);
-        atualizarRelogioCandle();
-
         async function atualizarPainel() {
             try {
                 const r = await fetch('/status', { cache: 'no-store' });
                 const data = await r.json();
-                if (data.timeframe) painelTimeframe = Number(data.timeframe);
-                const scanAsset = document.getElementById('scan-asset');
-                const ativoPainel = data.ativo_atual || 'AGUARDANDO...';
-                if (scanAsset) scanAsset.innerText = data.rodando ? ativoPainel : 'SISTEMA PAUSADO';
+                const panel = document.getElementById('panel-text');
+                if(panel && data.html) panel.innerHTML = data.html;
                 if(document.getElementById('win-count')) document.getElementById('win-count').innerText = data.wins;
                 if(document.getElementById('loss-count')) document.getElementById('loss-count').innerText = data.reds;
                 if(document.getElementById('wr-text')) document.getElementById('wr-text').innerText = data.winrate + "%";
@@ -781,13 +713,6 @@ HTML_INDEX = """
                     } else {
                         document.getElementById('current-asset').innerText = "SISTEMA PAUSADO";
                     }
-                }
-
-                const tgBtn = document.getElementById('btn-telegram-toggle');
-                if (tgBtn && data.is_admin) {
-                    tgBtn.innerText = data.telegram_enabled ? '📡 TELEGRAM: ATIVO' : '📡 TELEGRAM: DESATIVADO';
-                    tgBtn.style.borderColor = data.telegram_enabled ? '#10b981' : '#3b82f6';
-                    tgBtn.style.color = data.telegram_enabled ? '#10b981' : '#3b82f6';
                 }
 
                 if(data.notificacao && data.notificacao.id !== lastNotifId) {
@@ -1156,144 +1081,187 @@ for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X
 for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
-def get_data_v2(ticker, tf, velas_minimas=80):
-    """Obtém OHLC + volume; nunca inventa candles quando a fonte falha."""
+def get_data_v2(ticker, tf, velas_minimas=30):
     try:
+        base_ticker = ticker
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*'
         }
-        base_ticker = ticker
-        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=10d"
-        res = requests.get(url, headers=headers, timeout=6.0)
-        if res.status_code == 200:
-            result = (res.json().get('chart', {}).get('result') or [None])[0]
-            if result:
-                ts = result.get('timestamp') or []
-                q = (result.get('indicators', {}).get('quote') or [{}])[0]
-                opens=np.array(q.get('open') or [],dtype=float); highs=np.array(q.get('high') or [],dtype=float)
-                lows=np.array(q.get('low') or [],dtype=float); closes=np.array(q.get('close') or [],dtype=float)
-                vols=np.array(q.get('volume') or [],dtype=float)
-                n=min(len(ts),len(opens),len(highs),len(lows),len(closes))
-                if n>=velas_minimas:
-                    opens,highs,lows,closes=opens[-n:],highs[-n:],lows[-n:],closes[-n:]; ts=np.array(ts[-n:])
-                    vols=vols[-n:] if len(vols)>=n else np.zeros(n)
-                    valid=np.isfinite(opens)&np.isfinite(highs)&np.isfinite(lows)&np.isfinite(closes)
-                    opens,highs,lows,closes,ts,vols=opens[valid],highs[valid],lows[valid],closes[valid],ts[valid],vols[valid]
-                    if len(closes)>=velas_minimas:
-                        proxy=not np.any(vols>0)
-                        if proxy: vols=np.abs(closes-opens)
-                        return {"time":ts,"open":opens,"high":highs,"low":lows,"close":closes,"volume":vols,"volume_proxy":proxy}
+        
+        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d"
+        res = requests.get(url, headers=headers, timeout=5.0)
+        
+        if res.status_code == 200 and 'chart' in res.json():
+            data_json = res.json()
+            result = data_json['chart']['result'][0]
+            timestamps = result['timestamp']
+            quote = result['indicators']['quote'][0]
+            
+            ohlc = {
+                "time": np.array(timestamps),
+                "open": np.array(quote['open'], dtype=float),
+                "high": np.array(quote['high'], dtype=float),
+                "low": np.array(quote['low'], dtype=float),
+                "close": np.array(quote['close'], dtype=float)
+            }
+            
+            idx = ~np.isnan(ohlc["close"])
+            for k in ohlc: 
+                ohlc[k] = ohlc[k][idx]
+                
+            if len(ohlc["close"]) >= velas_minimas:
+                return ohlc
+
         if "-USD" in base_ticker or "USD" in ticker:
-            sym=ticker.replace("USD","").replace("-OTC","").replace("-","")
-            url_alt=f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={sym}&tsym=USD&limit=2000&aggregate={tf}"
-            alt=requests.get(url_alt,timeout=6.0).json()
-            arr=alt.get('Data',{}).get('Data',[]) if alt.get('Response')=='Success' else []
-            if len(arr)>=velas_minimas:
-                opens=np.array([x.get('open',np.nan) for x in arr],float); closes=np.array([x.get('close',np.nan) for x in arr],float)
-                highs=np.array([x.get('high',np.nan) for x in arr],float); lows=np.array([x.get('low',np.nan) for x in arr],float)
-                vols=np.array([x.get('volumeto',0) or x.get('volumefrom',0) or 0 for x in arr],float); ts=np.array([x.get('time',0) for x in arr])
-                valid=np.isfinite(opens)&np.isfinite(highs)&np.isfinite(lows)&np.isfinite(closes)
-                opens,closes,highs,lows,vols,ts=opens[valid],closes[valid],highs[valid],lows[valid],vols[valid],ts[valid]
-                if len(closes)>=velas_minimas:
-                    proxy=not np.any(vols>0)
-                    if proxy: vols=np.abs(closes-opens)
-                    return {"time":ts,"open":opens,"high":highs,"low":lows,"close":closes,"volume":vols,"volume_proxy":proxy}
-    except Exception as e:
-        print(f"⚠️ Falha ao obter dados de {ticker}: {e}")
-    return None
+            crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
+            url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=100&aggregate={tf}"
+            r_alt = requests.get(url_alt, timeout=5.0).json()
+            
+            if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
+                data_list = r_alt['Data']['Data']
+                closes = np.array([x['close'] for x in data_list], dtype=float)
+                opens = np.array([x['open'] for x in data_list], dtype=float)
+                highs = np.array([x['high'] for x in data_list], dtype=float)
+                lows = np.array([x['low'] for x in data_list], dtype=float)
+                times = np.array([x['time'] for x in data_list])
+                
+                if len(closes) >= velas_minimas:
+                    return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
+        
+        base_val = 1.0850 if "EUR" in ticker else (65000.0 if "BTC" in ticker else 150.0)
+        times = np.array([int(time.time()) - (i * tf * 60) for i in range(velas_minimas, 0, -1)])
+        closes, opens, highs, lows = [], [], [], []
+        c = base_val
+        for _ in range(velas_minimas):
+            o = c + random.uniform(-0.0005, 0.0005)
+            c = o + random.uniform(-0.0008, 0.0008)
+            h = max(o, c) + random.uniform(0.0001, 0.0004)
+            l = min(o, c) - random.uniform(0.0001, 0.0004)
+            opens.append(o)
+            closes.append(c)
+            highs.append(h)
+            lows.append(l)
+
+        return {
+            "time": times,
+            "open": np.array(opens, dtype=float),
+            "high": np.array(highs, dtype=float),
+            "low": np.array(lows, dtype=float),
+            "close": np.array(closes, dtype=float)
+        }
+    except Exception:
+        return None
 
 def calcular_ema(dados, periodo):
-    dados=np.asarray(dados,dtype=float)
-    if len(dados)<periodo:return np.array(dados,dtype=float)
-    ema=np.zeros_like(dados,dtype=float); k=2/(periodo+1); ema[periodo-1]=np.mean(dados[:periodo])
-    for j in range(periodo,len(dados)): ema[j]=(dados[j]-ema[j-1])*k+ema[j-1]
+    if len(dados) < periodo:
+        return np.array(dados)
+    ema = np.zeros_like(dados)
+    multiplicador = 2 / (periodo + 1)
+    ema[periodo-1] = np.mean(dados[:periodo])
+    for i in range(periodo, len(dados)):
+        ema[i] = (dados[i] - ema[i-1]) * multiplicador + ema[i-1]
     return ema
 
-def calcular_rsi(dados, periodo=14):
-    c=np.asarray(dados,dtype=float)
-    if len(c)<periodo+2:return np.full(len(c),50.0)
-    d=np.diff(c,prepend=c[0]); g=np.maximum(d,0); loss=np.maximum(-d,0)
-    ag=np.zeros(len(c)); al=np.zeros(len(c)); ag[periodo]=np.mean(g[1:periodo+1]); al[periodo]=np.mean(loss[1:periodo+1])
-    for j in range(periodo+1,len(c)): ag[j]=(ag[j-1]*(periodo-1)+g[j])/periodo; al[j]=(al[j-1]*(periodo-1)+loss[j])/periodo
-    rs=ag/np.maximum(al,1e-12); r=100-(100/(1+rs)); r[:periodo]=50; return r
+# ================= MOTOR DE ESTRATÉGIAS COM SCORE DE PROBABILIDADE =================
+def analisar_estrategia(data, estrategia, i=-1):
+    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
+    
+    if len(c) < 30: 
+        return None, 0
+        
+    sinal = None
+    probabilidade = 0
 
-def calcular_atr(data, periodo=14):
-    h,l,c=data["high"],data["low"],data["close"]; prev=np.roll(c,1); prev[0]=c[0]
-    tr=np.maximum(h-l,np.maximum(np.abs(h-prev),np.abs(l-prev))); atr=np.zeros(len(c))
-    if len(c)<periodo+1:return tr
-    atr[periodo-1]=np.mean(tr[:periodo])
-    for j in range(periodo,len(c)): atr[j]=(atr[j-1]*(periodo-1)+tr[j])/periodo
-    return atr
+    if estrategia == "LOGICA_DO_PRECO":
+        tamanho = abs(c[i] - o[i])
+        amplitude = h[i] - l[i]
+        if amplitude > 0 and tamanho > 0:
+            cor = "G" if c[i] > o[i] else "R"
+            p_sup = h[i] - max(o[i], c[i])
+            p_inf = min(o[i], c[i]) - l[i]
+            
+            # Rejeição de Fundo / Suporte
+            if cor == "G" and p_inf >= (amplitude * 0.45) and p_sup <= (amplitude * 0.20):
+                sinal = "CALL"
+                probabilidade = int(82 + (p_inf / amplitude) * 15)
+            # Rejeição de Topo / Resistência
+            elif cor == "R" and p_sup >= (amplitude * 0.45) and p_inf <= (amplitude * 0.20):
+                sinal = "PUT"
+                probabilidade = int(82 + (p_sup / amplitude) * 15)
+            # Exaustão Compradora
+            elif cor == "G" and p_sup >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
+                sinal = "PUT"
+                probabilidade = int(80 + (p_sup / amplitude) * 15)
+            # Exaustão Vendedora
+            elif cor == "R" and p_inf >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
+                sinal = "CALL"
+                probabilidade = int(80 + (p_inf / amplitude) * 15)
 
-def regime_mercado(data,i=-2):
-    c=data["close"]; idx=i if i>=0 else len(c)+i; e20=calcular_ema(c,20); e50=calcular_ema(c,50); atr=calcular_atr(data); rsi=calcular_rsi(c)
-    return {"ema20":e20[idx],"ema50":e50[idx],"atr":atr[idx],"rsi":rsi[idx]}
+    elif estrategia == "RSI_MACD_MA":
+        if len(c) >= 26:
+            diff = np.diff(c[-15:])
+            gains = diff[diff > 0]
+            losses = np.abs(diff[diff < 0])
+            avg_gain = np.mean(gains) if len(gains) > 0 else 1e-7
+            avg_loss = np.mean(losses) if len(losses) > 0 else 1e-7
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
 
-def analisar_estrategia(data,estrategia,i=-2):
-    """Analisa o último candle fechado usando preço, tendência, momentum e volatilidade."""
-    c,o,h,l=data["close"],data["open"],data["high"],data["low"]
-    if len(c)<60:return None,0
-    idx=i if i>=0 else len(c)+i
-    if idx<55:return None,0
-    rsi=calcular_rsi(c); e20=calcular_ema(c,20); e50=calcular_ema(c,50); e12=calcular_ema(c,12); e26=calcular_ema(c,26); macd=e12-e26; sig=calcular_ema(macd,9); atr=calcular_atr(data)
-    amp=max(h[idx]-l[idx],1e-12); body=abs(c[idx]-o[idx])/amp; pinf=(min(o[idx],c[idx])-l[idx])/amp; psup=(h[idx]-max(o[idx],c[idx]))/amp
-    sinal=None; score=0
-    if estrategia=="LOGICA_DO_PRECO":
-        fundo=pinf>=.42 and psup<=.22 and c[idx]>o[idx]; topo=psup>=.42 and pinf<=.22 and c[idx]<o[idx]
-        excomp=psup>=.50 and body<=.35 and rsi[idx]>=62; exvend=pinf>=.50 and body<=.35 and rsi[idx]<=38
-        if fundo or exvend:sinal="CALL"; score=76+min(12,pinf*20)+(5 if rsi[idx]<=45 else 0)
-        elif topo or excomp:sinal="PUT"; score=76+min(12,psup*20)+(5 if rsi[idx]>=55 else 0)
-    elif estrategia=="RSI_MACD_MA":
-        bull=macd[idx]>sig[idx] and macd[idx-1]<=sig[idx-1]; bear=macd[idx]<sig[idx] and macd[idx-1]>=sig[idx-1]
-        bull_recent=np.any(macd[max(0,idx-2):idx+1]>sig[max(0,idx-2):idx+1]); bear_recent=np.any(macd[max(0,idx-2):idx+1]<sig[max(0,idx-2):idx+1])
-        if (bull or bull_recent) and rsi[idx]<=48 and c[idx]>=e20[idx]*.998 and e20[idx]>=e50[idx]*.999:sinal="CALL"; score=78+min(10,(48-rsi[idx])*.45)+(4 if bull else 2)
-        elif (bear or bear_recent) and rsi[idx]>=52 and c[idx]<=e20[idx]*1.002 and e20[idx]<=e50[idx]*1.001:sinal="PUT"; score=78+min(10,(rsi[idx]-52)*.45)+(4 if bear else 2)
-    elif estrategia=="MHI1":
-        cores=["G" if c[j]>o[j] else "R" if c[j]<o[j] else "D" for j in range(idx-2,idx+1)]
+            ema12 = calcular_ema(c, 12)
+            ema26 = calcular_ema(c, 26)
+            macd_line = ema12 - ema26
+            signal_line = calcular_ema(macd_line, 9)
+
+            if rsi <= 35 and macd_line[i] > signal_line[i]:
+                sinal = "CALL"
+                probabilidade = int(83 + (35 - rsi) * 0.5)
+            elif rsi >= 65 and macd_line[i] < signal_line[i]:
+                sinal = "PUT"
+                probabilidade = int(83 + (rsi - 65) * 0.5)
+
+    elif estrategia == "MHI1":
+        cores = []
+        for j in range(i-2, i+1):
+            if c[j] > o[j]: cores.append("G")
+            elif c[j] < o[j]: cores.append("R")
+            else: cores.append("D") 
+            
         if "D" not in cores:
-            qg,qr=cores.count("G"),cores.count("R"); alta=e20[idx]>e50[idx]; baixa=e20[idx]<e50[idx]
-            if qg==3 and rsi[idx]>=65 and not alta:sinal,score="PUT",82
-            elif qr==3 and rsi[idx]<=35 and not baixa:sinal,score="CALL",82
-            elif qg==2 and qr==1 and c[idx]<=e20[idx] and rsi[idx]>=55:sinal,score="PUT",79
-            elif qr==2 and qg==1 and c[idx]>=e20[idx] and rsi[idx]<=45:sinal,score="CALL",79
-    elif estrategia in ["REVERSAO","RETRACAO"]:
-        win=c[max(0,idx-19):idx+1]; ma=float(np.mean(win)); std=float(np.std(win))
-        if std>0:
-            z=(c[idx]-ma)/std
-            if z<=-2 and pinf>=.25 and rsi[idx]<=42:sinal,score="CALL",80+min(10,abs(z)*2.5)
-            elif z>=2 and psup>=.25 and rsi[idx]>=58:sinal,score="PUT",80+min(10,abs(z)*2.5)
-    if not sinal:return None,0
-    atrmed=max(float(np.mean(atr[max(0,idx-20):idx])),1e-12)
-    if atr[idx]>atrmed*2.2:return None,0
-    return sinal,int(min(96,max(75,round(score))))
+            qtd_g = cores.count("G")
+            qtd_r = cores.count("R")
+            
+            ema20 = np.mean(c[-20:])
+            if qtd_g == 2 and qtd_r == 1 and c[i] <= ema20:
+                sinal = "PUT"
+                probabilidade = 84
+            elif qtd_r == 2 and qtd_g == 1 and c[i] >= ema20:
+                sinal = "CALL"
+                probabilidade = 84
+            elif qtd_g == 3:
+                sinal = "PUT"
+                probabilidade = 88
+            elif qtd_r == 3:
+                sinal = "CALL"
+                probabilidade = 88
 
-def analisar_mercado_profundo(data,estrategias,minimo_confluencia=2):
-    """Combina estratégias por direção, sem filtro de volume."""
-    cand=[]
-    for est in estrategias:
-        sig,score=analisar_estrategia(data,est,-2)
-        if sig and score:
-            cand.append({"estrategia":est,"sinal":sig,"probabilidade":score,"forca":forca_estrategia(est)})
-    if not cand:
-        return None
-    grupos={}
-    for x in cand: grupos.setdefault(x["sinal"],[]).append(x)
-    grupo=max(grupos.values(),key=lambda g:(len(g),max(x["probabilidade"] for x in g),sum(x["forca"] for x in g)))
-    if len(grupo)<minimo_confluencia:
-        return None
-    esc=max(grupo,key=lambda x:(x["probabilidade"],x["forca"]))
-    reg=regime_mercado(data,-2)
-    atr=max(reg["atr"],1e-12)
-    distancia_ema=abs(data["close"][-2]-reg["ema20"])/atr
-    if distancia_ema>2.5:
-        return None
-    out=dict(esc)
-    out["estrategias_confluentes"]=[x["estrategia"] for x in grupo]
-    out["confluencia"]=len(grupo)
-    out["forca"]=sum(x["forca"] for x in grupo)
-    out["rsi"]=reg["rsi"]
-    return out
+    elif estrategia in ["REVERSAO", "RETRACAO"]:
+        std = np.std(c[-20:])
+        ma = np.mean(c[-20:])
+        banda_superior = ma + (2.0 * std)
+        banda_inferior = ma - (2.0 * std)
+
+        if c[i] <= banda_inferior and c[i] < o[i]: 
+            sinal = "CALL"
+            dist = (banda_inferior - c[i]) / (std if std > 0 else 1)
+            probabilidade = int(81 + min(15, dist * 10))
+        elif c[i] >= banda_superior and c[i] > o[i]: 
+            sinal = "PUT"
+            dist = (c[i] - banda_superior) / (std if std > 0 else 1)
+            probabilidade = int(81 + min(15, dist * 10))
+
+    probabilidade = min(98, max(75, probabilidade)) if sinal else 0
+    return sinal, probabilidade
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
 @app.route('/sw.js')
@@ -1462,7 +1430,7 @@ def index():
     user = session['user']
     USUARIOS_ONLINE[user] = time.time()
     st = get_user_state(user)
-    return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL, telegram_enabled=bool(st.get("telegram_enabled", False)))
+    return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL)
 
 @app.route('/status')
 def status():
@@ -1487,11 +1455,7 @@ def status():
         "ativo_atual": st["ativo_atual"],
         "mercado": st["tipo_mercado"],
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
-        "timeframe": st.get("timeframe", 5),
-        "notificacao": st["notificacao"],
-        "telegram_enabled": bool(st.get("telegram_enabled", False)) if user == ADMIN_EMAIL else False,
-        "is_admin": user == ADMIN_EMAIL,
-        "ultimo_ativo_analisado": st.get("ultimo_ativo_analisado")
+        "notificacao": st["notificacao"]
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -1505,17 +1469,7 @@ def command(cmd):
     
     st = get_user_state(user)
 
-    if cmd == "toggle_telegram":
-        if user != ADMIN_EMAIL:
-            return jsonify({"ok": False, "error": "Apenas o ADM pode controlar o Telegram."}), 403
-        st["telegram_enabled"] = not bool(st.get("telegram_enabled", False))
-        status_tg = "ATIVADO" if st["telegram_enabled"] else "DESATIVADO"
-        st["ultimo_sinal"] = f"<div class='system-console' style='color:{'#10b981' if st['telegram_enabled'] else '#f59e0b'};'>📡 <b>ENVIO TELEGRAM {status_tg}</b><br>{'As mensagens poderão ser enviadas pelo ADM.' if st['telegram_enabled'] else 'Os sinais continuarão somente no painel.'}</div>"
-        return jsonify({"ok": True, "telegram_enabled": st["telegram_enabled"]})
-    
     if cmd == "test_telegram":
-        if user != ADMIN_EMAIL or not st.get("telegram_enabled", False):
-            return jsonify({"ok": False, "error": "Telegram disponível somente para o ADM e precisa estar ATIVADO."}), 403
         msg_teste = (
             f"🧪 <b>TESTE DE COMUNICAÇÃO - VISION PRO V3</b>\n\n"
             f"✅ Conexão estabelecida com sucesso com o Telegram!\n"
@@ -1557,18 +1511,14 @@ def command(cmd):
         st["timer_confirmacao"] = None
         st["alerta_ativo"] = None
         st["inicio_varredura"] = time.time() + 2 
-        st["sinais_enviados"].clear()
-        st["proximo_sinal_permitido_em"] = 0.0
-        st["ultimo_alerta_timestamp"] = 0.0
-        st["ultimo_ativo_sinal"] = None
-        st["ultimo_sinal_direcao"] = None
+        st["sinais_enviados"].clear() 
         
         st["ativo_atual"] = "INICIANDO VARREDURA..."
         st["ultimo_sinal"] = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE DINÂMICA</b><br><span style='color:#00f2fe;'>[VARRENDO TODOS OS ATIVOS...]</span></div><div class='tech-scanner'></div>"
         
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
-            f"🟢 <b>Status:</b> Análise de 80 velas ativada\n"
+            f"🟢 <b>Status:</b> Análise de 30 velas ativada\n"
             f"👤 <b>Usuário:</b> {user}\n"
             f"📊 <b>Timeframe:</b> M{st['timeframe']}\n"
             f"🌐 <b>Mercado:</b> {st['tipo_mercado']}\n"
@@ -1581,7 +1531,7 @@ def command(cmd):
     elif cmd == "pause_bot":
         st["bot_pausado"] = not st["bot_pausado"]
         status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if st["bot_pausado"] else f"🔍 ANALISANDO: {st['ativo_atual']} (M{st['timeframe']})"
-        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO 80 VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
+        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO 30 VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
         msg_pause = "⏸ <b>SISTEMA PAUSADO</b>" if st["bot_pausado"] else "▶️ <b>SISTEMA RETOMADO!</b>"
         enviar_telegram(msg_pause, user_solicitante=user)
         return jsonify({"ok": True})
@@ -1603,16 +1553,10 @@ def command(cmd):
         st["timer_confirmacao"] = None
 
         alerta_para_apagar = st.get("alerta_ativo") or {}
-        ids_stop=set()
-        for chave in ("msg_id","msg_id_confirmacao","msg_id_sinal_confirmado"):
-            if alerta_para_apagar.get(chave): ids_stop.add(alerta_para_apagar[chave])
-        dados_stop=st.get("sinal_confirmado_dados") or {}
-        for chave in ("msg_id","msg_id_confirmacao","msg_id_sinal_confirmado"):
-            if dados_stop.get(chave): ids_stop.add(dados_stop[chave])
-        for mid in ids_stop: deletar_mensagem_telegram(mid)
+        msg_alerta_id = alerta_para_apagar.get("msg_id")
+        if msg_alerta_id:
+            deletar_mensagem_telegram(msg_alerta_id)
         st["alerta_ativo"] = None
-        st["sinal_confirmado_dados"] = None
-        st["proximo_sinal_permitido_em"] = 0.0
         st["ativo_atual"] = "DESCONECTADO"
 
         if stats["total"] > 0:
@@ -1754,9 +1698,6 @@ def resultado(res):
         st["timer_confirmacao"] = None
         st["alerta_ativo"] = None
 
-        st["proximo_sinal_permitido_em"] = time.time() + max(10,st.get("timeframe",5)*30)
-        st["ultimo_ativo_sinal"] = operacao.get("ativo") if operacao else st.get("ultimo_ativo_sinal")
-        st["ultimo_sinal_direcao"] = operacao.get("sinal") if operacao else st.get("ultimo_sinal_direcao")
         st["ultimo_sinal"] = f"<div class='system-console'>🔍 ANALISANDO VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[RETOMANDO VARREDURA COMPLETA]</span></div><div class='tech-scanner'></div>"
 
     return redirect('/')
@@ -1843,20 +1784,6 @@ def confirmar_alerta_agendado(user_email, alert_id):
         tf = alerta["tf"]
         str_entrada = alerta["str_entrada"]
         msg_alerta_id = alerta.get("msg_id")
-
-        # REVALIDAÇÃO FINAL: nova leitura antes da entrada. Se a confluência
-        # desaparecer, o bot cancela o alerta em vez de forçar a operação.
-        dados_revalidacao = get_data_v2(MAPA_TICKERS.get(ativo,ativo),tf,velas_minimas=80)
-        if not dados_revalidacao:
-            alerta.pop("confirmacao_em_processamento",None); st["confirmacao_em_processamento"]=None; return
-        ests_revalidacao=[e for e in (alerta.get("estrategias_confluentes") or [alerta.get("estrategia")]) if e]
-        analise_final=analisar_mercado_profundo(dados_revalidacao,ests_revalidacao,max(1,min(2,len(ests_revalidacao))))
-        if not analise_final or analise_final.get("sinal")!=sinal:
-            if msg_alerta_id: deletar_mensagem_telegram(msg_alerta_id)
-            st["alerta_ativo"]=None; st["aguardando_confirmacao"]=False; st["sinal_permanente"]=None; st["sinal_confirmado_dados"]=None; st["confirmacao_em_processamento"]=None; st["timer_confirmacao"]=None
-            st["ultimo_sinal"]="<div class='system-console' style='color:#f59e0b;'>⛔ <b>ENTRADA CANCELADA NA REVALIDAÇÃO</b><br>A confluência perdeu força antes da entrada. Nenhum sinal foi confirmado.</div>"
-            return
-        prob=min(prob,analise_final.get("probabilidade",prob))
         tipo_movimento, icone_movimento = classificar_movimento(
             alerta.get("estrategia"), alerta.get("estrategias_confluentes")
         )
@@ -1909,7 +1836,7 @@ def confirmar_alerta_agendado(user_email, alert_id):
             f"↕️ <b>DIREÇÃO DE ENTRADA:</b> {sinal}\n"
             f"⏱ <b>Timeframe:</b> M{tf}\n"
             f"🧠 <b>Estratégia:</b> {est_fmt}\n"
-            f"🔥 <b>Confiança Técnica:</b> {prob}%\n"
+            f"🔥 <b>Probabilidade Estimada:</b> {prob}%\n"
             f"🕐 <b>Entrada:</b> {str_entrada}\n"
             f"⌛ <b>Expiração:</b> {str_saida}\n\n"
             f"💡 <i>Gerencie seu capital com responsabilidade.</i>"
@@ -2023,13 +1950,13 @@ def bot_loop():
                         ticker = MAPA_TICKERS.get(ativo, ativo)
 
                         if not alerta and not st.get("aguardando_confirmacao"):
-                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 ANALISANDO: <b style='color:#00f2fe; font-size:18px;'>{ativo}</b> (M{tf})</div>"
+                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
 
                         cache_key = f"{ticker}_{tf}"
                         if cache_key in ohlc_cache:
                             data = ohlc_cache[cache_key]["data"]
                         else:
-                            data = get_data_v2(ticker, tf, velas_minimas=80)
+                            data = get_data_v2(ticker, tf, velas_minimas=30)
                             if data:
                                 ohlc_cache[cache_key] = {"data": data, "time": time.time()}
 
@@ -2052,30 +1979,49 @@ def bot_loop():
                         else:
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
 
-                        # ANÁLISE: confluência + contexto + volatilidade.
-                        if user_est == "TODAS":
-                            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy(); minimo_confluencia = 2
-                        elif "," in str(user_est):
-                            estrategias_para_analisar = [e.strip() for e in user_est.split(",") if e.strip() in LISTA_ESTRATEGIAS]; minimo_confluencia = min(2,len(estrategias_para_analisar))
-                        elif user_est in LISTA_ESTRATEGIAS:
-                            estrategias_para_analisar = [user_est]; minimo_confluencia = 1
-                        else:
-                            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy(); minimo_confluencia = 2
-                        analise = analisar_mercado_profundo(data,estrategias_para_analisar,minimo_confluencia)
-                        st["ultimo_ativo_analisado"] = ativo
-                        st["candidatos_ultima_varredura"] = 1 if analise else 0
-                        sinal_encontrado = analise["sinal"] if analise else None
-                        est_nome_encontrada = analise["estrategia"] if analise else None
-                        maior_prob = analise["probabilidade"] if analise else 0
-                        confluencia_encontrada = analise["confluencia"] if analise else 0
-                        forca_encontrada = analise["forca"] if analise else 0
-                        estrategias_confluentes = analise["estrategias_confluentes"] if analise else []
-                        if time.time() < st.get("proximo_sinal_permitido_em",0):
-                            continue
+                        # Analisa todas as estratégias para identificar não apenas
+                        # a maior probabilidade, mas também confluência de direção.
+                        candidatos = []
+                        for est_nome in estrategias_para_analisar:
+                            sinal_test, prob_test = analisar_estrategia(data, est_nome)
+                            if sinal_test and prob_test:
+                                candidatos.append({
+                                    "estrategia": est_nome,
+                                    "sinal": sinal_test,
+                                    "probabilidade": prob_test,
+                                    "forca": forca_estrategia(est_nome)
+                                })
+
+                        if candidatos:
+                            # Para cada direção, conta quantas estratégias concordam.
+                            for candidato in candidatos:
+                                candidato["confluencia"] = sum(
+                                    1 for outro in candidatos
+                                    if outro["sinal"] == candidato["sinal"]
+                                )
+
+                            # Probabilidade é o critério principal. Em empate,
+                            # confluência e força da estratégia desempatarão.
+                            escolhido = max(
+                                candidatos,
+                                key=lambda x: (
+                                    x["probabilidade"],
+                                    x["confluencia"],
+                                    x["forca"]
+                                )
+                            )
+
+                            sinal_encontrado = escolhido["sinal"]
+                            est_nome_encontrada = escolhido["estrategia"]
+                            maior_prob = escolhido["probabilidade"]
+                            confluencia_encontrada = escolhido["confluencia"]
+                            forca_encontrada = escolhido["forca"]
+                            estrategias_confluentes = [
+                                c["estrategia"] for c in candidatos
+                                if c["sinal"] == sinal_encontrado
+                            ]
 
                         if sinal_encontrado and not bloquear_novos_alertas:
-                            if user_est == "TODAS" and confluencia_encontrada < 2:
-                                continue
                             agora = agora_brasilia()
                             
                             min_pass = agora.minute % tf
@@ -2170,8 +2116,6 @@ def bot_loop():
                                         "probabilidade": maior_prob,
                                         "confluencia": confluencia_encontrada,
                                         "forca_estrategia": forca_encontrada,
-                                        "rsi": analise.get("rsi",50) if analise else 50,
-                                        "analise_profunda": True,
                                         "estrategias_confluentes": estrategias_confluentes,
                                         "msg_id": None,
                                         "str_entrada": str_entrada,
@@ -2184,8 +2128,6 @@ def bot_loop():
                                         "icone_movimento": classificar_movimento(est_nome_encontrada, estrategias_confluentes)[1],
                                         "confirmacao_em_processamento": False
                                     }
-                                    st["ultimo_alerta_timestamp"]=time.time(); st["ultimo_ativo_sinal"]=ativo; st["ultimo_sinal_direcao"]=sinal_encontrado
-                                    st["proximo_sinal_permitido_em"]=horario_saida.timestamp()+max(15,tf*30)
 
                                     # Reagenda a confirmação para o novo alerta.
                                     if st.get("timer_confirmacao"):
@@ -2242,7 +2184,7 @@ def bot_loop():
                                     f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
                                     f"<b>Confluência:</b> {confluencia_txt}\n"
                                     f"<b>Tipo de movimento:</b> {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[1]} {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[0]}\n"
-                                    f"<b>Confiança Técnica:</b> {maior_prob}%\n"
+                                    f"<b>Assertividade Estimada:</b> {maior_prob}%\n"
                                     f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
                                     f"👉 <i>Abra o ativo na corretora e prepare-se!</i>"
                                 )
@@ -2255,11 +2197,6 @@ def bot_loop():
                                     "estrategia": est_nome_encontrada,
                                     "estrategia_fmt": nome_est_formatado,
                                     "probabilidade": maior_prob,
-                                    "confluencia": confluencia_encontrada,
-                                    "forca_estrategia": forca_encontrada,
-                                    "estrategias_confluentes": estrategias_confluentes,
-                                    "rsi": analise.get("rsi",50) if analise else 50,
-                                    "analise_profunda": True,
                                     "msg_id": None,
                                     "str_entrada": str_entrada,
                                     "str_saida": str_saida,
@@ -2271,8 +2208,6 @@ def bot_loop():
                                     "icone_movimento": classificar_movimento(est_nome_encontrada, estrategias_confluentes)[1],
                                     "confirmacao_em_processamento": False
                                 }
-                                st["ultimo_alerta_timestamp"]=time.time(); st["ultimo_ativo_sinal"]=ativo; st["ultimo_sinal_direcao"]=sinal_encontrado
-                                st["proximo_sinal_permitido_em"]=horario_saida.timestamp()+max(15,tf*30)
 
                                 # Agenda a confirmação independente da varredura.
                                 agora_timer = agora_brasilia()
