@@ -52,10 +52,8 @@ def get_user_state(email):
             "aguardando_confirmacao": False,
             "sinal_permanente": None,
             "ultimo_sinal": "Aguardando Comando...",
-            "diagnostico_analise": [],
             "ultimo_ativo_analisado": None,
             "candidatos_ultima_varredura": 0,
-            "diagnostico_analise": [],
             "ativo_atual": "AGUARDANDO...",
             "inicio_varredura": 0,
             "sinais_enviados": {},
@@ -536,12 +534,23 @@ HTML_INDEX = """
         </div>
 
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
-            MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
-            ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
+            MERCADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
+            ATIVO: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
         </div>
 
-        <div class="status-box" id="panel-text">Aguardando Comando...</div>
-        <div id="analysis-diagnostic" style="margin-top:8px;padding:9px;border:1px solid rgba(0,242,254,.15);border-radius:10px;font-size:10px;line-height:1.45;color:#9ca3af;background:rgba(0,0,0,.12);">DIAGNÓSTICO: aguardando análise...</div>
+        <div class="status-box" id="panel-text">
+            <div style="font-size:12px;color:#64748b;">STATUS DA ANÁLISE</div>
+            <div id="scan-asset" style="font-size:18px;color:#00f2fe;font-weight:900;margin-top:5px;">AGUARDANDO...</div>
+        </div>
+
+        <div id="candle-clock-box" style="background:#0b1120;border:1px solid rgba(0,242,254,.25);border-radius:16px;padding:15px;margin-bottom:16px;text-align:center;">
+            <div style="font-size:10px;color:#64748b;font-weight:800;letter-spacing:1px;text-transform:uppercase;">TEMPO DO CANDLE</div>
+            <div id="candle-clock-label" style="font-family:'JetBrains Mono',monospace;font-size:27px;font-weight:900;color:#00f2fe;margin-top:5px;">M{{ tf }} • 00:00 / {{ '%02d:00'|format(tf) }}</div>
+            <div id="candle-clock-sub" style="font-size:11px;color:#94a3b8;margin-top:4px;">Candle em andamento</div>
+            <div style="height:6px;background:#1e293b;border-radius:10px;overflow:hidden;margin-top:10px;">
+                <div id="candle-progress" style="height:100%;width:0%;background:linear-gradient(90deg,#00f2fe,#38ef7d);transition:width .25s linear;"></div>
+            </div>
+        </div>
 
         <div id="result-area" class="result-grid" style="display:none;">
             <button class="btn-res btn-res-win" onclick="fetch('/resultado/win')">WIN</button>
@@ -723,17 +732,42 @@ HTML_INDEX = """
             });
         }
 
+        let painelTimeframe = {{ tf|int }};
+
+        function formatarTempo(segundos) {
+            segundos = Math.max(0, Math.floor(segundos));
+            const m = Math.floor(segundos / 60);
+            const sec = segundos % 60;
+            return String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+        }
+
+        function atualizarRelogioCandle() {
+            const label = document.getElementById('candle-clock-label');
+            const sub = document.getElementById('candle-clock-sub');
+            const progress = document.getElementById('candle-progress');
+            if (!label || !sub || !progress) return;
+            const tf = [1, 5, 15].includes(Number(painelTimeframe)) ? Number(painelTimeframe) : 5;
+            const agora = new Date();
+            const total = tf * 60;
+            const decorrido = (agora.getMinutes() % tf) * 60 + agora.getSeconds();
+            const restante = Math.max(0, total - decorrido);
+            const pct = Math.min(100, Math.max(0, (decorrido / total) * 100));
+            label.innerText = `M${tf} • ${formatarTempo(decorrido)} / ${formatarTempo(total)}`;
+            sub.innerText = `Decorrido: ${formatarTempo(decorrido)} • Fecha em: ${formatarTempo(restante)}`;
+            progress.style.width = pct.toFixed(2) + '%';
+        }
+
+        setInterval(atualizarRelogioCandle, 250);
+        atualizarRelogioCandle();
+
         async function atualizarPainel() {
             try {
                 const r = await fetch('/status', { cache: 'no-store' });
                 const data = await r.json();
-                const panel = document.getElementById('panel-text');
-                if(panel && data.html) panel.innerHTML = data.html;
-                const diag = document.getElementById('analysis-diagnostic');
-                if (diag) {
-                    const linhas = Array.isArray(data.diagnostico) ? data.diagnostico : [];
-                    diag.innerHTML = '<b>DIAGNÓSTICO:</b> ' + (linhas.length ? linhas.map(x => '• ' + x).join('<br>') : 'aguardando análise...');
-                }
+                if (data.timeframe) painelTimeframe = Number(data.timeframe);
+                const scanAsset = document.getElementById('scan-asset');
+                const ativoPainel = data.ativo_atual || 'AGUARDANDO...';
+                if (scanAsset) scanAsset.innerText = data.rodando ? ativoPainel : 'SISTEMA PAUSADO';
                 if(document.getElementById('win-count')) document.getElementById('win-count').innerText = data.wins;
                 if(document.getElementById('loss-count')) document.getElementById('loss-count').innerText = data.reds;
                 if(document.getElementById('wr-text')) document.getElementById('wr-text').innerText = data.winrate + "%";
@@ -1192,28 +1226,14 @@ def calcular_atr(data, periodo=14):
     for j in range(periodo,len(c)): atr[j]=(atr[j-1]*(periodo-1)+tr[j])/periodo
     return atr
 
-def volume_confluente(data,sinal,i=-2):
-    v=np.asarray(data.get("volume",[]),float); c,o,h,l=data["close"],data["open"],data["high"],data["low"]
-    idx=i if i>=0 else len(c)+i
-    if len(v)<25 or idx<20:return False,0.0,0.0
-    base=v[idx-20:idx]; base=base[np.isfinite(base)&(base>0)]; atual=float(v[idx]) if np.isfinite(v[idx]) else 0
-    if len(base)<10 or atual<=0:return False,0.0,0.0
-    ratio=atual/max(float(np.median(base)),1e-12); amp=max(h[idx]-l[idx],1e-12); body=abs(c[idx]-o[idx])/amp
-    pinf=(min(o[idx],c[idx])-l[idx])/amp; psup=(h[idx]-max(o[idx],c[idx]))/amp
-    direcional=(c[idx]>o[idx]) if sinal=="CALL" else (c[idx]<o[idx]); rejeicao=(pinf>=.30) if sinal=="CALL" else (psup>=.30)
-    ok=ratio>=1.05 and (direcional or rejeicao)
-    if body<.08 and not rejeicao:ok=False
-    score=min(100,50+(ratio-1)*35+(15 if (direcional or rejeicao) else 0))
-    return ok,ratio,score
-
 def regime_mercado(data,i=-2):
     c=data["close"]; idx=i if i>=0 else len(c)+i; e20=calcular_ema(c,20); e50=calcular_ema(c,50); atr=calcular_atr(data); rsi=calcular_rsi(c)
     return {"ema20":e20[idx],"ema50":e50[idx],"atr":atr[idx],"rsi":rsi[idx]}
 
 def analisar_estrategia(data,estrategia,i=-2):
-    """Analisa candle fechado; volume/atividade é filtro obrigatório."""
+    """Analisa o último candle fechado usando preço, tendência, momentum e volatilidade."""
     c,o,h,l=data["close"],data["open"],data["high"],data["low"]
-    if len(c)<60 or len(data.get("volume",[]))<60:return None,0
+    if len(c)<60:return None,0
     idx=i if i>=0 else len(c)+i
     if idx<55:return None,0
     rsi=calcular_rsi(c); e20=calcular_ema(c,20); e50=calcular_ema(c,50); e12=calcular_ema(c,12); e26=calcular_ema(c,26); macd=e12-e26; sig=calcular_ema(macd,9); atr=calcular_atr(data)
@@ -1244,37 +1264,36 @@ def analisar_estrategia(data,estrategia,i=-2):
             if z<=-2 and pinf>=.25 and rsi[idx]<=42:sinal,score="CALL",80+min(10,abs(z)*2.5)
             elif z>=2 and psup>=.25 and rsi[idx]>=58:sinal,score="PUT",80+min(10,abs(z)*2.5)
     if not sinal:return None,0
-    vok,vr,_=volume_confluente(data,sinal,idx)
-    if not vok:return None,0
     atrmed=max(float(np.mean(atr[max(0,idx-20):idx])),1e-12)
     if atr[idx]>atrmed*2.2:return None,0
-    score+=min(8,max(0,(vr-1)*12))
     return sinal,int(min(96,max(75,round(score))))
 
-def analisar_mercado_profundo(data,estrategias,minimo_confluencia=2,diagnostico=None):
+def analisar_mercado_profundo(data,estrategias,minimo_confluencia=2):
+    """Combina estratégias por direção, sem filtro de volume."""
     cand=[]
-    if diagnostico is None: diagnostico=[]
     for est in estrategias:
         sig,score=analisar_estrategia(data,est,-2)
         if sig and score:
             cand.append({"estrategia":est,"sinal":sig,"probabilidade":score,"forca":forca_estrategia(est)})
-        else:
-            diagnostico.append(f"{est}: sem candidato válido após filtros de estratégia/volume/ATR")
     if not cand:
-        diagnostico.append("Nenhuma estratégia passou pelos filtros nesta vela fechada.")
         return None
     grupos={}
-    for x in cand:grupos.setdefault(x["sinal"],[]).append(x)
+    for x in cand: grupos.setdefault(x["sinal"],[]).append(x)
     grupo=max(grupos.values(),key=lambda g:(len(g),max(x["probabilidade"] for x in g),sum(x["forca"] for x in g)))
     if len(grupo)<minimo_confluencia:
-        diagnostico.append(f"Confluência insuficiente: {len(grupo)} estratégia(s) na direção {grupo[0]["sinal"]}; mínimo={minimo_confluencia}.")
         return None
-    esc=max(grupo,key=lambda x:(x["probabilidade"],x["forca"])); reg=regime_mercado(data,-2); atr=max(reg["atr"],1e-12)
+    esc=max(grupo,key=lambda x:(x["probabilidade"],x["forca"]))
+    reg=regime_mercado(data,-2)
+    atr=max(reg["atr"],1e-12)
     distancia_ema=abs(data["close"][-2]-reg["ema20"])/atr
     if distancia_ema>2.5:
-        diagnostico.append(f"Bloqueado por extensão: preço a {distancia_ema:.2f} ATR da EMA20.")
         return None
-    out=dict(esc); out["estrategias_confluentes"]=[x["estrategia"] for x in grupo]; out["confluencia"]=len(grupo); out["forca"]=sum(x["forca"] for x in grupo); out["volume_ratio"]=volume_confluente(data,esc["sinal"],-2)[1]; out["rsi"]=reg["rsi"]; return out
+    out=dict(esc)
+    out["estrategias_confluentes"]=[x["estrategia"] for x in grupo]
+    out["confluencia"]=len(grupo)
+    out["forca"]=sum(x["forca"] for x in grupo)
+    out["rsi"]=reg["rsi"]
+    return out
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
 @app.route('/sw.js')
@@ -1468,11 +1487,10 @@ def status():
         "ativo_atual": st["ativo_atual"],
         "mercado": st["tipo_mercado"],
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
+        "timeframe": st.get("timeframe", 5),
         "notificacao": st["notificacao"],
         "telegram_enabled": bool(st.get("telegram_enabled", False)) if user == ADMIN_EMAIL else False,
         "is_admin": user == ADMIN_EMAIL,
-        "diagnostico": st.get("diagnostico_analise", []),
-        "candidatos": st.get("candidatos_ultima_varredura", 0),
         "ultimo_ativo_analisado": st.get("ultimo_ativo_analisado")
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -2005,7 +2023,7 @@ def bot_loop():
                         ticker = MAPA_TICKERS.get(ativo, ativo)
 
                         if not alerta and not st.get("aguardando_confirmacao"):
-                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 80 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[CONFLUÊNCIA + VOLUME + CONTEXTO + REVALIDAÇÃO]</span></div><div class='tech-scanner'></div>"
+                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 ANALISANDO: <b style='color:#00f2fe; font-size:18px;'>{ativo}</b> (M{tf})</div>"
 
                         cache_key = f"{ticker}_{tf}"
                         if cache_key in ohlc_cache:
@@ -2034,7 +2052,7 @@ def bot_loop():
                         else:
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
 
-                        # ANÁLISE PROFUNDA: confluência + volume + contexto + volatilidade.
+                        # ANÁLISE: confluência + contexto + volatilidade.
                         if user_est == "TODAS":
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy(); minimo_confluencia = 2
                         elif "," in str(user_est):
@@ -2043,10 +2061,8 @@ def bot_loop():
                             estrategias_para_analisar = [user_est]; minimo_confluencia = 1
                         else:
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy(); minimo_confluencia = 2
-                        diagnostico = []
-                        analise = analisar_mercado_profundo(data,estrategias_para_analisar,minimo_confluencia,diagnostico)
+                        analise = analisar_mercado_profundo(data,estrategias_para_analisar,minimo_confluencia)
                         st["ultimo_ativo_analisado"] = ativo
-                        st["diagnostico_analise"] = diagnostico[-5:]
                         st["candidatos_ultima_varredura"] = 1 if analise else 0
                         sinal_encontrado = analise["sinal"] if analise else None
                         est_nome_encontrada = analise["estrategia"] if analise else None
@@ -2140,7 +2156,6 @@ def bot_loop():
                                         f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
                                         f"<b>Estratégia principal:</b> {nome_est_formatado}\n"
                                         f"<b>Confluência:</b> {confluencia_txt}\n"
-                                        f"<b>Volume/atividade:</b> {analise.get('volume_ratio',0):.2f}x da mediana\n"
                                         f"<b>Tipo de movimento:</b> {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[1]} {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[0]}\n"
                                         f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
                                         f"👉 <i>O alerta anterior foi cancelado. Considere somente este novo alerta.</i>"
@@ -2155,7 +2170,6 @@ def bot_loop():
                                         "probabilidade": maior_prob,
                                         "confluencia": confluencia_encontrada,
                                         "forca_estrategia": forca_encontrada,
-                                        "volume_ratio": analise.get("volume_ratio",0) if analise else 0,
                                         "rsi": analise.get("rsi",50) if analise else 50,
                                         "analise_profunda": True,
                                         "estrategias_confluentes": estrategias_confluentes,
@@ -2244,7 +2258,6 @@ def bot_loop():
                                     "confluencia": confluencia_encontrada,
                                     "forca_estrategia": forca_encontrada,
                                     "estrategias_confluentes": estrategias_confluentes,
-                                    "volume_ratio": analise.get("volume_ratio",0) if analise else 0,
                                     "rsi": analise.get("rsi",50) if analise else 50,
                                     "analise_profunda": True,
                                     "msg_id": None,
