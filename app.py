@@ -360,7 +360,12 @@ HTML_ADM = """
             <div style="margin-bottom:10px;">
                 <span style="color:#00f2fe;">Assertividade: <b>{{ info.winrate if info.winrate else 0 }}%</b></span><br>
                 <span style="color:#94a3b8;">Wins: {{ info.wins }} | Reds: {{ info.reds }}</span><br>
-                <span style="color:#f59e0b;">IPs Cadastrados (Máx 2): <b>{{ info.ips_Formatados }}</b></span>
+                <span style="color:#f59e0b;">IPs Cadastrados (Máx 2): <b>{{ info.ips_Formatados }}</b></span><br>
+                {% if info.bloqueado %}
+                    <span style="color:#ef4444; font-weight:bold;">🚫 USUÁRIO BLOQUEADO</span>
+                {% else %}
+                    <span style="color:#10b981; font-weight:bold;">✅ USUÁRIO LIBERADO</span>
+                {% endif %}
             </div>
             <form action="/adm/editar" method="POST">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -372,6 +377,7 @@ HTML_ADM = """
                 <button type="submit" formaction="/adm/renovar/{{ email }}" formmethod="POST" class="btn-adm green">RENOVAR +30 DIAS</button>
                 <button type="submit" formaction="/adm/liberar_ip/{{ email }}" formmethod="POST" class="btn-adm orange">LIBERAR DISPOSITIVOS / IPS</button>
                 {% if email != admin %}
+                <button type="submit" formaction="/adm/bloquear/{{ email }}" formmethod="POST" class="btn-adm {% if info.bloqueado %}green{% else %}red{% endif %}">{% if info.bloqueado %}DESBLOQUEAR USUÁRIO{% else %}BLOQUEAR USUÁRIO{% endif %}</button>
                 <button type="submit" formaction="/adm/excluir/{{ email }}" formmethod="POST" class="btn-adm red" onclick="return confirm('Excluir?')">EXCLUIR</button>
                 {% endif %}
             </form>
@@ -410,6 +416,7 @@ label{display:block;color:#94a3b8;font-size:9px;font-weight:800;margin-bottom:5p
 <div><label>Ativo</label><select name="ativo"><option value="TODOS" {% if filtros.ativo=='TODOS' %}selected{% endif %}>Todos os ativos</option>{% for a in ativos %}<option value="{{a}}" {% if filtros.ativo==a %}selected{% endif %}>{{a}}</option>{% endfor %}</select></div>
 <div><label>Timeframe</label><select name="tf"><option value="TODOS" {% if filtros.tf=='TODOS' %}selected{% endif %}>Todos os tempos</option><option value="1" {% if filtros.tf=='1' %}selected{% endif %}>M1</option><option value="5" {% if filtros.tf=='5' %}selected{% endif %}>M5</option><option value="15" {% if filtros.tf=='15' %}selected{% endif %}>M15</option></select></div>
 <div><label>Estratégia</label><select name="estrategia"><option value="TODAS" {% if filtros.estrategia=='TODAS' %}selected{% endif %}>Todas as estratégias</option>{% for key,nome in estrategias.items() %}<option value="{{key}}" {% if filtros.estrategia==key %}selected{% endif %}>{{nome}}</option>{% endfor %}</select></div>
+<div><label>Modo de Gale</label><select name="gale"><option value="SEM_GALE" {% if filtros.gale=='SEM_GALE' %}selected{% endif %}>SEM GALE</option><option value="GALE1" {% if filtros.gale=='GALE1' %}selected{% endif %}>COM GALE 1</option></select></div>
 </div>
 <div class="actions"><button class="btn primary" type="submit" name="analisar" value="1">🔍 ANALISAR DADOS REAIS AGORA</button><a class="btn" href="/admin/estatisticas">LIMPAR</a></div>
 </form>
@@ -420,16 +427,17 @@ label{display:block;color:#94a3b8;font-size:9px;font-weight:800;margin-bottom:5p
 <div class="metric"><div class="label">Combinações analisadas</div><div class="value cyan">{{resultado.combinacoes}}</div></div>
 <div class="metric"><div class="label">Sinais avaliados</div><div class="value cyan">{{resultado.sinais}}</div></div>
 <div class="metric"><div class="label">WIN</div><div class="value green">{{resultado.wins}}</div></div>
+<div class="metric"><div class="label">WIN G1</div><div class="value green">{{resultado.wins_g1}}</div></div>
 <div class="metric"><div class="label">RED</div><div class="value red">{{resultado.losses}}</div></div>
 <div class="metric"><div class="label">Taxa histórica</div><div class="value yellow">{{'%.2f'|format(resultado.winrate)}}%</div></div>
 <div class="metric"><div class="label">Melhor taxa histórica</div><div class="value green">{{'%.2f'|format(resultado.melhor_taxa)}}%</div></div>
 </div>
 {% if resultado.erro %}<div class="card error">{{resultado.erro}}</div>{% endif %}
 <div class="card" style="margin-top:12px"><div class="section">🏆 MELHORES COMBINAÇÕES REAIS</div>
-{% if resultado.linhas %}<div class="table-wrap"><table><thead><tr><th>Mercado</th><th>Ativo</th><th>Fonte</th><th>TF</th><th>Estratégia</th><th>Sinais</th><th>WIN</th><th>RED</th><th>Taxa histórica</th><th>Score médio</th></tr></thead><tbody>
-{% for r in resultado.linhas %}<tr class="{% if loop.first %}best{% endif %}"><td>{{r.mercado}}</td><td><strong>{{r.ativo}}</strong></td><td class="source">{{r.fonte}}</td><td>M{{r.tf}}</td><td>{{r.estrategia_nome}}</td><td>{{r.total}}</td><td class="green">{{r.wins}}</td><td class="red">{{r.losses}}</td><td>{{'%.2f'|format(r.winrate)}}%</td><td>{{'%.2f'|format(r.score_medio)}}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="muted">Nenhuma combinação pôde ser analisada com dados reais no recorte selecionado.</div>{% endif %}
+{% if resultado.linhas %}<div class="table-wrap"><table><thead><tr><th>Mercado</th><th>Ativo</th><th>Fonte</th><th>TF</th><th>Estratégia</th><th>Sinais</th><th>WIN</th><th>WIN G1</th><th>RED</th><th>Taxa histórica</th><th>Score médio</th></tr></thead><tbody>
+{% for r in resultado.linhas %}<tr class="{% if loop.first %}best{% endif %}"><td>{{r.mercado}}</td><td><strong>{{r.ativo}}</strong></td><td class="source">{{r.fonte}}</td><td>M{{r.tf}}</td><td>{{r.estrategia_nome}}</td><td>{{r.total}}</td><td class="green">{{r.wins}}</td><td class="green">{{r.wins_g1}}</td><td class="red">{{r.losses}}</td><td>{{'%.2f'|format(r.winrate)}}%</td><td>{{'%.2f'|format(r.score_medio)}}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="muted">Nenhuma combinação pôde ser analisada com dados reais no recorte selecionado.</div>{% endif %}
 </div>
-<div class="card"><div class="section">📌 MELHOR ESTRATÉGIA POR ATIVO + TIMEFRAME</div>{% if resultado.melhores_por_ativo %}<div class="table-wrap"><table><thead><tr><th>Ativo</th><th>TF</th><th>Estratégia</th><th>Fonte</th><th>Sinais</th><th>WIN</th><th>RED</th><th>Taxa histórica</th></tr></thead><tbody>{% for r in resultado.melhores_por_ativo %}<tr><td><strong>{{r.ativo}}</strong></td><td>M{{r.tf}}</td><td>{{r.estrategia_nome}}</td><td class="source">{{r.fonte}}</td><td>{{r.total}}</td><td class="green">{{r.wins}}</td><td class="red">{{r.losses}}</td><td>{{'%.2f'|format(r.winrate)}}%</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="muted">Sem dados reais suficientes.</div>{% endif %}</div>
+<div class="card"><div class="section">📌 MELHOR ESTRATÉGIA POR ATIVO + TIMEFRAME</div>{% if resultado.melhores_por_ativo %}<div class="table-wrap"><table><thead><tr><th>Ativo</th><th>TF</th><th>Estratégia</th><th>Fonte</th><th>Sinais</th><th>WIN</th><th>WIN G1</th><th>RED</th><th>Taxa histórica</th></tr></thead><tbody>{% for r in resultado.melhores_por_ativo %}<tr><td><strong>{{r.ativo}}</strong></td><td>M{{r.tf}}</td><td>{{r.estrategia_nome}}</td><td class="source">{{r.fonte}}</td><td>{{r.total}}</td><td class="green">{{r.wins}}</td><td class="green">{{r.wins_g1}}</td><td class="red">{{r.losses}}</td><td>{{'%.2f'|format(r.winrate)}}%</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="muted">Sem dados reais suficientes.</div>{% endif %}</div>
 {% endif %}
 </div></body></html>
 """
@@ -725,6 +733,7 @@ HTML_INDEX = """
             </div>
 
             {% if user == admin %}
+            <a class="btn-toggle-hist" href="/admin_panel" style="display:block;text-align:center;text-decoration:none;margin-bottom:8px;">👑 PAINEL ADM — GESTÃO DE CLIENTES</a>
             <button class="btn-toggle-hist" type="button" onclick="toggleEstatisticas()">📊 ESTATÍSTICAS / BACKTEST REAL ▾</button>
             <div id="estatisticas-opcoes" style="display:none; margin-top:10px; background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:12px;">
                 <div class="section-label">Configurar análise com dados reais</div>
@@ -733,6 +742,7 @@ HTML_INDEX = """
                     <div class="setting-group"><label>ATIVO</label><div class="select-wrapper"><select id="bt-ativo" class="modern-select"><option value="TODOS">TODOS OS ATIVOS</option>{% for a in (ATIVOS_BASE.get('FOREX_ABERTO', []) + ATIVOS_BASE.get('CRIPTO_ABERTO', []) + ATIVOS_BASE.get('FOREX_OTC', []) + ATIVOS_BASE.get('CRIPTO_OTC', [])) %}<option value="{{a}}">{{a}}</option>{% endfor %}</select></div></div>
                     <div class="setting-group"><label>TIMEFRAME</label><div class="select-wrapper"><select id="bt-tf" class="modern-select"><option value="TODOS">TODOS</option><option value="1">M1</option><option value="5">M5</option><option value="15">M15</option></select></div></div>
                     <div class="setting-group"><label>ESTRATÉGIA</label><div class="select-wrapper"><select id="bt-estrategia" class="modern-select"><option value="TODAS">TODAS</option>{% for key,nome in NOME_ESTRATEGIAS_DISPLAY.items() if key in LISTA_ESTRATEGIAS %}<option value="{{key}}">{{nome}}</option>{% endfor %}</select></div></div>
+                    <div class="setting-group"><label>MODO DE GALE</label><div class="select-wrapper"><select id="bt-gale" class="modern-select"><option value="SEM_GALE">SEM GALE</option><option value="GALE1">COM GALE 1</option></select></div></div>
                 </div>
                 <button class="btn-toggle-hist" type="button" onclick="abrirBacktestConfigurado()">🔍 ANALISAR DADOS REAIS</button>
             </div>
@@ -832,7 +842,8 @@ HTML_INDEX = """
             const ativo = document.getElementById('bt-ativo')?.value || 'TODOS';
             const tf = document.getElementById('bt-tf')?.value || 'TODOS';
             const estrategia = document.getElementById('bt-estrategia')?.value || 'TODAS';
-            const params = new URLSearchParams({mercado, ativo, tf, estrategia, analisar:'1'});
+            const gale = document.getElementById('bt-gale')?.value || 'SEM_GALE';
+            const params = new URLSearchParams({mercado, ativo, tf, estrategia, gale, analisar:'1'});
             window.location.href = '/admin/estatisticas?' + params.toString();
         }
 
@@ -974,6 +985,7 @@ def init_db():
             );
             
             ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ips_autorizados VARCHAR(255) DEFAULT '[]';
+            ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN DEFAULT FALSE;
 
             CREATE TABLE IF NOT EXISTS historico_sinais (
                 id SERIAL PRIMARY KEY,
@@ -1112,8 +1124,8 @@ def salvar_usuario(email, senha, data=None, ip_inicial=None):
         conn = get_db_connection()
         cur = conn.cursor()
         query = """
-            INSERT INTO usuarios (email, senha, criado_em, wins, reds, winrate, ips_autorizados)
-            VALUES (%s, %s, %s, 0, 0, 0.0, %s)
+            INSERT INTO usuarios (email, senha, criado_em, wins, reds, winrate, ips_autorizados, bloqueado)
+            VALUES (%s, %s, %s, 0, 0, 0.0, %s, FALSE)
             ON CONFLICT (email) DO UPDATE 
             SET senha = EXCLUDED.senha;
         """
@@ -1213,6 +1225,29 @@ def zerar_estatisticas_usuario(email):
         conn.close()
     except Exception:
         pass
+
+def bloquear_usuario_db(email):
+    try:
+        email_clean = email.strip().lower()
+        if email_clean == ADMIN_EMAIL:
+            return False
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT COALESCE(bloqueado, FALSE) AS bloqueado FROM usuarios WHERE email = %s;", (email_clean,))
+        res = cur.fetchone()
+        if not res:
+            cur.close()
+            conn.close()
+            return False
+        novo_estado = not bool(res.get("bloqueado", False))
+        cur.execute("UPDATE usuarios SET bloqueado = %s WHERE email = %s;", (novo_estado, email_clean))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return novo_estado
+    except Exception as e:
+        print(f"⚠️ Erro ao bloquear/desbloquear usuário: {e}")
+        return False
 
 def renovar_usuario_db(email):
     try:
@@ -1865,37 +1900,86 @@ def consultar_estatisticas_sinais(ativo=None, timeframe=None, estrategia=None, c
 
 
 # ================= BACKTEST HISTÓRICO =================
-def backtest_estrategia(data, estrategia, tf, expiracao_velas=1):
-    """Backtest walk-forward: cada decisão enxerga somente candles já fechados."""
+def backtest_estrategia(data, estrategia, tf, expiracao_velas=1, modo_gale="SEM_GALE"):
+    """Backtest walk-forward com opção SEM_GALE ou GALE1, sem olhar candles futuros."""
     arrays = {k: np.asarray(data[k]) for k in ("time", "open", "high", "low", "close")}
     c = arrays["close"].astype(float)
-    total = wins = losses = draws = 0
+    modo_gale = str(modo_gale or "SEM_GALE").upper()
+    if modo_gale not in {"SEM_GALE", "GALE1"}:
+        modo_gale = "SEM_GALE"
+
+    total = wins = wins_g1 = losses = draws = 0
     scores = []
-    for i in range(30, len(c) - expiracao_velas):
+    i = 30
+    limite = len(c) - max(1, int(expiracao_velas))
+
+    while i < limite:
         historico = {k: v[:i + 1] for k, v in arrays.items()}
         sinal, score = analisar_estrategia(historico, estrategia, i=-1)
         if not sinal or not score:
+            i += 1
             continue
+
         total += 1
         scores.append(float(score))
         preco_entrada = float(c[i])
         preco_saida = float(c[i + expiracao_velas])
+
         if preco_saida == preco_entrada:
             draws += 1
-        elif (sinal == "CALL" and preco_saida > preco_entrada) or (sinal == "PUT" and preco_saida < preco_entrada):
-            wins += 1
-        else:
-            losses += 1
-    avaliados = wins + losses
-    taxa = round((wins / avaliados) * 100, 2) if avaliados else 0.0
-    return {"estrategia": estrategia, "timeframe": tf, "total": total, "wins": wins, "losses": losses, "draws": draws, "avaliados": avaliados, "winrate": taxa, "score_medio": round(float(np.mean(scores)), 2) if scores else 0.0}
+            i += 1
+            continue
 
-def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionada):
+        ganhou = (sinal == "CALL" and preco_saida > preco_entrada) or (sinal == "PUT" and preco_saida < preco_entrada)
+        if ganhou:
+            wins += 1
+            i += 1
+            continue
+
+        if modo_gale == "GALE1":
+            indice_g1 = i + expiracao_velas
+            indice_saida_g1 = indice_g1 + expiracao_velas
+            if indice_saida_g1 < len(c):
+                preco_entrada_g1 = float(c[indice_g1])
+                preco_saida_g1 = float(c[indice_saida_g1])
+                if preco_saida_g1 == preco_entrada_g1:
+                    draws += 1
+                else:
+                    ganhou_g1 = (sinal == "CALL" and preco_saida_g1 > preco_entrada_g1) or (sinal == "PUT" and preco_saida_g1 < preco_entrada_g1)
+                    if ganhou_g1:
+                        wins_g1 += 1
+                    else:
+                        losses += 1
+                i = indice_saida_g1 + 1
+                continue
+
+        losses += 1
+        i += 1
+
+    avaliados = wins + wins_g1 + losses
+    taxa = round(((wins + wins_g1) / avaliados) * 100, 2) if avaliados else 0.0
+    return {
+        "estrategia": estrategia,
+        "timeframe": tf,
+        "modo_gale": modo_gale,
+        "total": total,
+        "wins": wins,
+        "wins_g1": wins_g1,
+        "losses": losses,
+        "draws": draws,
+        "avaliados": avaliados,
+        "winrate": taxa,
+        "score_medio": round(float(np.mean(scores)), 2) if scores else 0.0
+    }
+
+def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionada, modo_gale="SEM_GALE"):
     """Executa a análise somente com fontes reais. Sem banco de resultados e sem dados sintéticos."""
     mercado = str(mercado or "ABERTO").upper()
     ativo = str(ativo or "TODOS").upper()
     tf_selecionado = str(tf_selecionado or "TODOS")
     estrategia_selecionada = str(estrategia_selecionada or "TODAS").upper()
+    modo_gale = str(modo_gale or "SEM_GALE").upper()
+    if modo_gale not in {"SEM_GALE", "GALE1"}: modo_gale = "SEM_GALE"
 
     abertos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
     if mercado == "OTC":
@@ -1929,7 +2013,7 @@ def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionad
                 fontes_indisponiveis.append(f"{ativo_nome} M{tf}: fonte {fonte} indisponível ou sem candles suficientes")
                 continue
             for estrategia in estrategias:
-                r = backtest_estrategia(data, estrategia, tf, expiracao_velas=1)
+                r = backtest_estrategia(data, estrategia, tf, expiracao_velas=1, modo_gale=modo_gale)
                 if r["total"] == 0:
                     continue
                 linhas.append({"mercado":"ABERTO", "ativo":ativo_nome, "fonte":fonte, "tf":tf, "estrategia":estrategia, "estrategia_nome":NOME_ESTRATEGIAS_DISPLAY.get(estrategia, estrategia), **r})
@@ -1943,12 +2027,13 @@ def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionad
     melhores_por_ativo = sorted(melhores.values(), key=lambda x: (x["ativo"], x["tf"]))
     total_sinais = sum(r["total"] for r in linhas)
     total_wins = sum(r["wins"] for r in linhas)
+    total_wins_g1 = sum(r.get("wins_g1", 0) for r in linhas)
     total_losses = sum(r["losses"] for r in linhas)
-    avaliados = total_wins + total_losses
-    taxa = round(total_wins / avaliados * 100, 2) if avaliados else 0.0
+    avaliados = total_wins + total_wins_g1 + total_losses
+    taxa = round((total_wins + total_wins_g1) / avaliados * 100, 2) if avaliados else 0.0
     return {
-        "combinacoes": len(linhas), "sinais": total_sinais, "wins": total_wins, "losses": total_losses,
-        "winrate": taxa, "melhor_taxa": linhas[0]["winrate"] if linhas else 0.0,
+        "combinacoes": len(linhas), "sinais": total_sinais, "wins": total_wins, "wins_g1": total_wins_g1, "losses": total_losses,
+        "winrate": taxa, "melhor_taxa": linhas[0]["winrate"] if linhas else 0.0, "modo_gale": modo_gale,
         "linhas": linhas[:100], "melhores_por_ativo": melhores_por_ativo,
         "erro": "; ".join(fontes_indisponiveis[:8]) if fontes_indisponiveis else ""
     }
@@ -2119,6 +2204,9 @@ def login():
 
         limpar_falhas_login(chave_login)
 
+        if e != ADMIN_EMAIL and bool(user_db.get('bloqueado', False)):
+            return render_template_string(HTML_LOGIN, erro="🚫 USUÁRIO BLOQUEADO PELO ADMINISTRADOR.")
+
         if e != ADMIN_EMAIL:
             ips_cadastrados = user_db.get('ips_list', [])
             if ip_cliente not in ips_cadastrados:
@@ -2203,16 +2291,18 @@ def admin_estatisticas():
     if tf not in {'TODOS','1','5','15'}: tf = 'TODOS'
     estrategia = request.args.get('estrategia', 'TODAS').strip().upper()
     if estrategia != 'TODAS' and estrategia not in LISTA_ESTRATEGIAS: estrategia = 'TODAS'
+    modo_gale = request.args.get('gale', 'SEM_GALE').strip().upper()
+    if modo_gale not in {'SEM_GALE', 'GALE1'}: modo_gale = 'SEM_GALE'
 
     resultado = None
     if request.args.get('analisar') == '1':
         try:
-            resultado = executar_backtest_real(mercado, ativo, tf, estrategia)
+            resultado = executar_backtest_real(mercado, ativo, tf, estrategia, modo_gale)
         except Exception as e:
             logging.exception('Falha no backtest real')
             resultado = {'combinacoes':0,'sinais':0,'wins':0,'losses':0,'winrate':0.0,'melhor_taxa':0.0,'linhas':[],'melhores_por_ativo':[],'erro':f'Falha na análise real: {e}'}
 
-    return render_template_string(HTML_ESTATISTICAS, filtros={'mercado':mercado,'ativo':ativo,'tf':tf,'estrategia':estrategia}, ativos=ativos, estrategias=estrategias, resultado=resultado)
+    return render_template_string(HTML_ESTATISTICAS, filtros={'mercado':mercado,'ativo':ativo,'tf':tf,'estrategia':estrategia,'gale':modo_gale}, ativos=ativos, estrategias=estrategias, resultado=resultado)
 
 
 @app.route('/adm/renovar/<email>', methods=['POST'])
@@ -2250,6 +2340,12 @@ def adm_editar():
     except Exception:
         pass
         
+    return redirect('/admin_panel')
+
+@app.route('/adm/bloquear/<email>', methods=['POST'])
+def adm_bloquear(email):
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
+    bloquear_usuario_db(email)
     return redirect('/admin_panel')
 
 @app.route('/adm/excluir/<email>', methods=['POST'])
@@ -2467,11 +2563,14 @@ def admin_backtest():
     estrategia = request.args.get('estrategia', 'PRICE_ACTION').strip().upper()
     if estrategia not in LISTA_ESTRATEGIAS:
         return jsonify({"ok": False, "error": "Estratégia inválida."}), 400
+    modo_gale = request.args.get('gale', 'SEM_GALE').strip().upper()
+    if modo_gale not in {'SEM_GALE', 'GALE1'}:
+        return jsonify({"ok": False, "error": "Modo de Gale inválido. Use SEM_GALE ou GALE1."}), 400
     ticker = MAPA_TICKERS.get(ativo, ativo)
     data = get_data_v2(ticker, tf, velas_minimas=100)
     if data is None:
         return jsonify({"ok": False, "error": "Não foi possível obter dados reais e fechados suficientes para o backtest."}), 503
-    return jsonify({"ok": True, "resultado": backtest_estrategia(data, estrategia, tf)})
+    return jsonify({"ok": True, "resultado": backtest_estrategia(data, estrategia, tf, modo_gale=modo_gale)})
 
 @app.route('/resultado/<res>', methods=['POST'])
 def resultado(res):
