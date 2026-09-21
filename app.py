@@ -386,167 +386,52 @@ HTML_ESTATISTICAS = """
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESTATÍSTICAS — VISION PRO V3</title>
-    <style>
-        body { background:#060913; color:#e2e8f0; font-family:'Segoe UI',Tahoma,sans-serif; margin:0; padding:14px; }
-        .wrap { max-width:1200px; margin:auto; }
-        .top { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
-        h1 { color:#00f2fe; font-size:22px; margin:0; }
-        .sub { color:#94a3b8; font-size:12px; margin-top:4px; }
-        .btn { display:inline-block; padding:10px 13px; border-radius:8px; text-decoration:none; font-weight:700; font-size:11px; border:1px solid #334155; color:#e2e8f0; background:#0f172a; }
-        .btn:hover { border-color:#00f2fe; color:#00f2fe; }
-        .filters, .card { background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:14px; margin-bottom:12px; }
-        .filters-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
-        label { display:block; color:#94a3b8; font-size:10px; font-weight:700; margin-bottom:5px; text-transform:uppercase; }
-        select, input { width:100%; box-sizing:border-box; background:#060913; color:#e2e8f0; border:1px solid #334155; border-radius:7px; padding:9px; }
-        .filter-actions { margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; }
-        .primary { background:rgba(0,242,254,.12); border-color:#00f2fe; color:#00f2fe; }
-        .grid-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:12px; }
-        .metric { background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:14px; }
-        .metric .label { color:#94a3b8; font-size:10px; font-weight:700; }
-        .metric .value { font-size:23px; font-weight:800; margin-top:4px; }
-        .green { color:#10b981; } .red { color:#ef4444; } .cyan { color:#00f2fe; } .yellow { color:#f59e0b; }
-        .section-title { color:#00f2fe; font-size:13px; font-weight:800; margin-bottom:10px; text-transform:uppercase; }
-        .table-wrap { overflow-x:auto; }
-        table { width:100%; border-collapse:collapse; min-width:600px; font-size:11px; }
-        th,td { padding:8px 7px; border-bottom:1px solid #1e293b; text-align:left; white-space:nowrap; }
-        th { color:#94a3b8; font-size:9px; text-transform:uppercase; }
-        td strong { color:#e2e8f0; }
-        .note { color:#64748b; font-size:10px; line-height:1.5; margin-top:9px; }
-        .backtest-box { border-color:rgba(0,242,254,.35); }
-        .empty { color:#64748b; padding:12px 0; font-size:12px; }
-        @media(max-width:600px){ body{padding:9px;} h1{font-size:19px;} .metric .value{font-size:20px;} }
-    </style>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BACKTEST REAL — VISION PRO V3</title>
+<style>
+body{background:#060913;color:#e2e8f0;font-family:'Segoe UI',Tahoma,sans-serif;margin:0;padding:12px}
+.wrap{max-width:1180px;margin:auto}.top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+h1{color:#00f2fe;font-size:21px;margin:0}.sub{color:#94a3b8;font-size:11px;margin-top:4px}.btn{display:inline-block;padding:10px 12px;border-radius:8px;text-decoration:none;font-weight:800;font-size:11px;border:1px solid #334155;color:#e2e8f0;background:#0f172a}
+.card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:13px;margin-bottom:12px}.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:9px}
+label{display:block;color:#94a3b8;font-size:9px;font-weight:800;margin-bottom:5px;text-transform:uppercase}select{width:100%;box-sizing:border-box;background:#060913;color:#e2e8f0;border:1px solid #334155;border-radius:7px;padding:10px}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.primary{border-color:#00f2fe;color:#00f2fe;background:rgba(0,242,254,.10);cursor:pointer}.section{color:#00f2fe;font-size:12px;font-weight:900;margin-bottom:9px;text-transform:uppercase}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:9px}.metric{background:#0b1120;border:1px solid #1e293b;border-radius:10px;padding:11px}.metric .label{margin:0}.value{font-size:21px;font-weight:900;margin-top:3px}.green{color:#10b981}.red{color:#ef4444}.cyan{color:#00f2fe}.yellow{color:#f59e0b}.muted{color:#64748b;font-size:10px;line-height:1.5}
+.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:850px;font-size:10px}th,td{padding:8px 6px;border-bottom:1px solid #1e293b;text-align:left;white-space:nowrap}th{color:#94a3b8;font-size:8px;text-transform:uppercase}.best{border-left:3px solid #10b981}.source{color:#38ef7d}.unavailable{color:#f59e0b}.error{color:#ef4444;padding:10px;border:1px solid #7f1d1d;border-radius:8px;background:rgba(239,68,68,.06)}
+@media(max-width:600px){body{padding:8px}h1{font-size:18px}.grid{grid-template-columns:repeat(2,1fr)}}
+</style>
 </head>
-<body>
-<div class="wrap">
-    <div class="top">
-        <div>
-            <h1>📊 ESTATÍSTICAS DO VISION PRO V3</h1>
-            <div class="sub">Resultados observados registrados pelo sistema. Não são garantias de desempenho futuro.</div>
-        </div>
-        <div>
-            <a class="btn" href="/admin_panel">⬅ ADMIN</a>
-            <a class="btn" href="/">PAINEL</a>
-        </div>
-    </div>
-
-    <form class="filters" method="GET" action="/admin/estatisticas">
-        <div class="section-title">🔎 FILTROS DA AMOSTRA</div>
-        <div class="filters-grid">
-            <div>
-                <label>Ativo</label>
-                <select name="ativo">
-                    <option value="">Todos</option>
-                    {% for a in ativos %}<option value="{{ a }}" {% if filtros.ativo == a %}selected{% endif %}>{{ a }}</option>{% endfor %}
-                </select>
-            </div>
-            <div>
-                <label>Timeframe</label>
-                <select name="tf">
-                    <option value="">Todos</option>
-                    {% for tf in [1,5,15] %}<option value="{{ tf }}" {% if filtros.tf == tf|string %}selected{% endif %}>M{{ tf }}</option>{% endfor %}
-                </select>
-            </div>
-            <div>
-                <label>Estratégia</label>
-                <select name="estrategia">
-                    <option value="">Todas</option>
-                    {% for key, nome in estrategias.items() %}
-                    <option value="{{ key }}" {% if filtros.estrategia == key %}selected{% endif %}>{{ nome }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
-                <label>Contexto superior</label>
-                <select name="contexto">
-                    <option value="">Todos</option>
-                    <option value="CALL" {% if filtros.contexto == 'CALL' %}selected{% endif %}>CALL</option>
-                    <option value="PUT" {% if filtros.contexto == 'PUT' %}selected{% endif %}>PUT</option>
-                    <option value="NEUTRO" {% if filtros.contexto == 'NEUTRO' %}selected{% endif %}>NEUTRO</option>
-                </select>
-            </div>
-            <div><label>Score mínimo</label><input type="number" name="score_min" min="0" max="100" value="{{ filtros.score_min }}" placeholder="0"></div>
-            <div><label>Score máximo</label><input type="number" name="score_max" min="0" max="100" value="{{ filtros.score_max }}" placeholder="100"></div>
-        </div>
-        <div class="filter-actions">
-            <button class="btn primary" type="submit">APLICAR FILTROS</button>
-            <a class="btn" href="/admin/estatisticas">LIMPAR</a>
-        </div>
-    </form>
-
-    <div class="grid-summary">
-        <div class="metric"><div class="label">Sinais com resultado</div><div class="value cyan">{{ stats.resumo.total }}</div></div>
-        <div class="metric"><div class="label">WIN + WIN G1</div><div class="value green">{{ stats.resumo.wins }}</div></div>
-        <div class="metric"><div class="label">RED</div><div class="value red">{{ stats.resumo.losses }}</div></div>
-        <div class="metric"><div class="label">Assertividade observada</div><div class="value yellow">{{ '%.2f'|format(stats.resumo.winrate) }}%</div></div>
-        <div class="metric"><div class="label">Score médio</div><div class="value cyan">{{ '%.2f'|format(stats.resumo.score_medio) }}</div></div>
-    </div>
-
-    {% if stats.erro %}<div class="card" style="border-color:#ef4444;color:#ef4444;">Erro ao consultar estatísticas: {{ stats.erro }}</div>{% endif %}
-
-    {% macro tabela(titulo, rows, combo=false) %}
-    <div class="card">
-        <div class="section-title">{{ titulo }}</div>
-        {% if rows %}
-        <div class="table-wrap"><table>
-            <thead><tr>
-                {% if combo %}<th>Ativo</th><th>TF</th><th>Estratégia</th><th>Contexto</th>{% else %}<th>Grupo</th>{% endif %}
-                <th>Sinais</th><th>WIN</th><th>RED</th><th>Assertividade</th><th>Score médio</th>
-            </tr></thead>
-            <tbody>
-            {% for r in rows %}<tr>
-                {% if combo %}
-                    <td><strong>{{ r.ativo }}</strong></td><td>M{{ r.timeframe }}</td><td>{{ estrategias.get(r.estrategia, r.estrategia) }}</td><td>{{ r.contexto }}</td>
-                {% else %}<td><strong>{% if titulo == '⏰ PERFORMANCE POR HORÁRIO' %}{{ '%02d'|format(r.grupo|int) }}:00{% elif titulo == '⏱ PERFORMANCE POR TIMEFRAME' %}M{{ r.grupo }}{% else %}{{ estrategias.get(r.grupo, r.grupo) }}{% endif %}</strong></td>{% endif %}
-                <td>{{ r.total }}</td><td class="green">{{ r.wins }}</td><td class="red">{{ r.losses }}</td><td>{{ '%.2f'|format(r.winrate) }}%</td><td>{{ '%.2f'|format(r.score_medio) }}</td>
-            </tr>{% endfor %}
-            </tbody>
-        </table></div>
-        {% else %}<div class="empty">Ainda não existem resultados suficientes para este recorte.</div>{% endif %}
-    </div>
-    {% endmacro %}
-
-    {{ tabela('📌 PERFORMANCE POR ATIVO', stats.por_ativo) }}
-    {{ tabela('⏱ PERFORMANCE POR TIMEFRAME', stats.por_timeframe) }}
-    {{ tabela('🧠 PERFORMANCE POR ESTRATÉGIA', stats.por_estrategia) }}
-    {{ tabela('⏰ PERFORMANCE POR HORÁRIO', stats.por_horario) }}
-    {{ tabela('🎯 PERFORMANCE POR FAIXA DE SCORE', stats.por_score) }}
-    {{ tabela('🧭 PERFORMANCE POR CONTEXTO', stats.por_contexto) }}
-    {{ tabela('🔬 COMBINAÇÕES ATIVO + TF + ESTRATÉGIA + CONTEXTO', stats.por_combinacao, true) }}
-
-    <div class="card backtest-box">
-        <div class="section-title">🧪 BACKTEST HISTÓRICO DE DADOS REAIS</div>
-        <form method="GET" action="/admin/estatisticas">
-            <input type="hidden" name="ativo" value="{{ filtros.ativo }}">
-            <input type="hidden" name="tf" value="{{ filtros.tf }}">
-            <input type="hidden" name="estrategia" value="{{ filtros.estrategia }}">
-            <input type="hidden" name="contexto" value="{{ filtros.contexto }}">
-            <input type="hidden" name="score_min" value="{{ filtros.score_min }}">
-            <input type="hidden" name="score_max" value="{{ filtros.score_max }}">
-            <div class="filters-grid">
-                <div><label>Ativo para backtest</label><select name="bt_ativo">{% for a in ativos %}<option value="{{ a }}" {% if backtest_filtros.ativo == a %}selected{% endif %}>{{ a }}</option>{% endfor %}</select></div>
-                <div><label>Timeframe</label><select name="bt_tf">{% for tf in [1,5,15] %}<option value="{{ tf }}" {% if backtest_filtros.tf == tf %}selected{% endif %}>M{{ tf }}</option>{% endfor %}</select></div>
-                <div><label>Estratégia</label><select name="bt_estrategia">{% for key, nome in estrategias.items() %}<option value="{{ key }}" {% if backtest_filtros.estrategia == key %}selected{% endif %}>{{ nome }}</option>{% endfor %}</select></div>
-            </div>
-            <div class="filter-actions"><button class="btn primary" type="submit" name="executar_backtest" value="1">EXECUTAR BACKTEST</button></div>
-        </form>
-        {% if backtest %}
-            {% if backtest.ok %}
-            <div class="grid-summary" style="margin-top:12px;">
-                <div class="metric"><div class="label">Sinais no backtest</div><div class="value cyan">{{ backtest.resultado.total }}</div></div>
-                <div class="metric"><div class="label">WIN</div><div class="value green">{{ backtest.resultado.wins }}</div></div>
-                <div class="metric"><div class="label">LOSS</div><div class="value red">{{ backtest.resultado.losses }}</div></div>
-                <div class="metric"><div class="label">Taxa observada</div><div class="value yellow">{{ '%.2f'|format(backtest.resultado.winrate) }}%</div></div>
-            </div>
-            {% else %}<div class="empty">{{ backtest.error }}</div>{% endif %}
-        {% endif %}
-        <div class="note">O backtest compara o preço de fechamento da entrada com o fechamento após a quantidade de velas de expiração configurada. Ele é uma ferramenta de validação histórica e não representa garantia de desempenho futuro.</div>
-    </div>
+<body><div class="wrap">
+<div class="top"><div><h1>🧪 BACKTEST REAL — VISION PRO V3</h1><div class="sub">Somente candles históricos fechados obtidos da fonte de mercado selecionada. Nenhum resultado de sessão é usado nesta análise.</div></div><div><a class="btn" href="/">⬅ VOLTAR AO PAINEL</a></div></div>
+<div class="card">
+<div class="section">🔎 CONFIGURAR ANÁLISE</div>
+<form method="GET" action="/admin/estatisticas">
+<div class="filters">
+<div><label>Mercado</label><select name="mercado"><option value="ABERTO" {% if filtros.mercado=='ABERTO' %}selected{% endif %}>🟢 ABERTO</option><option value="OTC" {% if filtros.mercado=='OTC' %}selected{% endif %}>🌙 OTC</option><option value="AMBOS" {% if filtros.mercado=='AMBOS' %}selected{% endif %}>🌐 AMBOS</option></select></div>
+<div><label>Ativo</label><select name="ativo"><option value="TODOS" {% if filtros.ativo=='TODOS' %}selected{% endif %}>Todos os ativos</option>{% for a in ativos %}<option value="{{a}}" {% if filtros.ativo==a %}selected{% endif %}>{{a}}</option>{% endfor %}</select></div>
+<div><label>Timeframe</label><select name="tf"><option value="TODOS" {% if filtros.tf=='TODOS' %}selected{% endif %}>Todos os tempos</option><option value="1" {% if filtros.tf=='1' %}selected{% endif %}>M1</option><option value="5" {% if filtros.tf=='5' %}selected{% endif %}>M5</option><option value="15" {% if filtros.tf=='15' %}selected{% endif %}>M15</option></select></div>
+<div><label>Estratégia</label><select name="estrategia"><option value="TODAS" {% if filtros.estrategia=='TODAS' %}selected{% endif %}>Todas as estratégias</option>{% for key,nome in estrategias.items() %}<option value="{{key}}" {% if filtros.estrategia==key %}selected{% endif %}>{{nome}}</option>{% endfor %}</select></div>
 </div>
-</body>
-</html>
+<div class="actions"><button class="btn primary" type="submit" name="analisar" value="1">🔍 ANALISAR DADOS REAIS AGORA</button><a class="btn" href="/admin/estatisticas">LIMPAR</a></div>
+</form>
+<div class="muted" style="margin-top:9px">Forex: Twelve Data. Cripto: Binance pública. OTC só será analisado quando houver uma fonte OTC real configurada; o sistema não substitui OTC por preço aberto.</div>
+</div>
+{% if resultado %}
+<div class="grid">
+<div class="metric"><div class="label">Combinações analisadas</div><div class="value cyan">{{resultado.combinacoes}}</div></div>
+<div class="metric"><div class="label">Sinais avaliados</div><div class="value cyan">{{resultado.sinais}}</div></div>
+<div class="metric"><div class="label">WIN</div><div class="value green">{{resultado.wins}}</div></div>
+<div class="metric"><div class="label">RED</div><div class="value red">{{resultado.losses}}</div></div>
+<div class="metric"><div class="label">Taxa histórica</div><div class="value yellow">{{'%.2f'|format(resultado.winrate)}}%</div></div>
+<div class="metric"><div class="label">Melhor taxa histórica</div><div class="value green">{{'%.2f'|format(resultado.melhor_taxa)}}%</div></div>
+</div>
+{% if resultado.erro %}<div class="card error">{{resultado.erro}}</div>{% endif %}
+<div class="card" style="margin-top:12px"><div class="section">🏆 MELHORES COMBINAÇÕES REAIS</div>
+{% if resultado.linhas %}<div class="table-wrap"><table><thead><tr><th>Mercado</th><th>Ativo</th><th>Fonte</th><th>TF</th><th>Estratégia</th><th>Sinais</th><th>WIN</th><th>RED</th><th>Taxa histórica</th><th>Score médio</th></tr></thead><tbody>
+{% for r in resultado.linhas %}<tr class="{% if loop.first %}best{% endif %}"><td>{{r.mercado}}</td><td><strong>{{r.ativo}}</strong></td><td class="source">{{r.fonte}}</td><td>M{{r.tf}}</td><td>{{r.estrategia_nome}}</td><td>{{r.total}}</td><td class="green">{{r.wins}}</td><td class="red">{{r.losses}}</td><td>{{'%.2f'|format(r.winrate)}}%</td><td>{{'%.2f'|format(r.score_medio)}}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="muted">Nenhuma combinação pôde ser analisada com dados reais no recorte selecionado.</div>{% endif %}
+</div>
+<div class="card"><div class="section">📌 MELHOR ESTRATÉGIA POR ATIVO + TIMEFRAME</div>{% if resultado.melhores_por_ativo %}<div class="table-wrap"><table><thead><tr><th>Ativo</th><th>TF</th><th>Estratégia</th><th>Fonte</th><th>Sinais</th><th>WIN</th><th>RED</th><th>Taxa histórica</th></tr></thead><tbody>{% for r in resultado.melhores_por_ativo %}<tr><td><strong>{{r.ativo}}</strong></td><td>M{{r.tf}}</td><td>{{r.estrategia_nome}}</td><td class="source">{{r.fonte}}</td><td>{{r.total}}</td><td class="green">{{r.wins}}</td><td class="red">{{r.losses}}</td><td>{{'%.2f'|format(r.winrate)}}%</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="muted">Sem dados reais suficientes.</div>{% endif %}</div>
+{% endif %}
+</div></body></html>
 """
 
 HTML_TERMOS = """
@@ -716,11 +601,6 @@ HTML_INDEX = """
         .modern-select { background: #0f172a; color: #f1f5f9; border: 1px solid #1e293b; padding: 10px 12px; border-radius: 8px; font-weight: 600; font-size: 12px; width: 100%; outline: none; appearance: none; cursor: pointer; transition: 0.2s; }
         .modern-select:hover, .modern-select:focus { border-color: #00f2fe; box-shadow: 0 0 8px rgba(0,242,254,0.2); }
 
-        .broker-flex { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 5px; scrollbar-width: none; }
-        .broker-flex::-webkit-scrollbar { display: none; }
-        .btn-broker { min-width: 100px; flex: 1; border: 1px solid #1e293b; background: #0f172a; color: #cbd5e1; padding: 10px; border-radius: 8px; font-weight: 700; font-size: 11px; cursor: pointer; transition: 0.3s; text-align: center; white-space: nowrap;}
-        .btn-broker:hover { color: #fff; border-color: #00f2fe; background: #1e293b; }
-
         .btn-toggle-hist { width: 100%; padding: 10px; background: rgba(0, 242, 254, 0.08); border: 1px dashed #00f2fe; color: #00f2fe; border-radius: 8px; font-weight: bold; font-size: 11px; cursor: pointer; margin-top: 10px; transition: 0.3s; }
         .btn-toggle-hist:hover { background: rgba(0, 242, 254, 0.2); }
 
@@ -746,11 +626,14 @@ HTML_INDEX = """
             <a href="/logout" class="btn-logout">SAIR</a>
         </div>
 
-        <button class="btn-notify" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
-        {% if user == admin %}
-        <button class="btn-test-tg" id="btn-telegram-toggle" onclick="sendCommand('toggle_telegram')">📡 TELEGRAM: CARREGANDO...</button>
-        <button class="btn-test-tg" onclick="sendCommand('test_telegram')">🧪 TESTAR CONEXÃO TELEGRAM</button>
-        {% endif %}
+        <button class="btn-notify" type="button" onclick="toggleNotificacoes()">🔔 NOTIFICAÇÕES E TELEGRAM ▾</button>
+        <div id="notificacoes-box" style="display:none; margin-bottom:12px;">
+            <button class="btn-notify" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
+            {% if user == admin %}
+            <button class="btn-test-tg" id="btn-telegram-toggle" onclick="sendCommand('toggle_telegram')">📡 TELEGRAM: CARREGANDO...</button>
+            <button class="btn-test-tg" onclick="sendCommand('test_telegram')">🧪 TESTAR CONEXÃO TELEGRAM</button>
+            {% endif %}
+        </div>
 
         <div class="placar-card">
             <div class="placar-grid">
@@ -841,17 +724,18 @@ HTML_INDEX = """
                 </div>
             </div>
 
-            <span class="section-label" style="margin-top: 5px;">Plataformas de Operação</span>
-            <div class="broker-flex">
-                <button class="btn-broker" onclick="openBroker('https://qxbroker.com')">🌐 Quotex</button>
-                <button class="btn-broker" onclick="openBroker('https://iqoption.com')">📈 IQ Option</button>
-                <button class="btn-broker" onclick="openBroker('https://binomo.com')">🟡 Binomo</button>
-                <button class="btn-broker" onclick="openBroker('https://pocketoption.com')">🟦 Pocket Opt.</button>
-            </div>
-
             {% if user == admin %}
-            <button onclick="location.href='/admin_panel'" style="width:100%; margin-top:15px; padding:12px; background:rgba(0,242,254,0.1); border:1px solid #00f2fe; color:#00f2fe; font-weight:bold; border-radius:10px; cursor:pointer;">🛡️ ABRIR PAINEL ADMINISTRATIVO</button>
-            <button onclick="location.href='/admin/estatisticas'" style="width:100%; margin-top:8px; padding:12px; background:rgba(16,185,129,0.08); border:1px solid #10b981; color:#10b981; font-weight:bold; border-radius:10px; cursor:pointer;">📊 ABRIR ESTATÍSTICAS E BACKTEST</button>
+            <button class="btn-toggle-hist" type="button" onclick="toggleEstatisticas()">📊 ESTATÍSTICAS / BACKTEST REAL ▾</button>
+            <div id="estatisticas-opcoes" style="display:none; margin-top:10px; background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:12px;">
+                <div class="section-label">Configurar análise com dados reais</div>
+                <div class="settings-grid">
+                    <div class="setting-group"><label>MERCADO</label><div class="select-wrapper"><select id="bt-mercado" class="modern-select"><option value="ABERTO">🟢 ABERTO</option><option value="OTC">🌙 OTC</option><option value="AMBOS">🌐 AMBOS</option></select></div></div>
+                    <div class="setting-group"><label>ATIVO</label><div class="select-wrapper"><select id="bt-ativo" class="modern-select"><option value="TODOS">TODOS OS ATIVOS</option>{% for a in (ATIVOS_BASE.get('FOREX_ABERTO', []) + ATIVOS_BASE.get('CRIPTO_ABERTO', []) + ATIVOS_BASE.get('FOREX_OTC', []) + ATIVOS_BASE.get('CRIPTO_OTC', [])) %}<option value="{{a}}">{{a}}</option>{% endfor %}</select></div></div>
+                    <div class="setting-group"><label>TIMEFRAME</label><div class="select-wrapper"><select id="bt-tf" class="modern-select"><option value="TODOS">TODOS</option><option value="1">M1</option><option value="5">M5</option><option value="15">M15</option></select></div></div>
+                    <div class="setting-group"><label>ESTRATÉGIA</label><div class="select-wrapper"><select id="bt-estrategia" class="modern-select"><option value="TODAS">TODAS</option>{% for key,nome in NOME_ESTRATEGIAS_DISPLAY.items() if key in LISTA_ESTRATEGIAS %}<option value="{{key}}">{{nome}}</option>{% endfor %}</select></div></div>
+                </div>
+                <button class="btn-toggle-hist" type="button" onclick="abrirBacktestConfigurado()">🔍 ANALISAR DADOS REAIS</button>
+            </div>
             {% endif %}
 
             <button class="btn-toggle-hist" onclick="toggleHistorico()">👁️ EXIBIR HISTÓRICO PASSADO</button>
@@ -931,16 +815,26 @@ HTML_INDEX = """
             }
         }
 
-        function openBroker(url) {
-            // As plataformas de operação podem bloquear carregamento dentro de iframe
-            // por políticas de segurança (X-Frame-Options/CSP). Abrimos diretamente
-            // em uma nova aba para que cada plataforma carregue normalmente.
-            const novaAba = window.open(url, '_blank', 'noopener,noreferrer');
-            if (!novaAba) {
-                window.location.href = url;
-            }
+        function toggleNotificacoes() {
+            const box = document.getElementById('notificacoes-box');
+            if (!box) return;
+            box.style.display = box.style.display === 'none' ? 'block' : 'none';
         }
 
+        function toggleEstatisticas() {
+            const box = document.getElementById('estatisticas-opcoes');
+            if (!box) return;
+            box.style.display = box.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function abrirBacktestConfigurado() {
+            const mercado = document.getElementById('bt-mercado')?.value || 'ABERTO';
+            const ativo = document.getElementById('bt-ativo')?.value || 'TODOS';
+            const tf = document.getElementById('bt-tf')?.value || 'TODOS';
+            const estrategia = document.getElementById('bt-estrategia')?.value || 'TODAS';
+            const params = new URLSearchParams({mercado, ativo, tf, estrategia, analisar:'1'});
+            window.location.href = '/admin/estatisticas?' + params.toString();
+        }
 
         function toggleHistorico() {
             const box = document.getElementById('box-historico');
@@ -993,7 +887,7 @@ HTML_INDEX = """
 
         // Atualização independente do servidor: o cronômetro continua correndo
         // de segundo em segundo mesmo enquanto o painel consulta /status.
-        setInterval(() => atualizarCronometroCandle(timeframeCronometro), 250);
+        setInterval(() => atualizarCronometroCandle(timeframeCronometro), 1000);
 
         async function atualizarPainel() {
             try {
@@ -1045,7 +939,7 @@ HTML_INDEX = """
                 console.warn('Falha ao atualizar o painel:', err);
             } finally {
                 // Nova consulta 250ms após a resposta, sem acumular requisições.
-                setTimeout(atualizarPainel, 250);
+                setTimeout(atualizarPainel, 1000);
             }
         }
 
@@ -1666,28 +1560,7 @@ def get_data_v2(ticker, tf, velas_minimas=100):
             if dados_binance is not None:
                 return dados_binance
 
-            # Fallback de cripto real, mantido apenas para disponibilidade da fonte.
-            crypto_symbol = base_ticker[:-4].replace("-", "")
-            url_alt = (
-                "https://min-api.cryptocompare.com/data/v2/histominute"
-                f"?fsym={crypto_symbol}&tsym=USD&limit=1000&aggregate={tf}"
-            )
-            r_alt = requests.get(url_alt, timeout=7.0)
-            if r_alt.status_code == 200:
-                payload = r_alt.json()
-                data_list = payload.get("Data", {}).get("Data", [])
-                if data_list:
-                    ohlc = {
-                        "time": np.array([x.get("time", 0) for x in data_list]),
-                        "open": np.array([x.get("open", np.nan) for x in data_list], dtype=float),
-                        "high": np.array([x.get("high", np.nan) for x in data_list], dtype=float),
-                        "low": np.array([x.get("low", np.nan) for x in data_list], dtype=float),
-                        "close": np.array([x.get("close", np.nan) for x in data_list], dtype=float)
-                    }
-                    validado = validar_ohlc(ohlc, velas_minimas=velas_minimas, tf=tf)
-                    if validado is not None:
-                        return validado
-
+            # Sem fallback: o painel identifica explicitamente a Binance como fonte da cripto.
             return None
 
         # ================= FOREX: TWELVE DATA =================
@@ -1697,32 +1570,7 @@ def get_data_v2(ticker, tf, velas_minimas=100):
             if dados_twelve is not None:
                 return dados_twelve
 
-            # Se a chave Twelve Data não estiver configurada ou a fonte estiver
-            # indisponível, preserva o fallback público anterior do Yahoo Finance.
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
-                "Accept": "application/json, text/plain, */*"
-            }
-            url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=10d"
-            res = requests.get(url, headers=headers, timeout=7.0)
-            if res.status_code == 200:
-                data_json = res.json()
-                result_list = data_json.get("chart", {}).get("result") or []
-                if result_list:
-                    result = result_list[0]
-                    timestamps = result.get("timestamp") or []
-                    quote = (result.get("indicators", {}).get("quote") or [{}])[0]
-                    ohlc = {
-                        "time": np.array(timestamps),
-                        "open": np.array(quote.get("open", []), dtype=float),
-                        "high": np.array(quote.get("high", []), dtype=float),
-                        "low": np.array(quote.get("low", []), dtype=float),
-                        "close": np.array(quote.get("close", []), dtype=float)
-                    }
-                    validado = validar_ohlc(ohlc, velas_minimas=velas_minimas, tf=tf)
-                    if validado is not None:
-                        return validado
-
+            # Sem fallback: Forex só entra no backtest quando a Twelve Data responder.
             return None
 
         return None
@@ -2018,25 +1866,92 @@ def consultar_estatisticas_sinais(ativo=None, timeframe=None, estrategia=None, c
 
 # ================= BACKTEST HISTÓRICO =================
 def backtest_estrategia(data, estrategia, tf, expiracao_velas=1):
-    """Backtest sem olhar candles futuros no momento da decisão."""
-    c = np.asarray(data["close"], dtype=float)
-    total = wins = losses = 0
+    """Backtest walk-forward: cada decisão enxerga somente candles já fechados."""
+    arrays = {k: np.asarray(data[k]) for k in ("time", "open", "high", "low", "close")}
+    c = arrays["close"].astype(float)
+    total = wins = losses = draws = 0
+    scores = []
     for i in range(30, len(c) - expiracao_velas):
-        sinal, score = analisar_estrategia(data, estrategia, i=i)
+        historico = {k: v[:i + 1] for k, v in arrays.items()}
+        sinal, score = analisar_estrategia(historico, estrategia, i=-1)
         if not sinal or not score:
             continue
         total += 1
-        preco_entrada = c[i]
-        preco_saida = c[i + expiracao_velas]
+        scores.append(float(score))
+        preco_entrada = float(c[i])
+        preco_saida = float(c[i + expiracao_velas])
         if preco_saida == preco_entrada:
-            continue
-        ganhou = (sinal == "CALL" and preco_saida > preco_entrada) or (sinal == "PUT" and preco_saida < preco_entrada)
-        if ganhou:
+            draws += 1
+        elif (sinal == "CALL" and preco_saida > preco_entrada) or (sinal == "PUT" and preco_saida < preco_entrada):
             wins += 1
         else:
             losses += 1
-    taxa = round((wins / total) * 100, 2) if total else 0.0
-    return {"estrategia": estrategia, "timeframe": tf, "total": total, "wins": wins, "losses": losses, "winrate": taxa}
+    avaliados = wins + losses
+    taxa = round((wins / avaliados) * 100, 2) if avaliados else 0.0
+    return {"estrategia": estrategia, "timeframe": tf, "total": total, "wins": wins, "losses": losses, "draws": draws, "avaliados": avaliados, "winrate": taxa, "score_medio": round(float(np.mean(scores)), 2) if scores else 0.0}
+
+def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionada):
+    """Executa a análise somente com fontes reais. Sem banco de resultados e sem dados sintéticos."""
+    mercado = str(mercado or "ABERTO").upper()
+    ativo = str(ativo or "TODOS").upper()
+    tf_selecionado = str(tf_selecionado or "TODOS")
+    estrategia_selecionada = str(estrategia_selecionada or "TODAS").upper()
+
+    abertos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
+    if mercado == "OTC":
+        candidatos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+    elif mercado == "AMBOS":
+        candidatos = abertos + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+    else:
+        candidatos = abertos
+    if ativo != "TODOS":
+        candidatos = [a for a in candidatos if a == ativo]
+    candidatos = list(dict.fromkeys(candidatos))
+    tfs = [1,5,15] if tf_selecionado == "TODOS" else [int(tf_selecionado)]
+    estrategias = LISTA_ESTRATEGIAS if estrategia_selecionada == "TODAS" else [estrategia_selecionada]
+
+    linhas = []
+    fontes_indisponiveis = []
+    cache = {}
+    for ativo_nome in candidatos:
+        is_otc = "-OTC" in ativo_nome
+        if is_otc:
+            fontes_indisponiveis.append(f"{ativo_nome}: sem fonte OTC real configurada")
+            continue
+        ticker = MAPA_TICKERS.get(ativo_nome)
+        fonte = "Binance" if ativo_nome in ATIVOS_BASE["CRIPTO_ABERTO"] else "Twelve Data"
+        for tf in tfs:
+            chave = (ticker, tf)
+            if chave not in cache:
+                cache[chave] = get_data_v2(ticker, tf, velas_minimas=100)
+            data = cache[chave]
+            if data is None:
+                fontes_indisponiveis.append(f"{ativo_nome} M{tf}: fonte {fonte} indisponível ou sem candles suficientes")
+                continue
+            for estrategia in estrategias:
+                r = backtest_estrategia(data, estrategia, tf, expiracao_velas=1)
+                if r["total"] == 0:
+                    continue
+                linhas.append({"mercado":"ABERTO", "ativo":ativo_nome, "fonte":fonte, "tf":tf, "estrategia":estrategia, "estrategia_nome":NOME_ESTRATEGIAS_DISPLAY.get(estrategia, estrategia), **r})
+
+    linhas.sort(key=lambda x: (x["winrate"], x["avaliados"], x["score_medio"]), reverse=True)
+    melhores = {}
+    for r in linhas:
+        chave = (r["ativo"], r["tf"])
+        if chave not in melhores:
+            melhores[chave] = r
+    melhores_por_ativo = sorted(melhores.values(), key=lambda x: (x["ativo"], x["tf"]))
+    total_sinais = sum(r["total"] for r in linhas)
+    total_wins = sum(r["wins"] for r in linhas)
+    total_losses = sum(r["losses"] for r in linhas)
+    avaliados = total_wins + total_losses
+    taxa = round(total_wins / avaliados * 100, 2) if avaliados else 0.0
+    return {
+        "combinacoes": len(linhas), "sinais": total_sinais, "wins": total_wins, "losses": total_losses,
+        "winrate": taxa, "melhor_taxa": linhas[0]["winrate"] if linhas else 0.0,
+        "linhas": linhas[:100], "melhores_por_ativo": melhores_por_ativo,
+        "erro": "; ".join(fontes_indisponiveis[:8]) if fontes_indisponiveis else ""
+    }
 
 # ================= MOTOR DE ESTRATÉGIAS COM SCORE TÉCNICO =================
 def analisar_estrategia(data, estrategia, i=-1):
@@ -2278,95 +2193,26 @@ def admin_estatisticas():
     if session.get('user') != ADMIN_EMAIL:
         return abort(403)
 
-    ativos = sorted(set(ATIVOS_BASE.get("FOREX_ABERTO", []) + ATIVOS_BASE.get("CRIPTO_ABERTO", [])))
+    ativos = list(dict.fromkeys(ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]))
     estrategias = {k: NOME_ESTRATEGIAS_DISPLAY.get(k, k) for k in LISTA_ESTRATEGIAS}
+    mercado = request.args.get('mercado', 'ABERTO').strip().upper()
+    if mercado not in {'ABERTO','OTC','AMBOS'}: mercado = 'ABERTO'
+    ativo = request.args.get('ativo', 'TODOS').strip().upper()
+    if ativo != 'TODOS' and ativo not in ativos: ativo = 'TODOS'
+    tf = request.args.get('tf', 'TODOS').strip()
+    if tf not in {'TODOS','1','5','15'}: tf = 'TODOS'
+    estrategia = request.args.get('estrategia', 'TODAS').strip().upper()
+    if estrategia != 'TODAS' and estrategia not in LISTA_ESTRATEGIAS: estrategia = 'TODAS'
 
-    ativo = request.args.get('ativo', '').strip().upper()
-    if ativo not in ativos:
-        ativo = ''
-
-    tf_raw = request.args.get('tf', '').strip()
-    tf = tf_raw if tf_raw in {'1', '5', '15'} else ''
-
-    estrategia = request.args.get('estrategia', '').strip().upper()
-    if estrategia not in LISTA_ESTRATEGIAS:
-        estrategia = ''
-
-    contexto = request.args.get('contexto', '').strip().upper()
-    if contexto not in {'CALL', 'PUT', 'NEUTRO'}:
-        contexto = ''
-
-    def inteiro_opcional(valor, minimo=0, maximo=100):
-        if valor is None or str(valor).strip() == '':
-            return None
+    resultado = None
+    if request.args.get('analisar') == '1':
         try:
-            n = int(valor)
-            if n < minimo or n > maximo:
-                return None
-            return n
-        except (TypeError, ValueError):
-            return None
-
-    score_min = inteiro_opcional(request.args.get('score_min'), 0, 100)
-    score_max = inteiro_opcional(request.args.get('score_max'), 0, 100)
-    if score_min is not None and score_max is not None and score_min > score_max:
-        score_min, score_max = score_max, score_min
-
-    stats = consultar_estatisticas_sinais(
-        ativo=ativo or None,
-        timeframe=int(tf) if tf else None,
-        estrategia=estrategia or None,
-        contexto=contexto or None,
-        score_min=score_min,
-        score_max=score_max
-    )
-
-    backtest = None
-    bt_ativo = request.args.get('bt_ativo', 'EURUSD').strip().upper()
-    if bt_ativo not in ativos:
-        bt_ativo = 'EURUSD' if 'EURUSD' in ativos else ativos[0]
-    bt_tf_raw = request.args.get('bt_tf', '5').strip()
-    bt_tf = int(bt_tf_raw) if bt_tf_raw in {'1', '5', '15'} else 5
-    bt_estrategia = request.args.get('bt_estrategia', 'PRICE_ACTION').strip().upper()
-    if bt_estrategia not in LISTA_ESTRATEGIAS:
-        bt_estrategia = 'PRICE_ACTION'
-
-    if request.args.get('executar_backtest') == '1':
-        try:
-            ticker = MAPA_TICKERS.get(bt_ativo, bt_ativo)
-            data = get_data_v2(ticker, bt_tf, velas_minimas=100)
-            if data is None:
-                backtest = {
-                    'ok': False,
-                    'error': 'Não foi possível obter dados reais e fechados suficientes para este backtest.'
-                }
-            else:
-                resultado_bt = backtest_estrategia(data, bt_estrategia, bt_tf, expiracao_velas=1)
-                backtest = {'ok': True, 'resultado': resultado_bt}
+            resultado = executar_backtest_real(mercado, ativo, tf, estrategia)
         except Exception as e:
-            print(f"⚠️ Erro no backtest do painel estatístico: {e}")
-            backtest = {'ok': False, 'error': 'O backtest não pôde ser concluído. Verifique os logs do Render.'}
+            logging.exception('Falha no backtest real')
+            resultado = {'combinacoes':0,'sinais':0,'wins':0,'losses':0,'winrate':0.0,'melhor_taxa':0.0,'linhas':[],'melhores_por_ativo':[],'erro':f'Falha na análise real: {e}'}
 
-    return render_template_string(
-        HTML_ESTATISTICAS,
-        stats=stats,
-        ativos=ativos,
-        estrategias=estrategias,
-        filtros={
-            'ativo': ativo,
-            'tf': tf,
-            'estrategia': estrategia,
-            'contexto': contexto,
-            'score_min': '' if score_min is None else score_min,
-            'score_max': '' if score_max is None else score_max
-        },
-        backtest=backtest,
-        backtest_filtros={
-            'ativo': bt_ativo,
-            'tf': bt_tf,
-            'estrategia': bt_estrategia
-        }
-    )
+    return render_template_string(HTML_ESTATISTICAS, filtros={'mercado':mercado,'ativo':ativo,'tf':tf,'estrategia':estrategia}, ativos=ativos, estrategias=estrategias, resultado=resultado)
 
 
 @app.route('/adm/renovar/<email>', methods=['POST'])
@@ -2418,7 +2264,7 @@ def index():
     user = session['user']
     USUARIOS_ONLINE[user] = time.time()
     st = get_user_state(user)
-    return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL)
+    return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL, ATIVOS_BASE=ATIVOS_BASE, NOME_ESTRATEGIAS_DISPLAY=NOME_ESTRATEGIAS_DISPLAY, LISTA_ESTRATEGIAS=LISTA_ESTRATEGIAS)
 
 @app.route('/status')
 def status():
