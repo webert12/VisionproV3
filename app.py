@@ -56,6 +56,7 @@ def get_user_state(email):
         DADOS_USUARIOS[email_clean] = {
             "timeframe": 5,
             "tipo_mercado": "TODOS",
+            "ativo_selecionado": "TODOS",
             "estrategia": "TODAS",
             "bot_iniciado": False,
             "bot_pausado": True,
@@ -713,6 +714,21 @@ HTML_INDEX = """
                             <option value="15" {% if tf == 15 %}selected{% endif %}>M15 (15 Minutos)</option>
                         </select>
                     </div>
+                </div>
+            </div>
+
+            <div class="settings-grid full">
+                <div class="setting-group">
+                    <label>ATIVO PARA OPERAR</label>
+                    <div class="select-wrapper">
+                        <select class="modern-select" onchange="sendCommand('ativo_' + this.value)">
+                            <option value="TODOS" {% if ativo_selecionado == 'TODOS' %}selected{% endif %}>🌐 TODOS OS ATIVOS COM FONTE REAL</option>
+                            {% for a in ATIVOS_OPERAVEIS %}
+                            <option value="{{a}}" {% if ativo_selecionado == a %}selected{% endif %}>{{a}}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div style="font-size:9px;color:#64748b;margin-top:5px;line-height:1.4;">Escolha um único ativo ou mantenha TODOS. OTC não aparece nesta lista porque não possui fonte de preço OTC real configurada.</div>
                 </div>
             </div>
             
@@ -1402,6 +1418,10 @@ for par in ATIVOS_BASE["CRIPTO_ABERTO"]: MAPA_TICKERS[par] = par.replace("USD", 
 for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X")
 for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
+# Ativos com fonte de preço real disponível para operação ao vivo.
+# OTC não entra nesta lista enquanto não houver uma fonte OTC verificável.
+ATIVOS_OPERAVEIS = list(dict.fromkeys(ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]))
+
 # ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
 def validar_ohlc(ohlc, velas_minimas=30, tf=5):
     """Valida integridade e atualidade das velas antes de entregá-las ao motor."""
@@ -1520,13 +1540,19 @@ def _buscar_twelve_data(ticker, tf, velas_minimas):
                 "symbol": simbolo,
                 "interval": intervalo,
                 "outputsize": max(100, min(5000, velas_minimas + 30)),
+                "timezone": "UTC",
+                "order": "asc",
                 "apikey": TWELVE_DATA_API_KEY
             },
             headers={"User-Agent": "Vision-Trade-PRO-V3"},
             timeout=7.0
         )
         if res.status_code != 200:
-            print(f"⚠️ Twelve Data HTTP {res.status_code} para {simbolo} M{tf}.")
+            try:
+                erro_api = res.json().get("message", res.text[:300])
+            except Exception:
+                erro_api = res.text[:300]
+            print(f"⚠️ Twelve Data HTTP {res.status_code} para {simbolo} M{tf}: {erro_api}")
             return None
 
         payload = res.json()
@@ -2010,7 +2036,13 @@ def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionad
                 cache[chave] = get_data_v2(ticker, tf, velas_minimas=100)
             data = cache[chave]
             if data is None:
-                fontes_indisponiveis.append(f"{ativo_nome} M{tf}: fonte {fonte} indisponível ou sem candles suficientes")
+                if fonte == "Twelve Data" and not TWELVE_DATA_API_KEY:
+                    motivo = "TWELVE_DATA_API_KEY não configurada no Render"
+                elif fonte == "Twelve Data":
+                    motivo = "Twelve Data não retornou candles válidos; verifique créditos/limite da API e a chave configurada"
+                else:
+                    motivo = "fonte indisponível ou sem candles fechados suficientes"
+                fontes_indisponiveis.append(f"{ativo_nome} M{tf}: {motivo}")
                 continue
             for estrategia in estrategias:
                 r = backtest_estrategia(data, estrategia, tf, expiracao_velas=1, modo_gale=modo_gale)
@@ -2360,7 +2392,7 @@ def index():
     user = session['user']
     USUARIOS_ONLINE[user] = time.time()
     st = get_user_state(user)
-    return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL, ATIVOS_BASE=ATIVOS_BASE, NOME_ESTRATEGIAS_DISPLAY=NOME_ESTRATEGIAS_DISPLAY, LISTA_ESTRATEGIAS=LISTA_ESTRATEGIAS)
+    return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], ativo_selecionado=st.get("ativo_selecionado", "TODOS"), user=user, admin=ADMIN_EMAIL, ATIVOS_BASE=ATIVOS_BASE, ATIVOS_OPERAVEIS=ATIVOS_OPERAVEIS, NOME_ESTRATEGIAS_DISPLAY=NOME_ESTRATEGIAS_DISPLAY, LISTA_ESTRATEGIAS=LISTA_ESTRATEGIAS)
 
 @app.route('/status')
 def status():
@@ -2384,6 +2416,7 @@ def status():
         "historico": historico,
         "ativo_atual": st["ativo_atual"],
         "mercado": st["tipo_mercado"],
+        "ativo_selecionado": st.get("ativo_selecionado", "TODOS"),
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
         "timeframe": st["timeframe"],
         "candle_decorrido": st.get("candle_decorrido", 0),
@@ -2472,6 +2505,7 @@ def command(cmd):
             f"👤 <b>Usuário:</b> {user}\n"
             f"📊 <b>Timeframe:</b> M{st['timeframe']}\n"
             f"🌐 <b>Mercado:</b> {st['tipo_mercado']}\n"
+            f"💱 <b>Ativo:</b> {st.get('ativo_selecionado', 'TODOS')}\n"
             f"⚙️ <b>Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(st['estrategia'], st['estrategia'])}\n\n"
             f"<i>Varrendo gráficos em tempo real...</i>"
         )
@@ -2540,11 +2574,47 @@ def command(cmd):
         enviar_telegram(msg_encerramento, user_solicitante=user)
         return jsonify({"ok": True, "estatisticas": stats})
 
-    elif cmd.startswith("tf_"): 
+    elif cmd.startswith("tf_"):
         st["timeframe"] = int(cmd.split('_')[1])
-    elif cmd.startswith("mkt_"): 
-        st["tipo_mercado"] = cmd.split('_', 1)[1] 
-    elif cmd.startswith("set_est_"): 
+    elif cmd.startswith("mkt_"):
+        st["tipo_mercado"] = cmd.split('_', 1)[1]
+        if st.get("ativo_selecionado", "TODOS") != "TODOS":
+            ativos_do_mercado = {
+                "TODOS": set(ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]),
+                "ABERTO_TODOS": set(ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]),
+                "OTC_TODOS": set(ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]),
+                "FOREX_ABERTO": set(ATIVOS_BASE["FOREX_ABERTO"]),
+                "CRIPTO_ABERTO": set(ATIVOS_BASE["CRIPTO_ABERTO"]),
+                "FOREX_OTC": set(ATIVOS_BASE["FOREX_OTC"]),
+                "CRIPTO_OTC": set(ATIVOS_BASE["CRIPTO_OTC"])
+            }.get(st["tipo_mercado"], set())
+            if st["ativo_selecionado"] not in ativos_do_mercado:
+                st["ativo_selecionado"] = "TODOS"
+        st["sinais_enviados"].clear()
+    elif cmd.startswith("ativo_"):
+        ativo_escolhido = cmd.replace("ativo_", "", 1).upper()
+        if ativo_escolhido == "TODOS" or ativo_escolhido in ATIVOS_OPERAVEIS:
+            st["ativo_selecionado"] = ativo_escolhido
+            st["sinais_enviados"].clear()
+            # Ao trocar o ativo, invalida qualquer alerta anterior para impedir
+            # que um sinal do ativo antigo seja confirmado depois da troca.
+            if st.get("timer_confirmacao"):
+                try:
+                    st["timer_confirmacao"].cancel()
+                except Exception:
+                    pass
+            st["timer_confirmacao"] = None
+            st["alerta_ativo"] = None
+            st["aguardando_confirmacao"] = False
+            st["sinal_permanente"] = None
+            st["sinal_confirmado_dados"] = None
+            st["ultimo_sinal"] = (
+                f"<div class='system-console' style='color:#00f2fe;'>"
+                f"🎯 ATIVO SELECIONADO: <b>{ativo_escolhido}</b><br>"
+                f"O robô analisará {'todos os ativos com fonte real' if ativo_escolhido == 'TODOS' else 'somente este ativo'}."
+                f"</div>"
+            )
+    elif cmd.startswith("set_est_"):
         st["estrategia"] = cmd.replace("set_est_", "")
     
     return jsonify({"ok": True})
@@ -2924,6 +2994,21 @@ def bot_loop():
                     # OTC não é incluído no motor até existir uma fonte de preço OTC
                     # verificável. O sistema nunca substitui OTC pelo preço do mercado aberto.
                     ativos_reais = [a for a in ativos if "-OTC" not in a.upper()]
+                    ativo_selecionado = st.get("ativo_selecionado", "TODOS")
+                    if ativo_selecionado != "TODOS":
+                        if ativo_selecionado in ativos_reais:
+                            ativos_reais = [ativo_selecionado]
+                        elif ativo_selecionado in ativos:
+                            st["ativo_atual"] = ativo_selecionado
+                            st["ultimo_sinal"] = (
+                                "<div class='system-console' style='color:#f59e0b;'>"
+                                f"⚠️ <b>{ativo_selecionado} NÃO DISPONÍVEL PARA ANÁLISE</b><br>"
+                                "Este ativo é OTC e não possui uma fonte de preço OTC real configurada. "
+                                "Nenhum sinal será gerado com dados substitutos."
+                                "</div>"
+                            )
+                            continue
+
                     if not ativos_reais:
                         st["ativo_atual"] = "OTC SEM FONTE DE DADOS REAL"
                         st["ultimo_sinal"] = (
@@ -2935,7 +3020,8 @@ def bot_loop():
                         continue
 
                     ativos_scan = ativos_reais.copy()
-                    random.shuffle(ativos_scan)
+                    if ativo_selecionado == "TODOS":
+                        random.shuffle(ativos_scan)
 
                     for ativo in ativos_scan:
                         if not st.get("bot_iniciado") or st.get("bot_pausado"):
