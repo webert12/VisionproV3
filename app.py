@@ -8,6 +8,7 @@ import sys
 import random
 import os
 import logging
+import hmac
 import numpy as np
 import re
 from datetime import datetime, timedelta
@@ -23,11 +24,19 @@ def agora_brasilia():
     return datetime.now(FUSO_SP)
 
 # ================= CONFIGURAÇÕES DE AMBIENTE E BOT TELEGRAM =================
-TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU").strip()
-CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
+# NENHUMA credencial real fica armazenada no código-fonte.
+TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "").strip()
+CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "").strip()
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+FLASK_SECRET = os.getenv("FLASK_SECRET", "").strip()
 
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
+
+if not FLASK_SECRET:
+    raise RuntimeError("FLASK_SECRET não configurada. Defina uma chave aleatória forte nas variáveis de ambiente.")
+if not ADMIN_EMAIL:
+    raise RuntimeError("ADMIN_EMAIL não configurado. Defina o e-mail do administrador nas variáveis de ambiente.")
 
 def get_db_connection():
     if not DB_URL:
@@ -57,7 +66,6 @@ def get_user_state(email):
             "sinais_enviados": {},
             "alerta_ativo": None,  # Guarda informações do alerta ativo no ciclo
             "timer_confirmacao": None,  # Timer independente para não depender da varredura
-            "sinal_confirmado_dados": None,
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
             "sinal_confirmado_dados": None,
@@ -70,9 +78,13 @@ def get_user_state(email):
     return DADOS_USUARIOS[email_clean]
 
 def get_client_ip():
-    if request.headers.get('X-Forwarded-For'):
-        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
-    return request.remote_addr
+    # Em produção, o proxy confiável pode fornecer X-Forwarded-For.
+    # Não aceitamos esse cabeçalho cegamente de clientes externos.
+    if os.getenv("TRUST_PROXY", "true").lower() == "true":
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.remote_addr or "unknown"
 
 # ================= ENVIO E DELEÇÃO TELEGRAM =================
 def _telegram_request(method, payload=None, timeout=12):
@@ -215,11 +227,81 @@ def deletar_mensagem_atrasada(msg_id, delay):
     deletar_mensagem_telegram(msg_id)
 
 # ================= SERVIDOR FLASK =================
-APP_SECRET = os.getenv("FLASK_SECRET", "chave_secreta_vision_pro_ultra_premium_v3_security")
 app = Flask(__name__)
-app.secret_key = APP_SECRET
+app.secret_key = FLASK_SECRET
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "true").lower() == "true",
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
+
+# ================= SEGURANÇA HTTP / CSRF =================
+def get_csrf_token():
+    token = session.get("csrf_token")
+    if not token:
+        token = os.urandom(32).hex()
+        session["csrf_token"] = token
+    return token
+
+@app.template_global("csrf_token")
+def csrf_token_template():
+    return get_csrf_token()
+
+@app.before_request
+def protect_state_changing_requests():
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        token = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
+        expected = session.get("csrf_token")
+        if not expected or not token or not hmac.compare_digest(str(token), str(expected)):
+            return jsonify({"ok": False, "error": "CSRF inválido ou sessão expirada."}), 403
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'self'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+    return response
+
+LOGIN_ATTEMPTS = {}
+LOGIN_LOCK = threading.Lock()
+
+def login_bloqueado(chave):
+    agora = time.time()
+    with LOGIN_LOCK:
+        item = LOGIN_ATTEMPTS.get(chave)
+        if not item:
+            return False
+        if agora - item["inicio"] >= 600:
+            LOGIN_ATTEMPTS.pop(chave, None)
+            return False
+        return item["falhas"] >= 5
+
+def registrar_falha_login(chave):
+    agora = time.time()
+    with LOGIN_LOCK:
+        item = LOGIN_ATTEMPTS.get(chave)
+        if not item or agora - item["inicio"] >= 600:
+            LOGIN_ATTEMPTS[chave] = {"inicio": agora, "falhas": 1}
+        else:
+            item["falhas"] += 1
+
+def limpar_falhas_login(chave):
+    with LOGIN_LOCK:
+        LOGIN_ATTEMPTS.pop(chave, None)
 
 # ================= TEMPLATES HTML =================
 HTML_ADM = """
@@ -280,20 +362,188 @@ HTML_ADM = """
                 <span style="color:#f59e0b;">IPs Cadastrados (Máx 2): <b>{{ info.ips_Formatados }}</b></span>
             </div>
             <form action="/adm/editar" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="email_original" value="{{ email }}">
                 <b>E-mail:</b> <input type="text" name="novo_email" value="{{ email }}">
                 <b>Nova Senha (deixe em branco para manter):</b> <input type="password" name="nova_senha" placeholder="Alterar senha...">
                 <b>Expira em:</b> {{ info.criado_em }}<br><br>
                 <button type="submit" class="btn-adm blue">SALVAR ALTERAÇÕES</button>
-                <a href="/adm/renovar/{{ email }}" class="btn-adm green">RENOVAR +30 DIAS</a>
-                <a href="/adm/liberar_ip/{{ email }}" class="btn-adm orange">LIBERAR DISPOSITIVOS / IPS</a>
+                <button type="submit" formaction="/adm/renovar/{{ email }}" formmethod="POST" class="btn-adm green">RENOVAR +30 DIAS</button>
+                <button type="submit" formaction="/adm/liberar_ip/{{ email }}" formmethod="POST" class="btn-adm orange">LIBERAR DISPOSITIVOS / IPS</button>
                 {% if email != admin %}
-                <a href="/adm/excluir/{{ email }}" class="btn-adm red" onclick="return confirm('Excluir?')">EXCLUIR</a>
+                <button type="submit" formaction="/adm/excluir/{{ email }}" formmethod="POST" class="btn-adm red" onclick="return confirm('Excluir?')">EXCLUIR</button>
                 {% endif %}
             </form>
         </div>
     </div>
     {% endfor %}
+</body>
+</html>
+"""
+
+HTML_ESTATISTICAS = """
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESTATÍSTICAS — VISION PRO V3</title>
+    <style>
+        body { background:#060913; color:#e2e8f0; font-family:'Segoe UI',Tahoma,sans-serif; margin:0; padding:14px; }
+        .wrap { max-width:1200px; margin:auto; }
+        .top { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+        h1 { color:#00f2fe; font-size:22px; margin:0; }
+        .sub { color:#94a3b8; font-size:12px; margin-top:4px; }
+        .btn { display:inline-block; padding:10px 13px; border-radius:8px; text-decoration:none; font-weight:700; font-size:11px; border:1px solid #334155; color:#e2e8f0; background:#0f172a; }
+        .btn:hover { border-color:#00f2fe; color:#00f2fe; }
+        .filters, .card { background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:14px; margin-bottom:12px; }
+        .filters-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+        label { display:block; color:#94a3b8; font-size:10px; font-weight:700; margin-bottom:5px; text-transform:uppercase; }
+        select, input { width:100%; box-sizing:border-box; background:#060913; color:#e2e8f0; border:1px solid #334155; border-radius:7px; padding:9px; }
+        .filter-actions { margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; }
+        .primary { background:rgba(0,242,254,.12); border-color:#00f2fe; color:#00f2fe; }
+        .grid-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:12px; }
+        .metric { background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:14px; }
+        .metric .label { color:#94a3b8; font-size:10px; font-weight:700; }
+        .metric .value { font-size:23px; font-weight:800; margin-top:4px; }
+        .green { color:#10b981; } .red { color:#ef4444; } .cyan { color:#00f2fe; } .yellow { color:#f59e0b; }
+        .section-title { color:#00f2fe; font-size:13px; font-weight:800; margin-bottom:10px; text-transform:uppercase; }
+        .table-wrap { overflow-x:auto; }
+        table { width:100%; border-collapse:collapse; min-width:600px; font-size:11px; }
+        th,td { padding:8px 7px; border-bottom:1px solid #1e293b; text-align:left; white-space:nowrap; }
+        th { color:#94a3b8; font-size:9px; text-transform:uppercase; }
+        td strong { color:#e2e8f0; }
+        .note { color:#64748b; font-size:10px; line-height:1.5; margin-top:9px; }
+        .backtest-box { border-color:rgba(0,242,254,.35); }
+        .empty { color:#64748b; padding:12px 0; font-size:12px; }
+        @media(max-width:600px){ body{padding:9px;} h1{font-size:19px;} .metric .value{font-size:20px;} }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="top">
+        <div>
+            <h1>📊 ESTATÍSTICAS DO VISION PRO V3</h1>
+            <div class="sub">Resultados observados registrados pelo sistema. Não são garantias de desempenho futuro.</div>
+        </div>
+        <div>
+            <a class="btn" href="/admin_panel">⬅ ADMIN</a>
+            <a class="btn" href="/">PAINEL</a>
+        </div>
+    </div>
+
+    <form class="filters" method="GET" action="/admin/estatisticas">
+        <div class="section-title">🔎 FILTROS DA AMOSTRA</div>
+        <div class="filters-grid">
+            <div>
+                <label>Ativo</label>
+                <select name="ativo">
+                    <option value="">Todos</option>
+                    {% for a in ativos %}<option value="{{ a }}" {% if filtros.ativo == a %}selected{% endif %}>{{ a }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>Timeframe</label>
+                <select name="tf">
+                    <option value="">Todos</option>
+                    {% for tf in [1,5,15] %}<option value="{{ tf }}" {% if filtros.tf == tf|string %}selected{% endif %}>M{{ tf }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>Estratégia</label>
+                <select name="estrategia">
+                    <option value="">Todas</option>
+                    {% for key, nome in estrategias.items() %}
+                    <option value="{{ key }}" {% if filtros.estrategia == key %}selected{% endif %}>{{ nome }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>Contexto superior</label>
+                <select name="contexto">
+                    <option value="">Todos</option>
+                    <option value="CALL" {% if filtros.contexto == 'CALL' %}selected{% endif %}>CALL</option>
+                    <option value="PUT" {% if filtros.contexto == 'PUT' %}selected{% endif %}>PUT</option>
+                    <option value="NEUTRO" {% if filtros.contexto == 'NEUTRO' %}selected{% endif %}>NEUTRO</option>
+                </select>
+            </div>
+            <div><label>Score mínimo</label><input type="number" name="score_min" min="0" max="100" value="{{ filtros.score_min }}" placeholder="0"></div>
+            <div><label>Score máximo</label><input type="number" name="score_max" min="0" max="100" value="{{ filtros.score_max }}" placeholder="100"></div>
+        </div>
+        <div class="filter-actions">
+            <button class="btn primary" type="submit">APLICAR FILTROS</button>
+            <a class="btn" href="/admin/estatisticas">LIMPAR</a>
+        </div>
+    </form>
+
+    <div class="grid-summary">
+        <div class="metric"><div class="label">Sinais com resultado</div><div class="value cyan">{{ stats.resumo.total }}</div></div>
+        <div class="metric"><div class="label">WIN + WIN G1</div><div class="value green">{{ stats.resumo.wins }}</div></div>
+        <div class="metric"><div class="label">RED</div><div class="value red">{{ stats.resumo.losses }}</div></div>
+        <div class="metric"><div class="label">Assertividade observada</div><div class="value yellow">{{ '%.2f'|format(stats.resumo.winrate) }}%</div></div>
+        <div class="metric"><div class="label">Score médio</div><div class="value cyan">{{ '%.2f'|format(stats.resumo.score_medio) }}</div></div>
+    </div>
+
+    {% if stats.erro %}<div class="card" style="border-color:#ef4444;color:#ef4444;">Erro ao consultar estatísticas: {{ stats.erro }}</div>{% endif %}
+
+    {% macro tabela(titulo, rows, combo=false) %}
+    <div class="card">
+        <div class="section-title">{{ titulo }}</div>
+        {% if rows %}
+        <div class="table-wrap"><table>
+            <thead><tr>
+                {% if combo %}<th>Ativo</th><th>TF</th><th>Estratégia</th><th>Contexto</th>{% else %}<th>Grupo</th>{% endif %}
+                <th>Sinais</th><th>WIN</th><th>RED</th><th>Assertividade</th><th>Score médio</th>
+            </tr></thead>
+            <tbody>
+            {% for r in rows %}<tr>
+                {% if combo %}
+                    <td><strong>{{ r.ativo }}</strong></td><td>M{{ r.timeframe }}</td><td>{{ estrategias.get(r.estrategia, r.estrategia) }}</td><td>{{ r.contexto }}</td>
+                {% else %}<td><strong>{% if titulo == '⏰ PERFORMANCE POR HORÁRIO' %}{{ '%02d'|format(r.grupo|int) }}:00{% elif titulo == '⏱ PERFORMANCE POR TIMEFRAME' %}M{{ r.grupo }}{% else %}{{ estrategias.get(r.grupo, r.grupo) }}{% endif %}</strong></td>{% endif %}
+                <td>{{ r.total }}</td><td class="green">{{ r.wins }}</td><td class="red">{{ r.losses }}</td><td>{{ '%.2f'|format(r.winrate) }}%</td><td>{{ '%.2f'|format(r.score_medio) }}</td>
+            </tr>{% endfor %}
+            </tbody>
+        </table></div>
+        {% else %}<div class="empty">Ainda não existem resultados suficientes para este recorte.</div>{% endif %}
+    </div>
+    {% endmacro %}
+
+    {{ tabela('📌 PERFORMANCE POR ATIVO', stats.por_ativo) }}
+    {{ tabela('⏱ PERFORMANCE POR TIMEFRAME', stats.por_timeframe) }}
+    {{ tabela('🧠 PERFORMANCE POR ESTRATÉGIA', stats.por_estrategia) }}
+    {{ tabela('⏰ PERFORMANCE POR HORÁRIO', stats.por_horario) }}
+    {{ tabela('🎯 PERFORMANCE POR FAIXA DE SCORE', stats.por_score) }}
+    {{ tabela('🧭 PERFORMANCE POR CONTEXTO', stats.por_contexto) }}
+    {{ tabela('🔬 COMBINAÇÕES ATIVO + TF + ESTRATÉGIA + CONTEXTO', stats.por_combinacao, true) }}
+
+    <div class="card backtest-box">
+        <div class="section-title">🧪 BACKTEST HISTÓRICO DE DADOS REAIS</div>
+        <form method="GET" action="/admin/estatisticas">
+            <input type="hidden" name="ativo" value="{{ filtros.ativo }}">
+            <input type="hidden" name="tf" value="{{ filtros.tf }}">
+            <input type="hidden" name="estrategia" value="{{ filtros.estrategia }}">
+            <input type="hidden" name="contexto" value="{{ filtros.contexto }}">
+            <input type="hidden" name="score_min" value="{{ filtros.score_min }}">
+            <input type="hidden" name="score_max" value="{{ filtros.score_max }}">
+            <div class="filters-grid">
+                <div><label>Ativo para backtest</label><select name="bt_ativo">{% for a in ativos %}<option value="{{ a }}" {% if backtest_filtros.ativo == a %}selected{% endif %}>{{ a }}</option>{% endfor %}</select></div>
+                <div><label>Timeframe</label><select name="bt_tf">{% for tf in [1,5,15] %}<option value="{{ tf }}" {% if backtest_filtros.tf == tf %}selected{% endif %}>M{{ tf }}</option>{% endfor %}</select></div>
+                <div><label>Estratégia</label><select name="bt_estrategia">{% for key, nome in estrategias.items() %}<option value="{{ key }}" {% if backtest_filtros.estrategia == key %}selected{% endif %}>{{ nome }}</option>{% endfor %}</select></div>
+            </div>
+            <div class="filter-actions"><button class="btn primary" type="submit" name="executar_backtest" value="1">EXECUTAR BACKTEST</button></div>
+        </form>
+        {% if backtest %}
+            {% if backtest.ok %}
+            <div class="grid-summary" style="margin-top:12px;">
+                <div class="metric"><div class="label">Sinais no backtest</div><div class="value cyan">{{ backtest.resultado.total }}</div></div>
+                <div class="metric"><div class="label">WIN</div><div class="value green">{{ backtest.resultado.wins }}</div></div>
+                <div class="metric"><div class="label">LOSS</div><div class="value red">{{ backtest.resultado.losses }}</div></div>
+                <div class="metric"><div class="label">Taxa observada</div><div class="value yellow">{{ '%.2f'|format(backtest.resultado.winrate) }}%</div></div>
+            </div>
+            {% else %}<div class="empty">{{ backtest.error }}</div>{% endif %}
+        {% endif %}
+        <div class="note">O backtest compara o preço de fechamento da entrada com o fechamento após a quantidade de velas de expiração configurada. Ele é uma ferramenta de validação histórica e não representa garantia de desempenho futuro.</div>
+    </div>
+</div>
 </body>
 </html>
 """
@@ -345,6 +595,7 @@ HTML_LOGIN = """
         <h2>VISION PRO V3</h2>
         {% if erro %}<div style="color:#ef4444; margin-bottom:15px; font-size:13px; background:rgba(239,68,68,0.1); padding:10px; border-radius:8px; border:1px solid rgba(239,68,68,0.3);">{{erro}}</div>{% endif %}
         <form method="POST" action="/login">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="email" name="email" placeholder="Seu E-mail" required>
             <input type="password" name="password" placeholder="Sua Senha" required>
             <button type="submit">ACESSAR O TERMINAL</button>
@@ -379,6 +630,7 @@ HTML_REGISTER = """
         <h2>CRIAR CONTA NOVA</h2>
         {% if erro %}<div style="color:#ef4444; margin-bottom:15px; font-size:13px; background:rgba(239,68,68,0.1); padding:10px; border-radius:8px; border:1px solid rgba(239,68,68,0.3);">{{erro}}</div>{% endif %}
         <form method="POST" action="/register">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="email" name="email" placeholder="Novo E-mail" required>
             <input type="password" name="password" placeholder="Nova Senha" required>
             <button type="submit">CONCLUIR CADASTRO</button>
@@ -517,11 +769,6 @@ HTML_INDEX = """
             <div class="winrate-bar"><div id="wr-fill" class="winrate-fill"></div></div>
         </div>
 
-        <div id="broker-view-container">
-            <button class="btn-close-broker" onclick="closeBrokerView()">❌ FECHAR CORRETORA</button>
-            <iframe id="brokerIframe" class="broker-iframe-inline" src=""></iframe>
-        </div>
-
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
             MERCADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b><br>
             ATIVO EM ANÁLISE: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
@@ -533,10 +780,10 @@ HTML_INDEX = """
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
 
         <div id="result-area" class="result-grid" style="display:none;">
-            <button class="btn-res btn-res-win" onclick="fetch('/resultado/win')">WIN</button>
-            <button class="btn-res btn-res-g1" onclick="fetch('/resultado/g1')">G1</button>
-            <button class="btn-res btn-res-red" onclick="fetch('/resultado/red')">RED</button>
-            <button class="btn-res btn-res-skip" onclick="fetch('/resultado/pular')">PULAR</button>
+            <button class="btn-res btn-res-win" onclick="sendResult('win')">WIN</button>
+            <button class="btn-res btn-res-g1" onclick="sendResult('g1')">G1</button>
+            <button class="btn-res btn-res-red" onclick="sendResult('red')">RED</button>
+            <button class="btn-res btn-res-skip" onclick="sendResult('pular')">PULAR</button>
         </div>
 
         <div class="control-panel">
@@ -603,6 +850,7 @@ HTML_INDEX = """
 
             {% if user == admin %}
             <button onclick="location.href='/admin_panel'" style="width:100%; margin-top:15px; padding:12px; background:rgba(0,242,254,0.1); border:1px solid #00f2fe; color:#00f2fe; font-weight:bold; border-radius:10px; cursor:pointer;">🛡️ ABRIR PAINEL ADMINISTRATIVO</button>
+            <button onclick="location.href='/admin/estatisticas'" style="width:100%; margin-top:8px; padding:12px; background:rgba(16,185,129,0.08); border:1px solid #10b981; color:#10b981; font-weight:bold; border-radius:10px; cursor:pointer;">📊 ABRIR ESTATÍSTICAS E BACKTEST</button>
             {% endif %}
 
             <button class="btn-toggle-hist" onclick="toggleHistorico()">👁️ EXIBIR HISTÓRICO PASSADO</button>
@@ -683,15 +931,15 @@ HTML_INDEX = """
         }
 
         function openBroker(url) {
-            const brokerContainer = document.getElementById('broker-view-container');
-            document.getElementById('brokerIframe').src = url;
-            brokerContainer.style.display = 'flex';
+            // As plataformas de operação podem bloquear carregamento dentro de iframe
+            // por políticas de segurança (X-Frame-Options/CSP). Abrimos diretamente
+            // em uma nova aba para que cada plataforma carregue normalmente.
+            const novaAba = window.open(url, '_blank', 'noopener,noreferrer');
+            if (!novaAba) {
+                window.location.href = url;
+            }
         }
 
-        function closeBrokerView() {
-            document.getElementById('broker-view-container').style.display = 'none';
-            document.getElementById('brokerIframe').src = '';
-        }
 
         function toggleHistorico() {
             const box = document.getElementById('box-historico');
@@ -703,10 +951,48 @@ HTML_INDEX = """
         }
 
         function sendCommand(cmd) {
-            fetch('/command/' + cmd).then(r => r.json()).then(data => {
+            fetch('/command/' + cmd, { method: 'POST', headers: {'X-CSRF-Token': '{{ csrf_token() }}'} }).then(r => r.json()).then(data => {
                 if(data.redirect) window.location.href = data.redirect;
             });
         }
+
+        function sendResult(resultado) {
+            fetch('/resultado/' + resultado, { method: 'POST', headers: {'X-CSRF-Token': '{{ csrf_token() }}'} })
+                .then(r => r.json())
+                .catch(() => {});
+        }
+
+        let timeframeCronometro = 5;
+
+        function formatarTempoCandle(segundos) {
+            const total = Math.max(0, Math.floor(segundos));
+            const minutos = String(Math.floor(total / 60)).padStart(2, '0');
+            const segundosRestantes = String(total % 60).padStart(2, '0');
+            return `${minutos}:${segundosRestantes}`;
+        }
+
+        function atualizarCronometroCandle(tf) {
+            const elemento = document.getElementById('candle-timer');
+            if (!elemento) return;
+
+            const tfAtual = Number(tf) || 5;
+            timeframeCronometro = tfAtual;
+
+            // O relógio do candle é calculado localmente pelo relógio real do navegador.
+            // Assim ele não depende do ciclo de atualização do Flask e não sofre pausas
+            // quando uma consulta /status demora para responder.
+            const duracao = tfAtual * 60;
+            const agoraMs = Date.now();
+            const segundoAtual = Math.floor(agoraMs / 1000);
+            const decorrido = segundoAtual % duracao;
+            const restante = duracao - decorrido;
+
+            elemento.innerText = `CANDLE M${tfAtual} • ${formatarTempoCandle(decorrido)} DECORRIDOS • ${formatarTempoCandle(restante)} RESTANTES`;
+        }
+
+        // Atualização independente do servidor: o cronômetro continua correndo
+        // de segundo em segundo mesmo enquanto o painel consulta /status.
+        setInterval(() => atualizarCronometroCandle(timeframeCronometro), 250);
 
         async function atualizarPainel() {
             try {
@@ -729,11 +1015,7 @@ HTML_INDEX = """
                     }
                 }
                 if(document.getElementById('candle-timer')) {
-                    const tfAtual = data.timeframe || 5;
-                    const dec = data.candle_decorrido || 0;
-                    const rest = data.candle_restante || 0;
-                    const fmt = (v) => String(Math.max(0, Math.floor(v / 60))).padStart(2,'0') + ':' + String(Math.max(0, Math.floor(v % 60))).padStart(2,'0');
-                    document.getElementById('candle-timer').innerText = `CANDLE M${tfAtual} • ${fmt(dec)} DECORRIDOS • ${fmt(rest)} RESTANTES`;
+                    atualizarCronometroCandle(data.timeframe || 5);
                 }
                 if(document.getElementById('btn-telegram-toggle')) {
                     const ativo = !!data.telegram_ativo;
@@ -802,8 +1084,27 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 user_email VARCHAR(255) NOT NULL,
                 sinal VARCHAR(255) NOT NULL,
-                resultado VARCHAR(50) NOT NULL
+                resultado VARCHAR(50) NOT NULL,
+                ativo VARCHAR(100),
+                direcao VARCHAR(10),
+                timeframe INT,
+                estrategia VARCHAR(100),
+                score INT,
+                mercado VARCHAR(50),
+                contexto_timeframe VARCHAR(20),
+                criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                resultado_em TIMESTAMPTZ
             );
+
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS ativo VARCHAR(100);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS direcao VARCHAR(10);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS timeframe INT;
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS estrategia VARCHAR(100);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS score INT;
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS mercado VARCHAR(50);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS contexto_timeframe VARCHAR(20);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS resultado_em TIMESTAMPTZ;
 
             CREATE TABLE IF NOT EXISTS configuracoes_sistema (
                 chave VARCHAR(100) PRIMARY KEY,
@@ -820,6 +1121,28 @@ try:
     init_db()
 except Exception:
     pass
+
+def garantir_admin_configurado():
+    """Cria/atualiza o ADM somente quando ADMIN_PASSWORD foi explicitamente configurada no ambiente."""
+    if not ADMIN_PASSWORD:
+        return
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        senha_hash = generate_password_hash(ADMIN_PASSWORD)
+        hoje = agora_brasilia().strftime("%Y-%m-%d")
+        cur.execute("""
+            INSERT INTO usuarios (email, senha, criado_em, wins, reds, winrate, ips_autorizados)
+            VALUES (%s, %s, %s, 0, 0, 0.0, '[]')
+            ON CONFLICT (email) DO UPDATE SET senha = EXCLUDED.senha;
+        """, (ADMIN_EMAIL, senha_hash, hoje))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Aviso: não foi possível garantir a conta ADM: {e}")
+
+garantir_admin_configurado()
 
 def telegram_envio_ativo():
     """Retorna se o envio automático ao Telegram está habilitado pelo ADM."""
@@ -1041,19 +1364,20 @@ def verificar_assinatura(email):
     except Exception:
         return True, 30
 
-def registrar_sinal_bd(email, sinal_str):
+def registrar_sinal_bd(email, sinal_str, ativo=None, direcao=None, timeframe=None, estrategia=None, score=None, mercado=None, contexto_timeframe=None):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO historico_sinais (user_email, sinal, resultado)
-            VALUES (%s, %s, %s);
-        """, (email.strip().lower(), sinal_str, "Analisando..."))
+            INSERT INTO historico_sinais
+            (user_email, sinal, resultado, ativo, direcao, timeframe, estrategia, score, mercado, contexto_timeframe)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+        """, (email.strip().lower(), sinal_str, "Analisando...", ativo, direcao, timeframe, estrategia, score, mercado, contexto_timeframe))
         conn.commit()
         cur.close()
         conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ Erro ao registrar sinal: {e}")
 
 def buscar_historico_bd(email):
     try:
@@ -1086,7 +1410,7 @@ def atualizar_ultimo_sinal_bd(email, resultado):
 
         if res:
             ultimo_id = res["id"]
-            cur.execute("UPDATE historico_sinais SET resultado = %s WHERE id = %s;", (resultado, ultimo_id))
+            cur.execute("UPDATE historico_sinais SET resultado = %s, resultado_em = CURRENT_TIMESTAMP WHERE id = %s;", (resultado, ultimo_id))
             conn.commit()
 
         cur.close()
@@ -1149,76 +1473,105 @@ for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X
 for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
-def get_data_v2(ticker, tf, velas_minimas=30):
+def validar_ohlc(ohlc, velas_minimas=30, tf=5):
+    """Valida integridade e atualidade das velas antes de entregá-las ao motor."""
+    try:
+        required = ("time", "open", "high", "low", "close")
+        if any(k not in ohlc for k in required):
+            return None
+        arrays = {k: np.asarray(ohlc[k], dtype=float) for k in required}
+        n = len(arrays["close"])
+        if n < velas_minimas:
+            return None
+        if any(len(arrays[k]) != n for k in required):
+            return None
+        if any(not np.all(np.isfinite(arrays[k])) for k in required):
+            return None
+        if not np.all(np.diff(arrays["time"]) > 0):
+            return None
+        if np.any(arrays["high"] < np.maximum(arrays["open"], arrays["close"])):
+            return None
+        if np.any(arrays["low"] > np.minimum(arrays["open"], arrays["close"])):
+            return None
+
+        # Não analisa a vela ainda em formação: evita repaint e sinais baseados
+        # em uma cotação que ainda pode mudar até o fechamento.
+        agora_ts = int(time.time())
+        limite = tf * 60
+        timestamps = arrays["time"].astype(np.int64)
+        fechado = (timestamps + limite) <= agora_ts
+        if not np.any(fechado):
+            return None
+        ultimo_fechado = int(np.where(fechado)[0][-1])
+        arrays = {k: arrays[k][:ultimo_fechado + 1] for k in required}
+        if len(arrays["close"]) < velas_minimas:
+            return None
+        return arrays
+    except Exception:
+        return None
+
+def get_data_v2(ticker, tf, velas_minimas=100):
+    """Busca somente OHLC verificável. Falha de fonte = sem análise/sinal."""
+    if not ticker or not tf:
+        return None
+
+    # OTC não é mascarado como mercado aberto. Sem uma fonte OTC real, o bot
+    # deliberadamente não gera sinal para evitar analisar o ativo errado.
+    if "-OTC" in str(ticker).upper():
+        return None
+
     try:
         base_ticker = ticker
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*'
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+            "Accept": "application/json, text/plain, */*"
         }
-        
-        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d"
-        res = requests.get(url, headers=headers, timeout=5.0)
-        
-        if res.status_code == 200 and 'chart' in res.json():
+        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=10d"
+        res = requests.get(url, headers=headers, timeout=7.0)
+        if res.status_code == 200:
             data_json = res.json()
-            result = data_json['chart']['result'][0]
-            timestamps = result['timestamp']
-            quote = result['indicators']['quote'][0]
-            
-            ohlc = {
-                "time": np.array(timestamps),
-                "open": np.array(quote['open'], dtype=float),
-                "high": np.array(quote['high'], dtype=float),
-                "low": np.array(quote['low'], dtype=float),
-                "close": np.array(quote['close'], dtype=float)
-            }
-            
-            idx = ~np.isnan(ohlc["close"])
-            for k in ohlc: 
-                ohlc[k] = ohlc[k][idx]
-                
-            if len(ohlc["close"]) >= velas_minimas:
-                return ohlc
+            result_list = data_json.get("chart", {}).get("result") or []
+            if result_list:
+                result = result_list[0]
+                timestamps = result.get("timestamp") or []
+                quote = (result.get("indicators", {}).get("quote") or [{}])[0]
+                ohlc = {
+                    "time": np.array(timestamps),
+                    "open": np.array(quote.get("open", []), dtype=float),
+                    "high": np.array(quote.get("high", []), dtype=float),
+                    "low": np.array(quote.get("low", []), dtype=float),
+                    "close": np.array(quote.get("close", []), dtype=float)
+                }
+                validado = validar_ohlc(ohlc, velas_minimas=velas_minimas, tf=tf)
+                if validado is not None:
+                    return validado
 
-        if "-USD" in base_ticker or "USD" in ticker:
-            crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
-            url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=100&aggregate={tf}"
-            r_alt = requests.get(url_alt, timeout=5.0).json()
-            
-            if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
-                data_list = r_alt['Data']['Data']
-                closes = np.array([x['close'] for x in data_list], dtype=float)
-                opens = np.array([x['open'] for x in data_list], dtype=float)
-                highs = np.array([x['high'] for x in data_list], dtype=float)
-                lows = np.array([x['low'] for x in data_list], dtype=float)
-                times = np.array([x['time'] for x in data_list])
-                
-                if len(closes) >= velas_minimas:
-                    return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
-        
-        base_val = 1.0850 if "EUR" in ticker else (65000.0 if "BTC" in ticker else 150.0)
-        times = np.array([int(time.time()) - (i * tf * 60) for i in range(velas_minimas, 0, -1)])
-        closes, opens, highs, lows = [], [], [], []
-        c = base_val
-        for _ in range(velas_minimas):
-            o = c + random.uniform(-0.0005, 0.0005)
-            c = o + random.uniform(-0.0008, 0.0008)
-            h = max(o, c) + random.uniform(0.0001, 0.0004)
-            l = min(o, c) - random.uniform(0.0001, 0.0004)
-            opens.append(o)
-            closes.append(c)
-            highs.append(h)
-            lows.append(l)
+        # Fallback somente para cripto real; nunca para OTC e nunca sintético.
+        if base_ticker.endswith("-USD"):
+            crypto_symbol = base_ticker[:-4].replace("-", "")
+            url_alt = (
+                "https://min-api.cryptocompare.com/data/v2/histominute"
+                f"?fsym={crypto_symbol}&tsym=USD&limit=1000&aggregate={tf}"
+            )
+            r_alt = requests.get(url_alt, timeout=7.0)
+            if r_alt.status_code == 200:
+                payload = r_alt.json()
+                data_list = payload.get("Data", {}).get("Data", [])
+                if data_list:
+                    ohlc = {
+                        "time": np.array([x.get("time", 0) for x in data_list]),
+                        "open": np.array([x.get("open", np.nan) for x in data_list], dtype=float),
+                        "high": np.array([x.get("high", np.nan) for x in data_list], dtype=float),
+                        "low": np.array([x.get("low", np.nan) for x in data_list], dtype=float),
+                        "close": np.array([x.get("close", np.nan) for x in data_list], dtype=float)
+                    }
+                    validado = validar_ohlc(ohlc, velas_minimas=velas_minimas, tf=tf)
+                    if validado is not None:
+                        return validado
 
-        return {
-            "time": times,
-            "open": np.array(opens, dtype=float),
-            "high": np.array(highs, dtype=float),
-            "low": np.array(lows, dtype=float),
-            "close": np.array(closes, dtype=float)
-        }
-    except Exception:
+        return None
+    except Exception as e:
+        print(f"⚠️ Fonte de mercado indisponível para {ticker} M{tf}: {e}")
         return None
 
 def calcular_ema(dados, periodo):
@@ -1279,7 +1632,257 @@ def analisar_price_action(data, i=-1):
     return None, 0, max(call_conf, put_conf)
 
 
-# ================= MOTOR DE ESTRATÉGIAS COM SCORE DE PROBABILIDADE =================
+# ================= CONTEXTO MULTI-TIMEFRAME =================
+def timeframe_contexto(tf):
+    return {1: 5, 5: 15, 15: 30}.get(int(tf), 30)
+
+def obter_contexto_tendencia(data):
+    try:
+        c = np.asarray(data["close"], dtype=float)
+        if len(c) < 60:
+            return "NEUTRO"
+        ema20 = calcular_ema(c, 20)
+        ema50 = calcular_ema(c, 50)
+        ultimo = c[-1]
+        inclinacao = ema20[-1] - ema20[-5]
+        if ultimo > ema20[-1] > ema50[-1] and inclinacao > 0:
+            return "CALL"
+        if ultimo < ema20[-1] < ema50[-1] and inclinacao < 0:
+            return "PUT"
+        return "NEUTRO"
+    except Exception:
+        return "NEUTRO"
+
+def validar_contexto_multitimeframe(ticker, tf, sinal, cache):
+    """Exige alinhamento do timeframe superior quando o contexto é claro."""
+    superior = timeframe_contexto(tf)
+    chave = f"{ticker}_{superior}"
+    if chave in cache:
+        data_sup = cache[chave].get("data")
+    else:
+        data_sup = get_data_v2(ticker, superior, velas_minimas=100)
+        cache[chave] = {"data": data_sup, "time": time.time()}
+    if data_sup is None:
+        return False, "SEM_CONTEXTO"
+    tendencia = obter_contexto_tendencia(data_sup)
+    if tendencia == "NEUTRO":
+        return True, "NEUTRO"
+    return tendencia == sinal, tendencia
+
+# ================= ESTATÍSTICAS HISTÓRICAS =================
+def _estatisticas_agregadas(rows):
+    """Normaliza uma lista de agregações SQL e calcula a taxa observada."""
+    saida = []
+    for row in rows:
+        total = int(row.get("total") or 0)
+        wins = int(row.get("wins") or 0)
+        losses = int(row.get("losses") or 0)
+        winrate = round((wins / total) * 100, 2) if total else 0.0
+        item = dict(row)
+        item.update({"total": total, "wins": wins, "losses": losses, "winrate": winrate})
+        saida.append(item)
+    return saida
+
+
+def consultar_estatisticas_sinais(ativo=None, timeframe=None, estrategia=None, contexto=None, score_min=None, score_max=None):
+    """Consulta resultados reais registrados no PostgreSQL, sem misturar sinais ainda sem resultado."""
+    filtros = ["resultado IN ('Win', 'WinG1', 'Red')"]
+    params = []
+
+    if ativo:
+        filtros.append("ativo = %s")
+        params.append(ativo)
+    if timeframe:
+        filtros.append("timeframe = %s")
+        params.append(int(timeframe))
+    if estrategia:
+        filtros.append("estrategia = %s")
+        params.append(estrategia)
+    if contexto:
+        filtros.append("contexto_timeframe = %s")
+        params.append(contexto)
+    if score_min is not None:
+        filtros.append("score >= %s")
+        params.append(int(score_min))
+    if score_max is not None:
+        filtros.append("score <= %s")
+        params.append(int(score_max))
+
+    where = " AND ".join(filtros)
+
+    def executar(cur, sql, extra_params=None):
+        cur.execute(sql.format(where=where), tuple(params + (extra_params or [])))
+        return cur.fetchall()
+
+    resultado = {
+        "resumo": {"total": 0, "wins": 0, "losses": 0, "winrate": 0.0, "score_medio": 0.0},
+        "por_ativo": [],
+        "por_timeframe": [],
+        "por_estrategia": [],
+        "por_horario": [],
+        "por_score": [],
+        "por_contexto": [],
+        "por_combinacao": []
+    }
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        cur.execute(f"""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                COALESCE(AVG(score) FILTER (WHERE score IS NOT NULL), 0) AS score_medio
+            FROM historico_sinais
+            WHERE {where};
+        """, tuple(params))
+        resumo = cur.fetchone() or {}
+        total = int(resumo.get("total") or 0)
+        wins = int(resumo.get("wins") or 0)
+        losses = int(resumo.get("losses") or 0)
+        resultado["resumo"] = {
+            "total": total,
+            "wins": wins,
+            "losses": losses,
+            "winrate": round((wins / total) * 100, 2) if total else 0.0,
+            "score_medio": round(float(resumo.get("score_medio") or 0), 2)
+        }
+
+        resultado["por_ativo"] = _estatisticas_agregadas(executar(cur, """
+            SELECT COALESCE(ativo, 'N/D') AS grupo,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY COALESCE(ativo, 'N/D') ORDER BY total DESC, grupo ASC;
+        """))
+
+        resultado["por_timeframe"] = _estatisticas_agregadas(executar(cur, """
+            SELECT COALESCE(timeframe, 0) AS grupo,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY COALESCE(timeframe, 0) ORDER BY grupo ASC;
+        """))
+
+        resultado["por_estrategia"] = _estatisticas_agregadas(executar(cur, """
+            SELECT COALESCE(estrategia, 'N/D') AS grupo,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY COALESCE(estrategia, 'N/D') ORDER BY total DESC, grupo ASC;
+        """))
+
+        resultado["por_horario"] = _estatisticas_agregadas(executar(cur, """
+            SELECT EXTRACT(HOUR FROM (criado_em AT TIME ZONE 'America/Sao_Paulo'))::INT AS grupo,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY EXTRACT(HOUR FROM (criado_em AT TIME ZONE 'America/Sao_Paulo'))
+            ORDER BY grupo ASC;
+        """))
+
+        resultado["por_score"] = _estatisticas_agregadas(executar(cur, """
+            SELECT CASE
+                       WHEN score IS NULL THEN 'SEM SCORE'
+                       WHEN score < 60 THEN '0-59'
+                       WHEN score < 70 THEN '60-69'
+                       WHEN score < 80 THEN '70-79'
+                       WHEN score < 90 THEN '80-89'
+                       ELSE '90-100'
+                   END AS grupo,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY 1
+            ORDER BY MIN(score) NULLS LAST;
+        """))
+
+        resultado["por_contexto"] = _estatisticas_agregadas(executar(cur, """
+            SELECT COALESCE(contexto_timeframe, 'N/D') AS grupo,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY COALESCE(contexto_timeframe, 'N/D') ORDER BY total DESC, grupo ASC;
+        """))
+
+        resultado["por_combinacao"] = _estatisticas_agregadas(executar(cur, """
+            SELECT COALESCE(ativo, 'N/D') AS ativo,
+                   COALESCE(timeframe, 0) AS timeframe,
+                   COALESCE(estrategia, 'N/D') AS estrategia,
+                   COALESCE(contexto_timeframe, 'N/D') AS contexto,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY COALESCE(ativo, 'N/D'), COALESCE(timeframe, 0),
+                     COALESCE(estrategia, 'N/D'), COALESCE(contexto_timeframe, 'N/D')
+            ORDER BY total DESC, (COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1'))::NUMERIC / NULLIF(COUNT(*), 0)) DESC NULLS LAST
+            LIMIT 100;
+        """))
+
+        for grupo in (resultado["por_ativo"], resultado["por_timeframe"], resultado["por_estrategia"], resultado["por_horario"], resultado["por_score"], resultado["por_contexto"], resultado["por_combinacao"]):
+            for item in grupo:
+                if "score_medio" in item:
+                    item["score_medio"] = round(float(item.get("score_medio") or 0), 2)
+
+        return resultado
+    except Exception as e:
+        print(f"⚠️ Erro ao consultar estatísticas históricas: {e}")
+        resultado["erro"] = str(e)
+        return resultado
+    finally:
+        try:
+            if cur:
+                cur.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+
+# ================= BACKTEST HISTÓRICO =================
+def backtest_estrategia(data, estrategia, tf, expiracao_velas=1):
+    """Backtest sem olhar candles futuros no momento da decisão."""
+    c = np.asarray(data["close"], dtype=float)
+    total = wins = losses = 0
+    for i in range(30, len(c) - expiracao_velas):
+        sinal, score = analisar_estrategia(data, estrategia, i=i)
+        if not sinal or not score:
+            continue
+        total += 1
+        preco_entrada = c[i]
+        preco_saida = c[i + expiracao_velas]
+        if preco_saida == preco_entrada:
+            continue
+        ganhou = (sinal == "CALL" and preco_saida > preco_entrada) or (sinal == "PUT" and preco_saida < preco_entrada)
+        if ganhou:
+            wins += 1
+        else:
+            losses += 1
+    taxa = round((wins / total) * 100, 2) if total else 0.0
+    return {"estrategia": estrategia, "timeframe": tf, "total": total, "wins": wins, "losses": losses, "winrate": taxa}
+
+# ================= MOTOR DE ESTRATÉGIAS COM SCORE TÉCNICO =================
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
     
@@ -1430,11 +2033,9 @@ def login():
         if not e or not s:
             return render_template_string(HTML_LOGIN, erro="Preencha todos os campos.")
 
-        if e == ADMIN_EMAIL:
-            try:
-                salvar_usuario(e, s, agora_brasilia().strftime("%Y-%m-%d"), ip_inicial=None)
-            except Exception as err:
-                return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM: {err}")
+        chave_login = f"{get_client_ip()}|{e}"
+        if login_bloqueado(chave_login):
+            return render_template_string(HTML_LOGIN, erro="Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.")
 
         usuarios = carregar_usuarios()
         if e not in usuarios:
@@ -1442,7 +2043,10 @@ def login():
 
         user_db = usuarios[e]
         if not check_password_hash(user_db['senha'], s):
+            registrar_falha_login(chave_login)
             return render_template_string(HTML_LOGIN, erro="Senha Incorreta.")
+
+        limpar_falhas_login(chave_login)
 
         if e != ADMIN_EMAIL:
             ips_cadastrados = user_db.get('ips_list', [])
@@ -1456,7 +2060,9 @@ def login():
         if not ativo:
             return render_template_string(HTML_LOGIN, erro=f"Assinatura expirada (Dias: {dias}).")
 
+        session.clear()
         session['user'] = e
+        session.permanent = True
         USUARIOS_ONLINE[e] = time.time()
         get_user_state(e)
         return redirect('/')
@@ -1472,10 +2078,18 @@ def register():
         
         if not e or not s:
             return render_template_string(HTML_REGISTER, erro="Preencha todos os campos.")
+
+        if len(s) < 8:
+            return render_template_string(HTML_REGISTER, erro="A senha deve ter pelo menos 8 caracteres.")
+
+        if e == ADMIN_EMAIL:
+            return render_template_string(HTML_REGISTER, erro="Este e-mail é reservado ao administrador.")
             
         try:
             salvar_usuario(e, s, ip_inicial=ip_cliente)
+            session.clear()
             session['user'] = e
+            session.permanent = True
             USUARIOS_ONLINE[e] = time.time()
             get_user_state(e)
             return redirect('/')
@@ -1503,13 +2117,109 @@ def admin_panel():
         if now - USUARIOS_ONLINE[u] > 60: del USUARIOS_ONLINE[u]
     return render_template_string(HTML_ADM, lista=carregar_usuarios(), admin=ADMIN_EMAIL, online_count=len(USUARIOS_ONLINE), online_list=USUARIOS_ONLINE.keys())
 
-@app.route('/adm/renovar/<email>')
+@app.route('/admin/estatisticas')
+def admin_estatisticas():
+    if session.get('user') != ADMIN_EMAIL:
+        return abort(403)
+
+    ativos = sorted(set(ATIVOS_BASE.get("FOREX_ABERTO", []) + ATIVOS_BASE.get("CRIPTO_ABERTO", [])))
+    estrategias = {k: NOME_ESTRATEGIAS_DISPLAY.get(k, k) for k in LISTA_ESTRATEGIAS}
+
+    ativo = request.args.get('ativo', '').strip().upper()
+    if ativo not in ativos:
+        ativo = ''
+
+    tf_raw = request.args.get('tf', '').strip()
+    tf = tf_raw if tf_raw in {'1', '5', '15'} else ''
+
+    estrategia = request.args.get('estrategia', '').strip().upper()
+    if estrategia not in LISTA_ESTRATEGIAS:
+        estrategia = ''
+
+    contexto = request.args.get('contexto', '').strip().upper()
+    if contexto not in {'CALL', 'PUT', 'NEUTRO'}:
+        contexto = ''
+
+    def inteiro_opcional(valor, minimo=0, maximo=100):
+        if valor is None or str(valor).strip() == '':
+            return None
+        try:
+            n = int(valor)
+            if n < minimo or n > maximo:
+                return None
+            return n
+        except (TypeError, ValueError):
+            return None
+
+    score_min = inteiro_opcional(request.args.get('score_min'), 0, 100)
+    score_max = inteiro_opcional(request.args.get('score_max'), 0, 100)
+    if score_min is not None and score_max is not None and score_min > score_max:
+        score_min, score_max = score_max, score_min
+
+    stats = consultar_estatisticas_sinais(
+        ativo=ativo or None,
+        timeframe=int(tf) if tf else None,
+        estrategia=estrategia or None,
+        contexto=contexto or None,
+        score_min=score_min,
+        score_max=score_max
+    )
+
+    backtest = None
+    bt_ativo = request.args.get('bt_ativo', 'EURUSD').strip().upper()
+    if bt_ativo not in ativos:
+        bt_ativo = 'EURUSD' if 'EURUSD' in ativos else ativos[0]
+    bt_tf_raw = request.args.get('bt_tf', '5').strip()
+    bt_tf = int(bt_tf_raw) if bt_tf_raw in {'1', '5', '15'} else 5
+    bt_estrategia = request.args.get('bt_estrategia', 'PRICE_ACTION').strip().upper()
+    if bt_estrategia not in LISTA_ESTRATEGIAS:
+        bt_estrategia = 'PRICE_ACTION'
+
+    if request.args.get('executar_backtest') == '1':
+        try:
+            ticker = MAPA_TICKERS.get(bt_ativo, bt_ativo)
+            data = get_data_v2(ticker, bt_tf, velas_minimas=100)
+            if data is None:
+                backtest = {
+                    'ok': False,
+                    'error': 'Não foi possível obter dados reais e fechados suficientes para este backtest.'
+                }
+            else:
+                resultado_bt = backtest_estrategia(data, bt_estrategia, bt_tf, expiracao_velas=1)
+                backtest = {'ok': True, 'resultado': resultado_bt}
+        except Exception as e:
+            print(f"⚠️ Erro no backtest do painel estatístico: {e}")
+            backtest = {'ok': False, 'error': 'O backtest não pôde ser concluído. Verifique os logs do Render.'}
+
+    return render_template_string(
+        HTML_ESTATISTICAS,
+        stats=stats,
+        ativos=ativos,
+        estrategias=estrategias,
+        filtros={
+            'ativo': ativo,
+            'tf': tf,
+            'estrategia': estrategia,
+            'contexto': contexto,
+            'score_min': '' if score_min is None else score_min,
+            'score_max': '' if score_max is None else score_max
+        },
+        backtest=backtest,
+        backtest_filtros={
+            'ativo': bt_ativo,
+            'tf': bt_tf,
+            'estrategia': bt_estrategia
+        }
+    )
+
+
+@app.route('/adm/renovar/<email>', methods=['POST'])
 def adm_renovar(email):
     if session.get('user') != ADMIN_EMAIL: return abort(403)
     renovar_usuario_db(email)
     return redirect('/admin_panel')
 
-@app.route('/adm/liberar_ip/<email>')
+@app.route('/adm/liberar_ip/<email>', methods=['POST'])
 def adm_liberar_ip(email):
     if session.get('user') != ADMIN_EMAIL: return abort(403)
     liberar_ip_usuario_db(email)
@@ -1521,6 +2231,8 @@ def adm_editar():
     original = request.form.get('email_original', '').strip().lower()
     novo_email = request.form.get('novo_email', '').strip().lower()
     nova_senha = request.form.get('nova_senha', '').strip()
+    if nova_senha and len(nova_senha) < 8:
+        return redirect('/admin_panel')
     
     try:
         conn = get_db_connection()
@@ -1538,7 +2250,7 @@ def adm_editar():
         
     return redirect('/admin_panel')
 
-@app.route('/adm/excluir/<email>')
+@app.route('/adm/excluir/<email>', methods=['POST'])
 def adm_excluir(email):
     if session.get('user') != ADMIN_EMAIL: return abort(403)
     excluir_usuario_db(email)
@@ -1585,7 +2297,7 @@ def status():
     response.headers["Pragma"] = "no-cache"
     return response
 
-@app.route('/command/<cmd>')
+@app.route('/command/<cmd>', methods=['POST'])
 def command(cmd):
     user = session.get('user')
     if not user:
@@ -1739,7 +2451,27 @@ def command(cmd):
     
     return jsonify({"ok": True})
 
-@app.route('/resultado/<res>')
+@app.route('/admin/backtest')
+def admin_backtest():
+    if session.get('user') != ADMIN_EMAIL:
+        return abort(403)
+    ativo = request.args.get('ativo', 'EURUSD').strip().upper()
+    try:
+        tf = int(request.args.get('tf', '5'))
+    except ValueError:
+        return jsonify({"ok": False, "error": "Timeframe inválido."}), 400
+    if tf not in (1, 5, 15):
+        return jsonify({"ok": False, "error": "Timeframe permitido: M1, M5 ou M15."}), 400
+    estrategia = request.args.get('estrategia', 'PRICE_ACTION').strip().upper()
+    if estrategia not in LISTA_ESTRATEGIAS:
+        return jsonify({"ok": False, "error": "Estratégia inválida."}), 400
+    ticker = MAPA_TICKERS.get(ativo, ativo)
+    data = get_data_v2(ticker, tf, velas_minimas=100)
+    if data is None:
+        return jsonify({"ok": False, "error": "Não foi possível obter dados reais e fechados suficientes para o backtest."}), 503
+    return jsonify({"ok": True, "resultado": backtest_estrategia(data, estrategia, tf)})
+
+@app.route('/resultado/<res>', methods=['POST'])
 def resultado(res):
     user = session.get('user')
     if user:
@@ -1942,7 +2674,7 @@ def confirmar_alerta_agendado(user_email, alert_id):
             f"<h3 style='color:#00f2fe; margin-bottom:8px;'>🎯 SINAL CONFIRMADO!</h3>"
             f"<b>ATIVO:</b> {ativo}<br>"
             f"<b>DIREÇÃO DE ENTRADA:</b> <span style='color:{cor_direcao}; font-size:18px;'>{sinal}</span><br>"
-            f"<b>ESTRATÉGIA:</b> <span style='color:#38ef7d;'>{est_fmt} ({prob}%)</span><br>"
+            f"<b>ESTRATÉGIA:</b> <span style='color:#38ef7d;'>{est_fmt} (score {prob}/100)</span><br>"
             f"<b>MOVIMENTO:</b> {icone_movimento} <span style='color:#00f2fe;'>{tipo_movimento}</span><br>"
             f"<b>TIMEFRAME:</b> M{tf} | <b>ENTRADA:</b> {str_entrada} | <b>EXPIRAÇÃO:</b> {str_saida}"
             f"</div>"
@@ -1953,6 +2685,7 @@ def confirmar_alerta_agendado(user_email, alert_id):
             "sinal": sinal,
             "estrategia_fmt": est_fmt,
             "probabilidade": prob,
+            "contexto_timeframe_superior": alerta.get("contexto_timeframe_superior", "N/D"),
             "tf": tf,
             "str_entrada": str_entrada,
             "str_saida": str_saida,
@@ -1977,7 +2710,7 @@ def confirmar_alerta_agendado(user_email, alert_id):
             f"↕️ <b>DIREÇÃO DE ENTRADA:</b> {sinal}\n"
             f"⏱ <b>Timeframe:</b> M{tf}\n"
             f"🧠 <b>Estratégia:</b> {est_fmt}\n"
-            f"🔥 <b>Probabilidade Estimada:</b> {prob}%\n"
+            f"🔥 <b>Score Técnico:</b> {prob}%\n"
             f"🕐 <b>Entrada:</b> {str_entrada}\n"
             f"⌛ <b>Expiração:</b> {str_saida}\n\n"
             f"💡 <i>Gerencie seu capital com responsabilidade.</i>"
@@ -1990,7 +2723,14 @@ def confirmar_alerta_agendado(user_email, alert_id):
             try:
                 registrar_sinal_bd(
                     _user,
-                    f"{_ativo} | {_sinal} | {_est_fmt} | M{_tf}"
+                    f"{_ativo} | {_sinal} | {_est_fmt} | M{_tf}",
+                    ativo=_ativo,
+                    direcao=_sinal,
+                    timeframe=_tf,
+                    estrategia=_est_fmt,
+                    score=int(prob),
+                    mercado=st.get("tipo_mercado", "TODOS"),
+                    contexto_timeframe=(st.get("sinal_confirmado_dados") or {}).get("contexto_timeframe_superior", "N/D")
                 )
             except Exception as e:
                 print(f"⚠️ Erro ao registrar sinal confirmado: {e}")
@@ -2080,7 +2820,20 @@ def bot_loop():
                     else:
                         ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
 
-                    ativos_scan = ativos.copy()
+                    # OTC não é incluído no motor até existir uma fonte de preço OTC
+                    # verificável. O sistema nunca substitui OTC pelo preço do mercado aberto.
+                    ativos_reais = [a for a in ativos if "-OTC" not in a.upper()]
+                    if not ativos_reais:
+                        st["ativo_atual"] = "OTC SEM FONTE DE DADOS REAL"
+                        st["ultimo_sinal"] = (
+                            "<div class='system-console' style='color:#f59e0b;'>"
+                            "⚠️ <b>ANÁLISE OTC PAUSADA</b><br>"
+                            "Não existe fonte OTC verificável configurada. Nenhum sinal será gerado com dados substitutos."
+                            "</div>"
+                        )
+                        continue
+
+                    ativos_scan = ativos_reais.copy()
                     random.shuffle(ativos_scan)
 
                     for ativo in ativos_scan:
@@ -2101,7 +2854,7 @@ def bot_loop():
                         if cache_key in ohlc_cache:
                             data = ohlc_cache[cache_key]["data"]
                         else:
-                            data = get_data_v2(ticker, tf, velas_minimas=30)
+                            data = get_data_v2(ticker, tf, velas_minimas=100)
                             if data:
                                 ohlc_cache[cache_key] = {"data": data, "time": time.time()}
 
@@ -2173,7 +2926,14 @@ def bot_loop():
 
                         confluencia_real = (confluencia_encontrada >= 2 or price_action_qualificado)
 
-                        if sinal_encontrado and confluencia_real and not bloquear_novos_alertas:
+                        contexto_ok = False
+                        contexto_direcao = "SEM_CONTEXTO"
+                        if sinal_encontrado and confluencia_real:
+                            contexto_ok, contexto_direcao = validar_contexto_multitimeframe(
+                                ticker, tf, sinal_encontrado, ohlc_cache
+                            )
+
+                        if sinal_encontrado and confluencia_real and contexto_ok and not bloquear_novos_alertas:
                             agora = agora_brasilia()
                             
                             min_pass = agora.minute % tf
@@ -2244,7 +3004,7 @@ def bot_loop():
 
                                     msg_pre_alerta = (
                                         f"⚡ <b>ALERTA ATUALIZADO — {motivo_alerta}</b> ⚡\n\n"
-                                        f"<b>Ativo:</b> {ativo} ({maior_prob}% de Assertividade)\n"
+                                        f"<b>Ativo:</b> {ativo} ({maior_prob} pontos de score)\n"
                                         f"<b>Timeframe:</b> M{tf}\n"
                                         f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
                                         f"<b>Estratégia principal:</b> {nome_est_formatado}\n"
@@ -2263,6 +3023,7 @@ def bot_loop():
                                         "confluencia": confluencia_encontrada,
                                         "forca_estrategia": forca_encontrada,
                                         "estrategias_confluentes": estrategias_confluentes,
+                                        "contexto_timeframe_superior": contexto_direcao,
                                         "msg_id": None,
                                         "str_entrada": str_entrada,
                                         "str_saida": str_saida,
@@ -2318,7 +3079,7 @@ def bot_loop():
                                     f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
                                     f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
                                     f"<b>Tipo de movimento:</b> {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[1]} {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[0]}\n"
-                                    f"<b>Assertividade Estimada:</b> {maior_prob}%\n"
+                                    f"<b>Score Técnico:</b> {maior_prob}%\n"
                                     f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
                                     f"👉 <i>Abra o ativo na corretora e prepare-se!</i>"
                                 )
@@ -2331,6 +3092,7 @@ def bot_loop():
                                     "estrategia": est_nome_encontrada,
                                     "estrategia_fmt": nome_est_formatado,
                                     "probabilidade": maior_prob,
+                                    "contexto_timeframe_superior": contexto_direcao,
                                     "msg_id": None,
                                     "str_entrada": str_entrada,
                                     "str_saida": str_saida,
