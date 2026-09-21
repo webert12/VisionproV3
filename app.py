@@ -381,6 +381,173 @@ HTML_ADM = """
 </html>
 """
 
+HTML_ESTATISTICAS = """
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESTATÍSTICAS — VISION PRO V3</title>
+    <style>
+        body { background:#060913; color:#e2e8f0; font-family:'Segoe UI',Tahoma,sans-serif; margin:0; padding:14px; }
+        .wrap { max-width:1200px; margin:auto; }
+        .top { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+        h1 { color:#00f2fe; font-size:22px; margin:0; }
+        .sub { color:#94a3b8; font-size:12px; margin-top:4px; }
+        .btn { display:inline-block; padding:10px 13px; border-radius:8px; text-decoration:none; font-weight:700; font-size:11px; border:1px solid #334155; color:#e2e8f0; background:#0f172a; }
+        .btn:hover { border-color:#00f2fe; color:#00f2fe; }
+        .filters, .card { background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:14px; margin-bottom:12px; }
+        .filters-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+        label { display:block; color:#94a3b8; font-size:10px; font-weight:700; margin-bottom:5px; text-transform:uppercase; }
+        select, input { width:100%; box-sizing:border-box; background:#060913; color:#e2e8f0; border:1px solid #334155; border-radius:7px; padding:9px; }
+        .filter-actions { margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; }
+        .primary { background:rgba(0,242,254,.12); border-color:#00f2fe; color:#00f2fe; }
+        .grid-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:12px; }
+        .metric { background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:14px; }
+        .metric .label { color:#94a3b8; font-size:10px; font-weight:700; }
+        .metric .value { font-size:23px; font-weight:800; margin-top:4px; }
+        .green { color:#10b981; } .red { color:#ef4444; } .cyan { color:#00f2fe; } .yellow { color:#f59e0b; }
+        .section-title { color:#00f2fe; font-size:13px; font-weight:800; margin-bottom:10px; text-transform:uppercase; }
+        .table-wrap { overflow-x:auto; }
+        table { width:100%; border-collapse:collapse; min-width:600px; font-size:11px; }
+        th,td { padding:8px 7px; border-bottom:1px solid #1e293b; text-align:left; white-space:nowrap; }
+        th { color:#94a3b8; font-size:9px; text-transform:uppercase; }
+        td strong { color:#e2e8f0; }
+        .note { color:#64748b; font-size:10px; line-height:1.5; margin-top:9px; }
+        .backtest-box { border-color:rgba(0,242,254,.35); }
+        .empty { color:#64748b; padding:12px 0; font-size:12px; }
+        @media(max-width:600px){ body{padding:9px;} h1{font-size:19px;} .metric .value{font-size:20px;} }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="top">
+        <div>
+            <h1>📊 ESTATÍSTICAS DO VISION PRO V3</h1>
+            <div class="sub">Resultados observados registrados pelo sistema. Não são garantias de desempenho futuro.</div>
+        </div>
+        <div>
+            <a class="btn" href="/admin_panel">⬅ ADMIN</a>
+            <a class="btn" href="/">PAINEL</a>
+        </div>
+    </div>
+
+    <form class="filters" method="GET" action="/admin/estatisticas">
+        <div class="section-title">🔎 FILTROS DA AMOSTRA</div>
+        <div class="filters-grid">
+            <div>
+                <label>Ativo</label>
+                <select name="ativo">
+                    <option value="">Todos</option>
+                    {% for a in ativos %}<option value="{{ a }}" {% if filtros.ativo == a %}selected{% endif %}>{{ a }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>Timeframe</label>
+                <select name="tf">
+                    <option value="">Todos</option>
+                    {% for tf in [1,5,15] %}<option value="{{ tf }}" {% if filtros.tf == tf|string %}selected{% endif %}>M{{ tf }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>Estratégia</label>
+                <select name="estrategia">
+                    <option value="">Todas</option>
+                    {% for key, nome in estrategias.items() %}
+                    <option value="{{ key }}" {% if filtros.estrategia == key %}selected{% endif %}>{{ nome }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>Contexto superior</label>
+                <select name="contexto">
+                    <option value="">Todos</option>
+                    <option value="CALL" {% if filtros.contexto == 'CALL' %}selected{% endif %}>CALL</option>
+                    <option value="PUT" {% if filtros.contexto == 'PUT' %}selected{% endif %}>PUT</option>
+                    <option value="NEUTRO" {% if filtros.contexto == 'NEUTRO' %}selected{% endif %}>NEUTRO</option>
+                </select>
+            </div>
+            <div><label>Score mínimo</label><input type="number" name="score_min" min="0" max="100" value="{{ filtros.score_min }}" placeholder="0"></div>
+            <div><label>Score máximo</label><input type="number" name="score_max" min="0" max="100" value="{{ filtros.score_max }}" placeholder="100"></div>
+        </div>
+        <div class="filter-actions">
+            <button class="btn primary" type="submit">APLICAR FILTROS</button>
+            <a class="btn" href="/admin/estatisticas">LIMPAR</a>
+        </div>
+    </form>
+
+    <div class="grid-summary">
+        <div class="metric"><div class="label">Sinais com resultado</div><div class="value cyan">{{ stats.resumo.total }}</div></div>
+        <div class="metric"><div class="label">WIN + WIN G1</div><div class="value green">{{ stats.resumo.wins }}</div></div>
+        <div class="metric"><div class="label">RED</div><div class="value red">{{ stats.resumo.losses }}</div></div>
+        <div class="metric"><div class="label">Assertividade observada</div><div class="value yellow">{{ '%.2f'|format(stats.resumo.winrate) }}%</div></div>
+        <div class="metric"><div class="label">Score médio</div><div class="value cyan">{{ '%.2f'|format(stats.resumo.score_medio) }}</div></div>
+    </div>
+
+    {% if stats.erro %}<div class="card" style="border-color:#ef4444;color:#ef4444;">Erro ao consultar estatísticas: {{ stats.erro }}</div>{% endif %}
+
+    {% macro tabela(titulo, rows, combo=false) %}
+    <div class="card">
+        <div class="section-title">{{ titulo }}</div>
+        {% if rows %}
+        <div class="table-wrap"><table>
+            <thead><tr>
+                {% if combo %}<th>Ativo</th><th>TF</th><th>Estratégia</th><th>Contexto</th>{% else %}<th>Grupo</th>{% endif %}
+                <th>Sinais</th><th>WIN</th><th>RED</th><th>Assertividade</th><th>Score médio</th>
+            </tr></thead>
+            <tbody>
+            {% for r in rows %}<tr>
+                {% if combo %}
+                    <td><strong>{{ r.ativo }}</strong></td><td>M{{ r.timeframe }}</td><td>{{ estrategias.get(r.estrategia, r.estrategia) }}</td><td>{{ r.contexto }}</td>
+                {% else %}<td><strong>{% if titulo == '⏰ PERFORMANCE POR HORÁRIO' %}{{ '%02d'|format(r.grupo|int) }}:00{% elif titulo == '⏱ PERFORMANCE POR TIMEFRAME' %}M{{ r.grupo }}{% else %}{{ estrategias.get(r.grupo, r.grupo) }}{% endif %}</strong></td>{% endif %}
+                <td>{{ r.total }}</td><td class="green">{{ r.wins }}</td><td class="red">{{ r.losses }}</td><td>{{ '%.2f'|format(r.winrate) }}%</td><td>{{ '%.2f'|format(r.score_medio) }}</td>
+            </tr>{% endfor %}
+            </tbody>
+        </table></div>
+        {% else %}<div class="empty">Ainda não existem resultados suficientes para este recorte.</div>{% endif %}
+    </div>
+    {% endmacro %}
+
+    {{ tabela('📌 PERFORMANCE POR ATIVO', stats.por_ativo) }}
+    {{ tabela('⏱ PERFORMANCE POR TIMEFRAME', stats.por_timeframe) }}
+    {{ tabela('🧠 PERFORMANCE POR ESTRATÉGIA', stats.por_estrategia) }}
+    {{ tabela('⏰ PERFORMANCE POR HORÁRIO', stats.por_horario) }}
+    {{ tabela('🎯 PERFORMANCE POR FAIXA DE SCORE', stats.por_score) }}
+    {{ tabela('🧭 PERFORMANCE POR CONTEXTO', stats.por_contexto) }}
+    {{ tabela('🔬 COMBINAÇÕES ATIVO + TF + ESTRATÉGIA + CONTEXTO', stats.por_combinacao, true) }}
+
+    <div class="card backtest-box">
+        <div class="section-title">🧪 BACKTEST HISTÓRICO DE DADOS REAIS</div>
+        <form method="GET" action="/admin/estatisticas">
+            <input type="hidden" name="ativo" value="{{ filtros.ativo }}">
+            <input type="hidden" name="tf" value="{{ filtros.tf }}">
+            <input type="hidden" name="estrategia" value="{{ filtros.estrategia }}">
+            <input type="hidden" name="contexto" value="{{ filtros.contexto }}">
+            <input type="hidden" name="score_min" value="{{ filtros.score_min }}">
+            <input type="hidden" name="score_max" value="{{ filtros.score_max }}">
+            <div class="filters-grid">
+                <div><label>Ativo para backtest</label><select name="bt_ativo">{% for a in ativos %}<option value="{{ a }}" {% if backtest_filtros.ativo == a %}selected{% endif %}>{{ a }}</option>{% endfor %}</select></div>
+                <div><label>Timeframe</label><select name="bt_tf">{% for tf in [1,5,15] %}<option value="{{ tf }}" {% if backtest_filtros.tf == tf %}selected{% endif %}>M{{ tf }}</option>{% endfor %}</select></div>
+                <div><label>Estratégia</label><select name="bt_estrategia">{% for key, nome in estrategias.items() %}<option value="{{ key }}" {% if backtest_filtros.estrategia == key %}selected{% endif %}>{{ nome }}</option>{% endfor %}</select></div>
+            </div>
+            <div class="filter-actions"><button class="btn primary" type="submit" name="executar_backtest" value="1">EXECUTAR BACKTEST</button></div>
+        </form>
+        {% if backtest %}
+            {% if backtest.ok %}
+            <div class="grid-summary" style="margin-top:12px;">
+                <div class="metric"><div class="label">Sinais no backtest</div><div class="value cyan">{{ backtest.resultado.total }}</div></div>
+                <div class="metric"><div class="label">WIN</div><div class="value green">{{ backtest.resultado.wins }}</div></div>
+                <div class="metric"><div class="label">LOSS</div><div class="value red">{{ backtest.resultado.losses }}</div></div>
+                <div class="metric"><div class="label">Taxa observada</div><div class="value yellow">{{ '%.2f'|format(backtest.resultado.winrate) }}%</div></div>
+            </div>
+            {% else %}<div class="empty">{{ backtest.error }}</div>{% endif %}
+        {% endif %}
+        <div class="note">O backtest compara o preço de fechamento da entrada com o fechamento após a quantidade de velas de expiração configurada. Ele é uma ferramenta de validação histórica e não representa garantia de desempenho futuro.</div>
+    </div>
+</div>
+</body>
+</html>
+"""
+
 HTML_TERMOS = """
 <!DOCTYPE html>
 <html>
@@ -683,6 +850,7 @@ HTML_INDEX = """
 
             {% if user == admin %}
             <button onclick="location.href='/admin_panel'" style="width:100%; margin-top:15px; padding:12px; background:rgba(0,242,254,0.1); border:1px solid #00f2fe; color:#00f2fe; font-weight:bold; border-radius:10px; cursor:pointer;">🛡️ ABRIR PAINEL ADMINISTRATIVO</button>
+            <button onclick="location.href='/admin/estatisticas'" style="width:100%; margin-top:8px; padding:12px; background:rgba(16,185,129,0.08); border:1px solid #10b981; color:#10b981; font-weight:bold; border-radius:10px; cursor:pointer;">📊 ABRIR ESTATÍSTICAS E BACKTEST</button>
             {% endif %}
 
             <button class="btn-toggle-hist" onclick="toggleHistorico()">👁️ EXIBIR HISTÓRICO PASSADO</button>
@@ -923,7 +1091,9 @@ def init_db():
                 estrategia VARCHAR(100),
                 score INT,
                 mercado VARCHAR(50),
-                contexto_timeframe VARCHAR(20)
+                contexto_timeframe VARCHAR(20),
+                criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                resultado_em TIMESTAMPTZ
             );
 
             ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS ativo VARCHAR(100);
@@ -933,6 +1103,8 @@ def init_db():
             ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS score INT;
             ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS mercado VARCHAR(50);
             ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS contexto_timeframe VARCHAR(20);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS resultado_em TIMESTAMPTZ;
 
             CREATE TABLE IF NOT EXISTS configuracoes_sistema (
                 chave VARCHAR(100) PRIMARY KEY,
@@ -1238,7 +1410,7 @@ def atualizar_ultimo_sinal_bd(email, resultado):
 
         if res:
             ultimo_id = res["id"]
-            cur.execute("UPDATE historico_sinais SET resultado = %s WHERE id = %s;", (resultado, ultimo_id))
+            cur.execute("UPDATE historico_sinais SET resultado = %s, resultado_em = CURRENT_TIMESTAMP WHERE id = %s;", (resultado, ultimo_id))
             conn.commit()
 
         cur.close()
@@ -1497,6 +1669,197 @@ def validar_contexto_multitimeframe(ticker, tf, sinal, cache):
         return True, "NEUTRO"
     return tendencia == sinal, tendencia
 
+# ================= ESTATÍSTICAS HISTÓRICAS =================
+def _estatisticas_agregadas(rows):
+    """Normaliza uma lista de agregações SQL e calcula a taxa observada."""
+    saida = []
+    for row in rows:
+        total = int(row.get("total") or 0)
+        wins = int(row.get("wins") or 0)
+        losses = int(row.get("losses") or 0)
+        winrate = round((wins / total) * 100, 2) if total else 0.0
+        item = dict(row)
+        item.update({"total": total, "wins": wins, "losses": losses, "winrate": winrate})
+        saida.append(item)
+    return saida
+
+
+def consultar_estatisticas_sinais(ativo=None, timeframe=None, estrategia=None, contexto=None, score_min=None, score_max=None):
+    """Consulta resultados reais registrados no PostgreSQL, sem misturar sinais ainda sem resultado."""
+    filtros = ["resultado IN ('Win', 'WinG1', 'Red')"]
+    params = []
+
+    if ativo:
+        filtros.append("ativo = %s")
+        params.append(ativo)
+    if timeframe:
+        filtros.append("timeframe = %s")
+        params.append(int(timeframe))
+    if estrategia:
+        filtros.append("estrategia = %s")
+        params.append(estrategia)
+    if contexto:
+        filtros.append("contexto_timeframe = %s")
+        params.append(contexto)
+    if score_min is not None:
+        filtros.append("score >= %s")
+        params.append(int(score_min))
+    if score_max is not None:
+        filtros.append("score <= %s")
+        params.append(int(score_max))
+
+    where = " AND ".join(filtros)
+
+    def executar(cur, sql, extra_params=None):
+        cur.execute(sql.format(where=where), tuple(params + (extra_params or [])))
+        return cur.fetchall()
+
+    resultado = {
+        "resumo": {"total": 0, "wins": 0, "losses": 0, "winrate": 0.0, "score_medio": 0.0},
+        "por_ativo": [],
+        "por_timeframe": [],
+        "por_estrategia": [],
+        "por_horario": [],
+        "por_score": [],
+        "por_contexto": [],
+        "por_combinacao": []
+    }
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        cur.execute(f"""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                COALESCE(AVG(score) FILTER (WHERE score IS NOT NULL), 0) AS score_medio
+            FROM historico_sinais
+            WHERE {where};
+        """, tuple(params))
+        resumo = cur.fetchone() or {}
+        total = int(resumo.get("total") or 0)
+        wins = int(resumo.get("wins") or 0)
+        losses = int(resumo.get("losses") or 0)
+        resultado["resumo"] = {
+            "total": total,
+            "wins": wins,
+            "losses": losses,
+            "winrate": round((wins / total) * 100, 2) if total else 0.0,
+            "score_medio": round(float(resumo.get("score_medio") or 0), 2)
+        }
+
+        resultado["por_ativo"] = _estatisticas_agregadas(executar(cur, """
+            SELECT COALESCE(ativo, 'N/D') AS grupo,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY COALESCE(ativo, 'N/D') ORDER BY total DESC, grupo ASC;
+        """))
+
+        resultado["por_timeframe"] = _estatisticas_agregadas(executar(cur, """
+            SELECT COALESCE(timeframe, 0) AS grupo,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY COALESCE(timeframe, 0) ORDER BY grupo ASC;
+        """))
+
+        resultado["por_estrategia"] = _estatisticas_agregadas(executar(cur, """
+            SELECT COALESCE(estrategia, 'N/D') AS grupo,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY COALESCE(estrategia, 'N/D') ORDER BY total DESC, grupo ASC;
+        """))
+
+        resultado["por_horario"] = _estatisticas_agregadas(executar(cur, """
+            SELECT EXTRACT(HOUR FROM (criado_em AT TIME ZONE 'America/Sao_Paulo'))::INT AS grupo,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY EXTRACT(HOUR FROM (criado_em AT TIME ZONE 'America/Sao_Paulo'))
+            ORDER BY grupo ASC;
+        """))
+
+        resultado["por_score"] = _estatisticas_agregadas(executar(cur, """
+            SELECT CASE
+                       WHEN score IS NULL THEN 'SEM SCORE'
+                       WHEN score < 60 THEN '0-59'
+                       WHEN score < 70 THEN '60-69'
+                       WHEN score < 80 THEN '70-79'
+                       WHEN score < 90 THEN '80-89'
+                       ELSE '90-100'
+                   END AS grupo,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY 1
+            ORDER BY MIN(score) NULLS LAST;
+        """))
+
+        resultado["por_contexto"] = _estatisticas_agregadas(executar(cur, """
+            SELECT COALESCE(contexto_timeframe, 'N/D') AS grupo,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY COALESCE(contexto_timeframe, 'N/D') ORDER BY total DESC, grupo ASC;
+        """))
+
+        resultado["por_combinacao"] = _estatisticas_agregadas(executar(cur, """
+            SELECT COALESCE(ativo, 'N/D') AS ativo,
+                   COALESCE(timeframe, 0) AS timeframe,
+                   COALESCE(estrategia, 'N/D') AS estrategia,
+                   COALESCE(contexto_timeframe, 'N/D') AS contexto,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1')) AS wins,
+                   COUNT(*) FILTER (WHERE resultado = 'Red') AS losses,
+                   COALESCE(AVG(score), 0) AS score_medio
+            FROM historico_sinais WHERE {where}
+            GROUP BY COALESCE(ativo, 'N/D'), COALESCE(timeframe, 0),
+                     COALESCE(estrategia, 'N/D'), COALESCE(contexto_timeframe, 'N/D')
+            ORDER BY total DESC, (COUNT(*) FILTER (WHERE resultado IN ('Win', 'WinG1'))::NUMERIC / NULLIF(COUNT(*), 0)) DESC NULLS LAST
+            LIMIT 100;
+        """))
+
+        for grupo in (resultado["por_ativo"], resultado["por_timeframe"], resultado["por_estrategia"], resultado["por_horario"], resultado["por_score"], resultado["por_contexto"], resultado["por_combinacao"]):
+            for item in grupo:
+                if "score_medio" in item:
+                    item["score_medio"] = round(float(item.get("score_medio") or 0), 2)
+
+        return resultado
+    except Exception as e:
+        print(f"⚠️ Erro ao consultar estatísticas históricas: {e}")
+        resultado["erro"] = str(e)
+        return resultado
+    finally:
+        try:
+            if cur:
+                cur.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+
 # ================= BACKTEST HISTÓRICO =================
 def backtest_estrategia(data, estrategia, tf, expiracao_velas=1):
     """Backtest sem olhar candles futuros no momento da decisão."""
@@ -1753,6 +2116,102 @@ def admin_panel():
     for u in list(USUARIOS_ONLINE.keys()):
         if now - USUARIOS_ONLINE[u] > 60: del USUARIOS_ONLINE[u]
     return render_template_string(HTML_ADM, lista=carregar_usuarios(), admin=ADMIN_EMAIL, online_count=len(USUARIOS_ONLINE), online_list=USUARIOS_ONLINE.keys())
+
+@app.route('/admin/estatisticas')
+def admin_estatisticas():
+    if session.get('user') != ADMIN_EMAIL:
+        return abort(403)
+
+    ativos = sorted(set(ATIVOS_BASE.get("FOREX_ABERTO", []) + ATIVOS_BASE.get("CRIPTO_ABERTO", [])))
+    estrategias = {k: NOME_ESTRATEGIAS_DISPLAY.get(k, k) for k in LISTA_ESTRATEGIAS}
+
+    ativo = request.args.get('ativo', '').strip().upper()
+    if ativo not in ativos:
+        ativo = ''
+
+    tf_raw = request.args.get('tf', '').strip()
+    tf = tf_raw if tf_raw in {'1', '5', '15'} else ''
+
+    estrategia = request.args.get('estrategia', '').strip().upper()
+    if estrategia not in LISTA_ESTRATEGIAS:
+        estrategia = ''
+
+    contexto = request.args.get('contexto', '').strip().upper()
+    if contexto not in {'CALL', 'PUT', 'NEUTRO'}:
+        contexto = ''
+
+    def inteiro_opcional(valor, minimo=0, maximo=100):
+        if valor is None or str(valor).strip() == '':
+            return None
+        try:
+            n = int(valor)
+            if n < minimo or n > maximo:
+                return None
+            return n
+        except (TypeError, ValueError):
+            return None
+
+    score_min = inteiro_opcional(request.args.get('score_min'), 0, 100)
+    score_max = inteiro_opcional(request.args.get('score_max'), 0, 100)
+    if score_min is not None and score_max is not None and score_min > score_max:
+        score_min, score_max = score_max, score_min
+
+    stats = consultar_estatisticas_sinais(
+        ativo=ativo or None,
+        timeframe=int(tf) if tf else None,
+        estrategia=estrategia or None,
+        contexto=contexto or None,
+        score_min=score_min,
+        score_max=score_max
+    )
+
+    backtest = None
+    bt_ativo = request.args.get('bt_ativo', 'EURUSD').strip().upper()
+    if bt_ativo not in ativos:
+        bt_ativo = 'EURUSD' if 'EURUSD' in ativos else ativos[0]
+    bt_tf_raw = request.args.get('bt_tf', '5').strip()
+    bt_tf = int(bt_tf_raw) if bt_tf_raw in {'1', '5', '15'} else 5
+    bt_estrategia = request.args.get('bt_estrategia', 'PRICE_ACTION').strip().upper()
+    if bt_estrategia not in LISTA_ESTRATEGIAS:
+        bt_estrategia = 'PRICE_ACTION'
+
+    if request.args.get('executar_backtest') == '1':
+        try:
+            ticker = MAPA_TICKERS.get(bt_ativo, bt_ativo)
+            data = get_data_v2(ticker, bt_tf, velas_minimas=100)
+            if data is None:
+                backtest = {
+                    'ok': False,
+                    'error': 'Não foi possível obter dados reais e fechados suficientes para este backtest.'
+                }
+            else:
+                resultado_bt = backtest_estrategia(data, bt_estrategia, bt_tf, expiracao_velas=1)
+                backtest = {'ok': True, 'resultado': resultado_bt}
+        except Exception as e:
+            print(f"⚠️ Erro no backtest do painel estatístico: {e}")
+            backtest = {'ok': False, 'error': 'O backtest não pôde ser concluído. Verifique os logs do Render.'}
+
+    return render_template_string(
+        HTML_ESTATISTICAS,
+        stats=stats,
+        ativos=ativos,
+        estrategias=estrategias,
+        filtros={
+            'ativo': ativo,
+            'tf': tf,
+            'estrategia': estrategia,
+            'contexto': contexto,
+            'score_min': '' if score_min is None else score_min,
+            'score_max': '' if score_max is None else score_max
+        },
+        backtest=backtest,
+        backtest_filtros={
+            'ativo': bt_ativo,
+            'tf': bt_tf,
+            'estrategia': bt_estrategia
+        }
+    )
+
 
 @app.route('/adm/renovar/<email>', methods=['POST'])
 def adm_renovar(email):
