@@ -30,6 +30,7 @@ CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "").strip()
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 FLASK_SECRET = os.getenv("FLASK_SECRET", "").strip()
+TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
 
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
 
@@ -1510,8 +1511,142 @@ def validar_ohlc(ohlc, velas_minimas=30, tf=5):
     except Exception:
         return None
 
+def _intervalo_binance(tf):
+    return {1: "1m", 5: "5m", 15: "15m"}.get(int(tf))
+
+
+def _simbolo_binance(ticker):
+    """Converte o ticker interno BTC-USD para o par spot equivalente BTCUSDT."""
+    base = str(ticker or "").upper().strip()
+    if not base.endswith("-USD"):
+        return None
+    ativo = base[:-4].replace("-", "")
+    if not ativo or not re.fullmatch(r"[A-Z0-9]+", ativo):
+        return None
+    return f"{ativo}USDT"
+
+
+def _buscar_binance(ticker, tf, velas_minimas):
+    """Busca candles públicos da Binance. Não exige API key para market data."""
+    intervalo = _intervalo_binance(tf)
+    simbolo = _simbolo_binance(ticker)
+    if not intervalo or not simbolo:
+        return None
+
+    url = "https://data-api.binance.vision/api/v3/klines"
+    try:
+        res = requests.get(
+            url,
+            params={"symbol": simbolo, "interval": intervalo, "limit": max(100, min(1000, velas_minimas + 20))},
+            headers={"User-Agent": "Vision-Trade-PRO-V3"},
+            timeout=7.0
+        )
+        if res.status_code != 200:
+            print(f"⚠️ Binance HTTP {res.status_code} para {simbolo} M{tf}.")
+            return None
+
+        payload = res.json()
+        if not isinstance(payload, list) or not payload:
+            return None
+
+        ohlc = {
+            "time": np.array([row[0] / 1000 for row in payload], dtype=float),
+            "open": np.array([row[1] for row in payload], dtype=float),
+            "high": np.array([row[2] for row in payload], dtype=float),
+            "low": np.array([row[3] for row in payload], dtype=float),
+            "close": np.array([row[4] for row in payload], dtype=float)
+        }
+        return validar_ohlc(ohlc, velas_minimas=velas_minimas, tf=tf)
+    except Exception as e:
+        print(f"⚠️ Binance indisponível para {simbolo} M{tf}: {e}")
+        return None
+
+
+def _simbolo_twelve_data(ticker):
+    """Converte EURUSD=X para EUR/USD, formato aceito pela Twelve Data."""
+    base = str(ticker or "").upper().strip()
+    if not base.endswith("=X"):
+        return None
+    par = base[:-2].replace("/", "")
+    if len(par) != 6 or not re.fullmatch(r"[A-Z]{6}", par):
+        return None
+    return f"{par[:3]}/{par[3:]}"
+
+
+def _buscar_twelve_data(ticker, tf, velas_minimas):
+    """Busca candles Forex reais pela Twelve Data usando a chave do Render."""
+    if not TWELVE_DATA_API_KEY:
+        return None
+
+    simbolo = _simbolo_twelve_data(ticker)
+    intervalo = {1: "1min", 5: "5min", 15: "15min"}.get(int(tf))
+    if not simbolo or not intervalo:
+        return None
+
+    url = "https://api.twelvedata.com/time_series"
+    try:
+        res = requests.get(
+            url,
+            params={
+                "symbol": simbolo,
+                "interval": intervalo,
+                "outputsize": max(100, min(5000, velas_minimas + 30)),
+                "apikey": TWELVE_DATA_API_KEY
+            },
+            headers={"User-Agent": "Vision-Trade-PRO-V3"},
+            timeout=7.0
+        )
+        if res.status_code != 200:
+            print(f"⚠️ Twelve Data HTTP {res.status_code} para {simbolo} M{tf}.")
+            return None
+
+        payload = res.json()
+        if not isinstance(payload, dict) or payload.get("status") == "error":
+            mensagem = payload.get("message", "resposta inválida") if isinstance(payload, dict) else "resposta inválida"
+            print(f"⚠️ Twelve Data recusou {simbolo} M{tf}: {mensagem}")
+            return None
+
+        valores = payload.get("values") or []
+        if not valores:
+            return None
+
+        # A Twelve Data normalmente retorna as séries mais recentes primeiro.
+        # Ordenamos pelo horário para entregar ao motor exatamente o mesmo
+        # formato cronológico usado pelas demais fontes.
+        registros = []
+        for item in valores:
+            try:
+                dt = datetime.strptime(str(item["datetime"]), "%Y-%m-%d %H:%M:%S")
+                dt = pytz.UTC.localize(dt)
+                registros.append((
+                    dt.timestamp(),
+                    float(item["open"]),
+                    float(item["high"]),
+                    float(item["low"]),
+                    float(item["close"])
+                ))
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        registros.sort(key=lambda x: x[0])
+        if not registros:
+            return None
+
+        ohlc = {
+            "time": np.array([x[0] for x in registros], dtype=float),
+            "open": np.array([x[1] for x in registros], dtype=float),
+            "high": np.array([x[2] for x in registros], dtype=float),
+            "low": np.array([x[3] for x in registros], dtype=float),
+            "close": np.array([x[4] for x in registros], dtype=float)
+        }
+        return validar_ohlc(ohlc, velas_minimas=velas_minimas, tf=tf)
+    except Exception as e:
+        print(f"⚠️ Twelve Data indisponível para {simbolo} M{tf}: {e}")
+        return None
+
+
 def get_data_v2(ticker, tf, velas_minimas=100):
-    """Busca somente OHLC verificável. Falha de fonte = sem análise/sinal."""
+    """Busca somente OHLC verificável, priorizando Binance para cripto e Twelve Data para Forex."""
     if not ticker or not tf:
         return None
 
@@ -1521,33 +1656,17 @@ def get_data_v2(ticker, tf, velas_minimas=100):
         return None
 
     try:
-        base_ticker = ticker
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
-            "Accept": "application/json, text/plain, */*"
-        }
-        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=10d"
-        res = requests.get(url, headers=headers, timeout=7.0)
-        if res.status_code == 200:
-            data_json = res.json()
-            result_list = data_json.get("chart", {}).get("result") or []
-            if result_list:
-                result = result_list[0]
-                timestamps = result.get("timestamp") or []
-                quote = (result.get("indicators", {}).get("quote") or [{}])[0]
-                ohlc = {
-                    "time": np.array(timestamps),
-                    "open": np.array(quote.get("open", []), dtype=float),
-                    "high": np.array(quote.get("high", []), dtype=float),
-                    "low": np.array(quote.get("low", []), dtype=float),
-                    "close": np.array(quote.get("close", []), dtype=float)
-                }
-                validado = validar_ohlc(ohlc, velas_minimas=velas_minimas, tf=tf)
-                if validado is not None:
-                    return validado
+        base_ticker = str(ticker).upper().strip()
 
-        # Fallback somente para cripto real; nunca para OTC e nunca sintético.
+        # ================= CRIPTO: BINANCE =================
+        # MAPA_TICKERS transforma BTCUSD em BTC-USD. A Binance fornece o
+        # mercado público equivalente BTCUSDT, sem necessidade de API key.
         if base_ticker.endswith("-USD"):
+            dados_binance = _buscar_binance(base_ticker, tf, velas_minimas)
+            if dados_binance is not None:
+                return dados_binance
+
+            # Fallback de cripto real, mantido apenas para disponibilidade da fonte.
             crypto_symbol = base_ticker[:-4].replace("-", "")
             url_alt = (
                 "https://min-api.cryptocompare.com/data/v2/histominute"
@@ -1568,6 +1687,43 @@ def get_data_v2(ticker, tf, velas_minimas=100):
                     validado = validar_ohlc(ohlc, velas_minimas=velas_minimas, tf=tf)
                     if validado is not None:
                         return validado
+
+            return None
+
+        # ================= FOREX: TWELVE DATA =================
+        # MAPA_TICKERS transforma EURUSD em EURUSD=X. A Twelve Data usa EUR/USD.
+        if base_ticker.endswith("=X"):
+            dados_twelve = _buscar_twelve_data(base_ticker, tf, velas_minimas)
+            if dados_twelve is not None:
+                return dados_twelve
+
+            # Se a chave Twelve Data não estiver configurada ou a fonte estiver
+            # indisponível, preserva o fallback público anterior do Yahoo Finance.
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+                "Accept": "application/json, text/plain, */*"
+            }
+            url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=10d"
+            res = requests.get(url, headers=headers, timeout=7.0)
+            if res.status_code == 200:
+                data_json = res.json()
+                result_list = data_json.get("chart", {}).get("result") or []
+                if result_list:
+                    result = result_list[0]
+                    timestamps = result.get("timestamp") or []
+                    quote = (result.get("indicators", {}).get("quote") or [{}])[0]
+                    ohlc = {
+                        "time": np.array(timestamps),
+                        "open": np.array(quote.get("open", []), dtype=float),
+                        "high": np.array(quote.get("high", []), dtype=float),
+                        "low": np.array(quote.get("low", []), dtype=float),
+                        "close": np.array(quote.get("close", []), dtype=float)
+                    }
+                    validado = validar_ohlc(ohlc, velas_minimas=velas_minimas, tf=tf)
+                    if validado is not None:
+                        return validado
+
+            return None
 
         return None
     except Exception as e:
