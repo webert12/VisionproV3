@@ -8,6 +8,7 @@ import sys
 import random
 import os
 import logging
+import hmac
 import numpy as np
 import re
 from datetime import datetime, timedelta
@@ -23,11 +24,19 @@ def agora_brasilia():
     return datetime.now(FUSO_SP)
 
 # ================= CONFIGURAÇÕES DE AMBIENTE E BOT TELEGRAM =================
-TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "8710725826:AAFuGmF30Ns-G1glrBYir9ggVya9VwQgZAU").strip()
-CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
+# NENHUMA credencial real fica armazenada no código-fonte.
+TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "").strip()
+CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "").strip()
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+FLASK_SECRET = os.getenv("FLASK_SECRET", "").strip()
 
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
+
+if not FLASK_SECRET:
+    raise RuntimeError("FLASK_SECRET não configurada. Defina uma chave aleatória forte nas variáveis de ambiente.")
+if not ADMIN_EMAIL:
+    raise RuntimeError("ADMIN_EMAIL não configurado. Defina o e-mail do administrador nas variáveis de ambiente.")
 
 def get_db_connection():
     if not DB_URL:
@@ -57,7 +66,6 @@ def get_user_state(email):
             "sinais_enviados": {},
             "alerta_ativo": None,  # Guarda informações do alerta ativo no ciclo
             "timer_confirmacao": None,  # Timer independente para não depender da varredura
-            "sinal_confirmado_dados": None,
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
             "sinal_confirmado_dados": None,
@@ -70,9 +78,13 @@ def get_user_state(email):
     return DADOS_USUARIOS[email_clean]
 
 def get_client_ip():
-    if request.headers.get('X-Forwarded-For'):
-        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
-    return request.remote_addr
+    # Em produção, o proxy confiável pode fornecer X-Forwarded-For.
+    # Não aceitamos esse cabeçalho cegamente de clientes externos.
+    if os.getenv("TRUST_PROXY", "true").lower() == "true":
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.remote_addr or "unknown"
 
 # ================= ENVIO E DELEÇÃO TELEGRAM =================
 def _telegram_request(method, payload=None, timeout=12):
@@ -215,11 +227,81 @@ def deletar_mensagem_atrasada(msg_id, delay):
     deletar_mensagem_telegram(msg_id)
 
 # ================= SERVIDOR FLASK =================
-APP_SECRET = os.getenv("FLASK_SECRET", "chave_secreta_vision_pro_ultra_premium_v3_security")
 app = Flask(__name__)
-app.secret_key = APP_SECRET
+app.secret_key = FLASK_SECRET
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "true").lower() == "true",
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
+
+# ================= SEGURANÇA HTTP / CSRF =================
+def get_csrf_token():
+    token = session.get("csrf_token")
+    if not token:
+        token = os.urandom(32).hex()
+        session["csrf_token"] = token
+    return token
+
+@app.template_global("csrf_token")
+def csrf_token_template():
+    return get_csrf_token()
+
+@app.before_request
+def protect_state_changing_requests():
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        token = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
+        expected = session.get("csrf_token")
+        if not expected or not token or not hmac.compare_digest(str(token), str(expected)):
+            return jsonify({"ok": False, "error": "CSRF inválido ou sessão expirada."}), 403
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'self'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+    return response
+
+LOGIN_ATTEMPTS = {}
+LOGIN_LOCK = threading.Lock()
+
+def login_bloqueado(chave):
+    agora = time.time()
+    with LOGIN_LOCK:
+        item = LOGIN_ATTEMPTS.get(chave)
+        if not item:
+            return False
+        if agora - item["inicio"] >= 600:
+            LOGIN_ATTEMPTS.pop(chave, None)
+            return False
+        return item["falhas"] >= 5
+
+def registrar_falha_login(chave):
+    agora = time.time()
+    with LOGIN_LOCK:
+        item = LOGIN_ATTEMPTS.get(chave)
+        if not item or agora - item["inicio"] >= 600:
+            LOGIN_ATTEMPTS[chave] = {"inicio": agora, "falhas": 1}
+        else:
+            item["falhas"] += 1
+
+def limpar_falhas_login(chave):
+    with LOGIN_LOCK:
+        LOGIN_ATTEMPTS.pop(chave, None)
 
 # ================= TEMPLATES HTML =================
 HTML_ADM = """
@@ -280,15 +362,16 @@ HTML_ADM = """
                 <span style="color:#f59e0b;">IPs Cadastrados (Máx 2): <b>{{ info.ips_Formatados }}</b></span>
             </div>
             <form action="/adm/editar" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="email_original" value="{{ email }}">
                 <b>E-mail:</b> <input type="text" name="novo_email" value="{{ email }}">
                 <b>Nova Senha (deixe em branco para manter):</b> <input type="password" name="nova_senha" placeholder="Alterar senha...">
                 <b>Expira em:</b> {{ info.criado_em }}<br><br>
                 <button type="submit" class="btn-adm blue">SALVAR ALTERAÇÕES</button>
-                <a href="/adm/renovar/{{ email }}" class="btn-adm green">RENOVAR +30 DIAS</a>
-                <a href="/adm/liberar_ip/{{ email }}" class="btn-adm orange">LIBERAR DISPOSITIVOS / IPS</a>
+                <button type="submit" formaction="/adm/renovar/{{ email }}" formmethod="POST" class="btn-adm green">RENOVAR +30 DIAS</button>
+                <button type="submit" formaction="/adm/liberar_ip/{{ email }}" formmethod="POST" class="btn-adm orange">LIBERAR DISPOSITIVOS / IPS</button>
                 {% if email != admin %}
-                <a href="/adm/excluir/{{ email }}" class="btn-adm red" onclick="return confirm('Excluir?')">EXCLUIR</a>
+                <button type="submit" formaction="/adm/excluir/{{ email }}" formmethod="POST" class="btn-adm red" onclick="return confirm('Excluir?')">EXCLUIR</button>
                 {% endif %}
             </form>
         </div>
@@ -345,6 +428,7 @@ HTML_LOGIN = """
         <h2>VISION PRO V3</h2>
         {% if erro %}<div style="color:#ef4444; margin-bottom:15px; font-size:13px; background:rgba(239,68,68,0.1); padding:10px; border-radius:8px; border:1px solid rgba(239,68,68,0.3);">{{erro}}</div>{% endif %}
         <form method="POST" action="/login">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="email" name="email" placeholder="Seu E-mail" required>
             <input type="password" name="password" placeholder="Sua Senha" required>
             <button type="submit">ACESSAR O TERMINAL</button>
@@ -379,6 +463,7 @@ HTML_REGISTER = """
         <h2>CRIAR CONTA NOVA</h2>
         {% if erro %}<div style="color:#ef4444; margin-bottom:15px; font-size:13px; background:rgba(239,68,68,0.1); padding:10px; border-radius:8px; border:1px solid rgba(239,68,68,0.3);">{{erro}}</div>{% endif %}
         <form method="POST" action="/register">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="email" name="email" placeholder="Novo E-mail" required>
             <input type="password" name="password" placeholder="Nova Senha" required>
             <button type="submit">CONCLUIR CADASTRO</button>
@@ -517,11 +602,6 @@ HTML_INDEX = """
             <div class="winrate-bar"><div id="wr-fill" class="winrate-fill"></div></div>
         </div>
 
-        <div id="broker-view-container">
-            <button class="btn-close-broker" onclick="closeBrokerView()">❌ FECHAR CORRETORA</button>
-            <iframe id="brokerIframe" class="broker-iframe-inline" src=""></iframe>
-        </div>
-
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
             MERCADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b><br>
             ATIVO EM ANÁLISE: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
@@ -533,10 +613,10 @@ HTML_INDEX = """
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
 
         <div id="result-area" class="result-grid" style="display:none;">
-            <button class="btn-res btn-res-win" onclick="fetch('/resultado/win')">WIN</button>
-            <button class="btn-res btn-res-g1" onclick="fetch('/resultado/g1')">G1</button>
-            <button class="btn-res btn-res-red" onclick="fetch('/resultado/red')">RED</button>
-            <button class="btn-res btn-res-skip" onclick="fetch('/resultado/pular')">PULAR</button>
+            <button class="btn-res btn-res-win" onclick="sendResult('win')">WIN</button>
+            <button class="btn-res btn-res-g1" onclick="sendResult('g1')">G1</button>
+            <button class="btn-res btn-res-red" onclick="sendResult('red')">RED</button>
+            <button class="btn-res btn-res-skip" onclick="sendResult('pular')">PULAR</button>
         </div>
 
         <div class="control-panel">
@@ -692,10 +772,6 @@ HTML_INDEX = """
             }
         }
 
-        function closeBrokerView() {
-            document.getElementById('broker-view-container').style.display = 'none';
-            document.getElementById('brokerIframe').src = '';
-        }
 
         function toggleHistorico() {
             const box = document.getElementById('box-historico');
@@ -707,9 +783,15 @@ HTML_INDEX = """
         }
 
         function sendCommand(cmd) {
-            fetch('/command/' + cmd).then(r => r.json()).then(data => {
+            fetch('/command/' + cmd, { method: 'POST', headers: {'X-CSRF-Token': '{{ csrf_token() }}'} }).then(r => r.json()).then(data => {
                 if(data.redirect) window.location.href = data.redirect;
             });
+        }
+
+        function sendResult(resultado) {
+            fetch('/resultado/' + resultado, { method: 'POST', headers: {'X-CSRF-Token': '{{ csrf_token() }}'} })
+                .then(r => r.json())
+                .catch(() => {});
         }
 
         let timeframeCronometro = 5;
@@ -834,8 +916,23 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 user_email VARCHAR(255) NOT NULL,
                 sinal VARCHAR(255) NOT NULL,
-                resultado VARCHAR(50) NOT NULL
+                resultado VARCHAR(50) NOT NULL,
+                ativo VARCHAR(100),
+                direcao VARCHAR(10),
+                timeframe INT,
+                estrategia VARCHAR(100),
+                score INT,
+                mercado VARCHAR(50),
+                contexto_timeframe VARCHAR(20)
             );
+
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS ativo VARCHAR(100);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS direcao VARCHAR(10);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS timeframe INT;
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS estrategia VARCHAR(100);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS score INT;
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS mercado VARCHAR(50);
+            ALTER TABLE historico_sinais ADD COLUMN IF NOT EXISTS contexto_timeframe VARCHAR(20);
 
             CREATE TABLE IF NOT EXISTS configuracoes_sistema (
                 chave VARCHAR(100) PRIMARY KEY,
@@ -852,6 +949,28 @@ try:
     init_db()
 except Exception:
     pass
+
+def garantir_admin_configurado():
+    """Cria/atualiza o ADM somente quando ADMIN_PASSWORD foi explicitamente configurada no ambiente."""
+    if not ADMIN_PASSWORD:
+        return
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        senha_hash = generate_password_hash(ADMIN_PASSWORD)
+        hoje = agora_brasilia().strftime("%Y-%m-%d")
+        cur.execute("""
+            INSERT INTO usuarios (email, senha, criado_em, wins, reds, winrate, ips_autorizados)
+            VALUES (%s, %s, %s, 0, 0, 0.0, '[]')
+            ON CONFLICT (email) DO UPDATE SET senha = EXCLUDED.senha;
+        """, (ADMIN_EMAIL, senha_hash, hoje))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Aviso: não foi possível garantir a conta ADM: {e}")
+
+garantir_admin_configurado()
 
 def telegram_envio_ativo():
     """Retorna se o envio automático ao Telegram está habilitado pelo ADM."""
@@ -1073,19 +1192,20 @@ def verificar_assinatura(email):
     except Exception:
         return True, 30
 
-def registrar_sinal_bd(email, sinal_str):
+def registrar_sinal_bd(email, sinal_str, ativo=None, direcao=None, timeframe=None, estrategia=None, score=None, mercado=None, contexto_timeframe=None):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO historico_sinais (user_email, sinal, resultado)
-            VALUES (%s, %s, %s);
-        """, (email.strip().lower(), sinal_str, "Analisando..."))
+            INSERT INTO historico_sinais
+            (user_email, sinal, resultado, ativo, direcao, timeframe, estrategia, score, mercado, contexto_timeframe)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+        """, (email.strip().lower(), sinal_str, "Analisando...", ativo, direcao, timeframe, estrategia, score, mercado, contexto_timeframe))
         conn.commit()
         cur.close()
         conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"⚠️ Erro ao registrar sinal: {e}")
 
 def buscar_historico_bd(email):
     try:
@@ -1181,76 +1301,105 @@ for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X
 for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
-def get_data_v2(ticker, tf, velas_minimas=30):
+def validar_ohlc(ohlc, velas_minimas=30, tf=5):
+    """Valida integridade e atualidade das velas antes de entregá-las ao motor."""
+    try:
+        required = ("time", "open", "high", "low", "close")
+        if any(k not in ohlc for k in required):
+            return None
+        arrays = {k: np.asarray(ohlc[k], dtype=float) for k in required}
+        n = len(arrays["close"])
+        if n < velas_minimas:
+            return None
+        if any(len(arrays[k]) != n for k in required):
+            return None
+        if any(not np.all(np.isfinite(arrays[k])) for k in required):
+            return None
+        if not np.all(np.diff(arrays["time"]) > 0):
+            return None
+        if np.any(arrays["high"] < np.maximum(arrays["open"], arrays["close"])):
+            return None
+        if np.any(arrays["low"] > np.minimum(arrays["open"], arrays["close"])):
+            return None
+
+        # Não analisa a vela ainda em formação: evita repaint e sinais baseados
+        # em uma cotação que ainda pode mudar até o fechamento.
+        agora_ts = int(time.time())
+        limite = tf * 60
+        timestamps = arrays["time"].astype(np.int64)
+        fechado = (timestamps + limite) <= agora_ts
+        if not np.any(fechado):
+            return None
+        ultimo_fechado = int(np.where(fechado)[0][-1])
+        arrays = {k: arrays[k][:ultimo_fechado + 1] for k in required}
+        if len(arrays["close"]) < velas_minimas:
+            return None
+        return arrays
+    except Exception:
+        return None
+
+def get_data_v2(ticker, tf, velas_minimas=100):
+    """Busca somente OHLC verificável. Falha de fonte = sem análise/sinal."""
+    if not ticker or not tf:
+        return None
+
+    # OTC não é mascarado como mercado aberto. Sem uma fonte OTC real, o bot
+    # deliberadamente não gera sinal para evitar analisar o ativo errado.
+    if "-OTC" in str(ticker).upper():
+        return None
+
     try:
         base_ticker = ticker
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*'
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+            "Accept": "application/json, text/plain, */*"
         }
-        
-        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d"
-        res = requests.get(url, headers=headers, timeout=5.0)
-        
-        if res.status_code == 200 and 'chart' in res.json():
+        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=10d"
+        res = requests.get(url, headers=headers, timeout=7.0)
+        if res.status_code == 200:
             data_json = res.json()
-            result = data_json['chart']['result'][0]
-            timestamps = result['timestamp']
-            quote = result['indicators']['quote'][0]
-            
-            ohlc = {
-                "time": np.array(timestamps),
-                "open": np.array(quote['open'], dtype=float),
-                "high": np.array(quote['high'], dtype=float),
-                "low": np.array(quote['low'], dtype=float),
-                "close": np.array(quote['close'], dtype=float)
-            }
-            
-            idx = ~np.isnan(ohlc["close"])
-            for k in ohlc: 
-                ohlc[k] = ohlc[k][idx]
-                
-            if len(ohlc["close"]) >= velas_minimas:
-                return ohlc
+            result_list = data_json.get("chart", {}).get("result") or []
+            if result_list:
+                result = result_list[0]
+                timestamps = result.get("timestamp") or []
+                quote = (result.get("indicators", {}).get("quote") or [{}])[0]
+                ohlc = {
+                    "time": np.array(timestamps),
+                    "open": np.array(quote.get("open", []), dtype=float),
+                    "high": np.array(quote.get("high", []), dtype=float),
+                    "low": np.array(quote.get("low", []), dtype=float),
+                    "close": np.array(quote.get("close", []), dtype=float)
+                }
+                validado = validar_ohlc(ohlc, velas_minimas=velas_minimas, tf=tf)
+                if validado is not None:
+                    return validado
 
-        if "-USD" in base_ticker or "USD" in ticker:
-            crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
-            url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=100&aggregate={tf}"
-            r_alt = requests.get(url_alt, timeout=5.0).json()
-            
-            if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
-                data_list = r_alt['Data']['Data']
-                closes = np.array([x['close'] for x in data_list], dtype=float)
-                opens = np.array([x['open'] for x in data_list], dtype=float)
-                highs = np.array([x['high'] for x in data_list], dtype=float)
-                lows = np.array([x['low'] for x in data_list], dtype=float)
-                times = np.array([x['time'] for x in data_list])
-                
-                if len(closes) >= velas_minimas:
-                    return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
-        
-        base_val = 1.0850 if "EUR" in ticker else (65000.0 if "BTC" in ticker else 150.0)
-        times = np.array([int(time.time()) - (i * tf * 60) for i in range(velas_minimas, 0, -1)])
-        closes, opens, highs, lows = [], [], [], []
-        c = base_val
-        for _ in range(velas_minimas):
-            o = c + random.uniform(-0.0005, 0.0005)
-            c = o + random.uniform(-0.0008, 0.0008)
-            h = max(o, c) + random.uniform(0.0001, 0.0004)
-            l = min(o, c) - random.uniform(0.0001, 0.0004)
-            opens.append(o)
-            closes.append(c)
-            highs.append(h)
-            lows.append(l)
+        # Fallback somente para cripto real; nunca para OTC e nunca sintético.
+        if base_ticker.endswith("-USD"):
+            crypto_symbol = base_ticker[:-4].replace("-", "")
+            url_alt = (
+                "https://min-api.cryptocompare.com/data/v2/histominute"
+                f"?fsym={crypto_symbol}&tsym=USD&limit=1000&aggregate={tf}"
+            )
+            r_alt = requests.get(url_alt, timeout=7.0)
+            if r_alt.status_code == 200:
+                payload = r_alt.json()
+                data_list = payload.get("Data", {}).get("Data", [])
+                if data_list:
+                    ohlc = {
+                        "time": np.array([x.get("time", 0) for x in data_list]),
+                        "open": np.array([x.get("open", np.nan) for x in data_list], dtype=float),
+                        "high": np.array([x.get("high", np.nan) for x in data_list], dtype=float),
+                        "low": np.array([x.get("low", np.nan) for x in data_list], dtype=float),
+                        "close": np.array([x.get("close", np.nan) for x in data_list], dtype=float)
+                    }
+                    validado = validar_ohlc(ohlc, velas_minimas=velas_minimas, tf=tf)
+                    if validado is not None:
+                        return validado
 
-        return {
-            "time": times,
-            "open": np.array(opens, dtype=float),
-            "high": np.array(highs, dtype=float),
-            "low": np.array(lows, dtype=float),
-            "close": np.array(closes, dtype=float)
-        }
-    except Exception:
+        return None
+    except Exception as e:
+        print(f"⚠️ Fonte de mercado indisponível para {ticker} M{tf}: {e}")
         return None
 
 def calcular_ema(dados, periodo):
@@ -1311,7 +1460,66 @@ def analisar_price_action(data, i=-1):
     return None, 0, max(call_conf, put_conf)
 
 
-# ================= MOTOR DE ESTRATÉGIAS COM SCORE DE PROBABILIDADE =================
+# ================= CONTEXTO MULTI-TIMEFRAME =================
+def timeframe_contexto(tf):
+    return {1: 5, 5: 15, 15: 30}.get(int(tf), 30)
+
+def obter_contexto_tendencia(data):
+    try:
+        c = np.asarray(data["close"], dtype=float)
+        if len(c) < 60:
+            return "NEUTRO"
+        ema20 = calcular_ema(c, 20)
+        ema50 = calcular_ema(c, 50)
+        ultimo = c[-1]
+        inclinacao = ema20[-1] - ema20[-5]
+        if ultimo > ema20[-1] > ema50[-1] and inclinacao > 0:
+            return "CALL"
+        if ultimo < ema20[-1] < ema50[-1] and inclinacao < 0:
+            return "PUT"
+        return "NEUTRO"
+    except Exception:
+        return "NEUTRO"
+
+def validar_contexto_multitimeframe(ticker, tf, sinal, cache):
+    """Exige alinhamento do timeframe superior quando o contexto é claro."""
+    superior = timeframe_contexto(tf)
+    chave = f"{ticker}_{superior}"
+    if chave in cache:
+        data_sup = cache[chave].get("data")
+    else:
+        data_sup = get_data_v2(ticker, superior, velas_minimas=100)
+        cache[chave] = {"data": data_sup, "time": time.time()}
+    if data_sup is None:
+        return False, "SEM_CONTEXTO"
+    tendencia = obter_contexto_tendencia(data_sup)
+    if tendencia == "NEUTRO":
+        return True, "NEUTRO"
+    return tendencia == sinal, tendencia
+
+# ================= BACKTEST HISTÓRICO =================
+def backtest_estrategia(data, estrategia, tf, expiracao_velas=1):
+    """Backtest sem olhar candles futuros no momento da decisão."""
+    c = np.asarray(data["close"], dtype=float)
+    total = wins = losses = 0
+    for i in range(30, len(c) - expiracao_velas):
+        sinal, score = analisar_estrategia(data, estrategia, i=i)
+        if not sinal or not score:
+            continue
+        total += 1
+        preco_entrada = c[i]
+        preco_saida = c[i + expiracao_velas]
+        if preco_saida == preco_entrada:
+            continue
+        ganhou = (sinal == "CALL" and preco_saida > preco_entrada) or (sinal == "PUT" and preco_saida < preco_entrada)
+        if ganhou:
+            wins += 1
+        else:
+            losses += 1
+    taxa = round((wins / total) * 100, 2) if total else 0.0
+    return {"estrategia": estrategia, "timeframe": tf, "total": total, "wins": wins, "losses": losses, "winrate": taxa}
+
+# ================= MOTOR DE ESTRATÉGIAS COM SCORE TÉCNICO =================
 def analisar_estrategia(data, estrategia, i=-1):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
     
@@ -1462,11 +1670,9 @@ def login():
         if not e or not s:
             return render_template_string(HTML_LOGIN, erro="Preencha todos os campos.")
 
-        if e == ADMIN_EMAIL:
-            try:
-                salvar_usuario(e, s, agora_brasilia().strftime("%Y-%m-%d"), ip_inicial=None)
-            except Exception as err:
-                return render_template_string(HTML_LOGIN, erro=f"Erro ao registrar ADM: {err}")
+        chave_login = f"{get_client_ip()}|{e}"
+        if login_bloqueado(chave_login):
+            return render_template_string(HTML_LOGIN, erro="Muitas tentativas. Aguarde alguns minutos antes de tentar novamente.")
 
         usuarios = carregar_usuarios()
         if e not in usuarios:
@@ -1474,7 +1680,10 @@ def login():
 
         user_db = usuarios[e]
         if not check_password_hash(user_db['senha'], s):
+            registrar_falha_login(chave_login)
             return render_template_string(HTML_LOGIN, erro="Senha Incorreta.")
+
+        limpar_falhas_login(chave_login)
 
         if e != ADMIN_EMAIL:
             ips_cadastrados = user_db.get('ips_list', [])
@@ -1488,7 +1697,9 @@ def login():
         if not ativo:
             return render_template_string(HTML_LOGIN, erro=f"Assinatura expirada (Dias: {dias}).")
 
+        session.clear()
         session['user'] = e
+        session.permanent = True
         USUARIOS_ONLINE[e] = time.time()
         get_user_state(e)
         return redirect('/')
@@ -1504,10 +1715,18 @@ def register():
         
         if not e or not s:
             return render_template_string(HTML_REGISTER, erro="Preencha todos os campos.")
+
+        if len(s) < 8:
+            return render_template_string(HTML_REGISTER, erro="A senha deve ter pelo menos 8 caracteres.")
+
+        if e == ADMIN_EMAIL:
+            return render_template_string(HTML_REGISTER, erro="Este e-mail é reservado ao administrador.")
             
         try:
             salvar_usuario(e, s, ip_inicial=ip_cliente)
+            session.clear()
             session['user'] = e
+            session.permanent = True
             USUARIOS_ONLINE[e] = time.time()
             get_user_state(e)
             return redirect('/')
@@ -1535,13 +1754,13 @@ def admin_panel():
         if now - USUARIOS_ONLINE[u] > 60: del USUARIOS_ONLINE[u]
     return render_template_string(HTML_ADM, lista=carregar_usuarios(), admin=ADMIN_EMAIL, online_count=len(USUARIOS_ONLINE), online_list=USUARIOS_ONLINE.keys())
 
-@app.route('/adm/renovar/<email>')
+@app.route('/adm/renovar/<email>', methods=['POST'])
 def adm_renovar(email):
     if session.get('user') != ADMIN_EMAIL: return abort(403)
     renovar_usuario_db(email)
     return redirect('/admin_panel')
 
-@app.route('/adm/liberar_ip/<email>')
+@app.route('/adm/liberar_ip/<email>', methods=['POST'])
 def adm_liberar_ip(email):
     if session.get('user') != ADMIN_EMAIL: return abort(403)
     liberar_ip_usuario_db(email)
@@ -1553,6 +1772,8 @@ def adm_editar():
     original = request.form.get('email_original', '').strip().lower()
     novo_email = request.form.get('novo_email', '').strip().lower()
     nova_senha = request.form.get('nova_senha', '').strip()
+    if nova_senha and len(nova_senha) < 8:
+        return redirect('/admin_panel')
     
     try:
         conn = get_db_connection()
@@ -1570,7 +1791,7 @@ def adm_editar():
         
     return redirect('/admin_panel')
 
-@app.route('/adm/excluir/<email>')
+@app.route('/adm/excluir/<email>', methods=['POST'])
 def adm_excluir(email):
     if session.get('user') != ADMIN_EMAIL: return abort(403)
     excluir_usuario_db(email)
@@ -1617,7 +1838,7 @@ def status():
     response.headers["Pragma"] = "no-cache"
     return response
 
-@app.route('/command/<cmd>')
+@app.route('/command/<cmd>', methods=['POST'])
 def command(cmd):
     user = session.get('user')
     if not user:
@@ -1771,7 +1992,27 @@ def command(cmd):
     
     return jsonify({"ok": True})
 
-@app.route('/resultado/<res>')
+@app.route('/admin/backtest')
+def admin_backtest():
+    if session.get('user') != ADMIN_EMAIL:
+        return abort(403)
+    ativo = request.args.get('ativo', 'EURUSD').strip().upper()
+    try:
+        tf = int(request.args.get('tf', '5'))
+    except ValueError:
+        return jsonify({"ok": False, "error": "Timeframe inválido."}), 400
+    if tf not in (1, 5, 15):
+        return jsonify({"ok": False, "error": "Timeframe permitido: M1, M5 ou M15."}), 400
+    estrategia = request.args.get('estrategia', 'PRICE_ACTION').strip().upper()
+    if estrategia not in LISTA_ESTRATEGIAS:
+        return jsonify({"ok": False, "error": "Estratégia inválida."}), 400
+    ticker = MAPA_TICKERS.get(ativo, ativo)
+    data = get_data_v2(ticker, tf, velas_minimas=100)
+    if data is None:
+        return jsonify({"ok": False, "error": "Não foi possível obter dados reais e fechados suficientes para o backtest."}), 503
+    return jsonify({"ok": True, "resultado": backtest_estrategia(data, estrategia, tf)})
+
+@app.route('/resultado/<res>', methods=['POST'])
 def resultado(res):
     user = session.get('user')
     if user:
@@ -1974,7 +2215,7 @@ def confirmar_alerta_agendado(user_email, alert_id):
             f"<h3 style='color:#00f2fe; margin-bottom:8px;'>🎯 SINAL CONFIRMADO!</h3>"
             f"<b>ATIVO:</b> {ativo}<br>"
             f"<b>DIREÇÃO DE ENTRADA:</b> <span style='color:{cor_direcao}; font-size:18px;'>{sinal}</span><br>"
-            f"<b>ESTRATÉGIA:</b> <span style='color:#38ef7d;'>{est_fmt} ({prob}%)</span><br>"
+            f"<b>ESTRATÉGIA:</b> <span style='color:#38ef7d;'>{est_fmt} (score {prob}/100)</span><br>"
             f"<b>MOVIMENTO:</b> {icone_movimento} <span style='color:#00f2fe;'>{tipo_movimento}</span><br>"
             f"<b>TIMEFRAME:</b> M{tf} | <b>ENTRADA:</b> {str_entrada} | <b>EXPIRAÇÃO:</b> {str_saida}"
             f"</div>"
@@ -1985,6 +2226,7 @@ def confirmar_alerta_agendado(user_email, alert_id):
             "sinal": sinal,
             "estrategia_fmt": est_fmt,
             "probabilidade": prob,
+            "contexto_timeframe_superior": alerta.get("contexto_timeframe_superior", "N/D"),
             "tf": tf,
             "str_entrada": str_entrada,
             "str_saida": str_saida,
@@ -2009,7 +2251,7 @@ def confirmar_alerta_agendado(user_email, alert_id):
             f"↕️ <b>DIREÇÃO DE ENTRADA:</b> {sinal}\n"
             f"⏱ <b>Timeframe:</b> M{tf}\n"
             f"🧠 <b>Estratégia:</b> {est_fmt}\n"
-            f"🔥 <b>Probabilidade Estimada:</b> {prob}%\n"
+            f"🔥 <b>Score Técnico:</b> {prob}%\n"
             f"🕐 <b>Entrada:</b> {str_entrada}\n"
             f"⌛ <b>Expiração:</b> {str_saida}\n\n"
             f"💡 <i>Gerencie seu capital com responsabilidade.</i>"
@@ -2022,7 +2264,14 @@ def confirmar_alerta_agendado(user_email, alert_id):
             try:
                 registrar_sinal_bd(
                     _user,
-                    f"{_ativo} | {_sinal} | {_est_fmt} | M{_tf}"
+                    f"{_ativo} | {_sinal} | {_est_fmt} | M{_tf}",
+                    ativo=_ativo,
+                    direcao=_sinal,
+                    timeframe=_tf,
+                    estrategia=_est_fmt,
+                    score=int(prob),
+                    mercado=st.get("tipo_mercado", "TODOS"),
+                    contexto_timeframe=(st.get("sinal_confirmado_dados") or {}).get("contexto_timeframe_superior", "N/D")
                 )
             except Exception as e:
                 print(f"⚠️ Erro ao registrar sinal confirmado: {e}")
@@ -2112,7 +2361,20 @@ def bot_loop():
                     else:
                         ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
 
-                    ativos_scan = ativos.copy()
+                    # OTC não é incluído no motor até existir uma fonte de preço OTC
+                    # verificável. O sistema nunca substitui OTC pelo preço do mercado aberto.
+                    ativos_reais = [a for a in ativos if "-OTC" not in a.upper()]
+                    if not ativos_reais:
+                        st["ativo_atual"] = "OTC SEM FONTE DE DADOS REAL"
+                        st["ultimo_sinal"] = (
+                            "<div class='system-console' style='color:#f59e0b;'>"
+                            "⚠️ <b>ANÁLISE OTC PAUSADA</b><br>"
+                            "Não existe fonte OTC verificável configurada. Nenhum sinal será gerado com dados substitutos."
+                            "</div>"
+                        )
+                        continue
+
+                    ativos_scan = ativos_reais.copy()
                     random.shuffle(ativos_scan)
 
                     for ativo in ativos_scan:
@@ -2133,7 +2395,7 @@ def bot_loop():
                         if cache_key in ohlc_cache:
                             data = ohlc_cache[cache_key]["data"]
                         else:
-                            data = get_data_v2(ticker, tf, velas_minimas=30)
+                            data = get_data_v2(ticker, tf, velas_minimas=100)
                             if data:
                                 ohlc_cache[cache_key] = {"data": data, "time": time.time()}
 
@@ -2205,7 +2467,14 @@ def bot_loop():
 
                         confluencia_real = (confluencia_encontrada >= 2 or price_action_qualificado)
 
-                        if sinal_encontrado and confluencia_real and not bloquear_novos_alertas:
+                        contexto_ok = False
+                        contexto_direcao = "SEM_CONTEXTO"
+                        if sinal_encontrado and confluencia_real:
+                            contexto_ok, contexto_direcao = validar_contexto_multitimeframe(
+                                ticker, tf, sinal_encontrado, ohlc_cache
+                            )
+
+                        if sinal_encontrado and confluencia_real and contexto_ok and not bloquear_novos_alertas:
                             agora = agora_brasilia()
                             
                             min_pass = agora.minute % tf
@@ -2276,7 +2545,7 @@ def bot_loop():
 
                                     msg_pre_alerta = (
                                         f"⚡ <b>ALERTA ATUALIZADO — {motivo_alerta}</b> ⚡\n\n"
-                                        f"<b>Ativo:</b> {ativo} ({maior_prob}% de Assertividade)\n"
+                                        f"<b>Ativo:</b> {ativo} ({maior_prob} pontos de score)\n"
                                         f"<b>Timeframe:</b> M{tf}\n"
                                         f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
                                         f"<b>Estratégia principal:</b> {nome_est_formatado}\n"
@@ -2295,6 +2564,7 @@ def bot_loop():
                                         "confluencia": confluencia_encontrada,
                                         "forca_estrategia": forca_encontrada,
                                         "estrategias_confluentes": estrategias_confluentes,
+                                        "contexto_timeframe_superior": contexto_direcao,
                                         "msg_id": None,
                                         "str_entrada": str_entrada,
                                         "str_saida": str_saida,
@@ -2350,7 +2620,7 @@ def bot_loop():
                                     f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
                                     f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
                                     f"<b>Tipo de movimento:</b> {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[1]} {classificar_movimento(est_nome_encontrada, estrategias_confluentes)[0]}\n"
-                                    f"<b>Assertividade Estimada:</b> {maior_prob}%\n"
+                                    f"<b>Score Técnico:</b> {maior_prob}%\n"
                                     f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
                                     f"👉 <i>Abra o ativo na corretora e prepare-se!</i>"
                                 )
@@ -2363,6 +2633,7 @@ def bot_loop():
                                     "estrategia": est_nome_encontrada,
                                     "estrategia_fmt": nome_est_formatado,
                                     "probabilidade": maior_prob,
+                                    "contexto_timeframe_superior": contexto_direcao,
                                     "msg_id": None,
                                     "str_entrada": str_entrada,
                                     "str_saida": str_saida,
