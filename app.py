@@ -683,9 +683,13 @@ HTML_INDEX = """
         }
 
         function openBroker(url) {
-            const brokerContainer = document.getElementById('broker-view-container');
-            document.getElementById('brokerIframe').src = url;
-            brokerContainer.style.display = 'flex';
+            // As plataformas de operação podem bloquear carregamento dentro de iframe
+            // por políticas de segurança (X-Frame-Options/CSP). Abrimos diretamente
+            // em uma nova aba para que cada plataforma carregue normalmente.
+            const novaAba = window.open(url, '_blank', 'noopener,noreferrer');
+            if (!novaAba) {
+                window.location.href = url;
+            }
         }
 
         function closeBrokerView() {
@@ -708,6 +712,38 @@ HTML_INDEX = """
             });
         }
 
+        let timeframeCronometro = 5;
+
+        function formatarTempoCandle(segundos) {
+            const total = Math.max(0, Math.floor(segundos));
+            const minutos = String(Math.floor(total / 60)).padStart(2, '0');
+            const segundosRestantes = String(total % 60).padStart(2, '0');
+            return `${minutos}:${segundosRestantes}`;
+        }
+
+        function atualizarCronometroCandle(tf) {
+            const elemento = document.getElementById('candle-timer');
+            if (!elemento) return;
+
+            const tfAtual = Number(tf) || 5;
+            timeframeCronometro = tfAtual;
+
+            // O relógio do candle é calculado localmente pelo relógio real do navegador.
+            // Assim ele não depende do ciclo de atualização do Flask e não sofre pausas
+            // quando uma consulta /status demora para responder.
+            const duracao = tfAtual * 60;
+            const agoraMs = Date.now();
+            const segundoAtual = Math.floor(agoraMs / 1000);
+            const decorrido = segundoAtual % duracao;
+            const restante = duracao - decorrido;
+
+            elemento.innerText = `CANDLE M${tfAtual} • ${formatarTempoCandle(decorrido)} DECORRIDOS • ${formatarTempoCandle(restante)} RESTANTES`;
+        }
+
+        // Atualização independente do servidor: o cronômetro continua correndo
+        // de segundo em segundo mesmo enquanto o painel consulta /status.
+        setInterval(() => atualizarCronometroCandle(timeframeCronometro), 250);
+
         async function atualizarPainel() {
             try {
                 const r = await fetch('/status', { cache: 'no-store' });
@@ -729,11 +765,7 @@ HTML_INDEX = """
                     }
                 }
                 if(document.getElementById('candle-timer')) {
-                    const tfAtual = data.timeframe || 5;
-                    const dec = data.candle_decorrido || 0;
-                    const rest = data.candle_restante || 0;
-                    const fmt = (v) => String(Math.max(0, Math.floor(v / 60))).padStart(2,'0') + ':' + String(Math.max(0, Math.floor(v % 60))).padStart(2,'0');
-                    document.getElementById('candle-timer').innerText = `CANDLE M${tfAtual} • ${fmt(dec)} DECORRIDOS • ${fmt(rest)} RESTANTES`;
+                    atualizarCronometroCandle(data.timeframe || 5);
                 }
                 if(document.getElementById('btn-telegram-toggle')) {
                     const ativo = !!data.telegram_ativo;
