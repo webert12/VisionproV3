@@ -1,6 +1,7 @@
 import requests
 import time
 import math
+import asyncio
 import pytz
 import threading
 import json
@@ -32,6 +33,13 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 FLASK_SECRET = os.getenv("FLASK_SECRET", "").strip()
 TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
 
+# ================= FONTE OTC DA QUOTEX =================
+# Credenciais somente via variáveis de ambiente do Render.
+# Esta integração é somente de leitura: o bot não executa ordens na Quotex.
+QUOTEX_EMAIL = os.getenv("QUOTEX_EMAIL", "").strip()
+QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD", "")
+QUOTEX_SSID = os.getenv("QUOTEX_SSID", "").strip()
+
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
 
 if not FLASK_SECRET:
@@ -57,6 +65,7 @@ def get_user_state(email):
             "timeframe": 5,
             "tipo_mercado": "TODOS",
             "ativo_selecionado": "TODOS",
+            "fonte_dados": "AGUARDANDO...",
             "estrategia": "TODAS",
             "bot_iniciado": False,
             "bot_pausado": True,
@@ -421,7 +430,7 @@ label{display:block;color:#94a3b8;font-size:9px;font-weight:800;margin-bottom:5p
 </div>
 <div class="actions"><button class="btn primary" type="submit" name="analisar" value="1">🔍 ANALISAR DADOS REAIS AGORA</button><a class="btn" href="/admin/estatisticas">LIMPAR</a></div>
 </form>
-<div class="muted" style="margin-top:9px">Forex: Twelve Data. Cripto: Binance pública. OTC só será analisado quando houver uma fonte OTC real configurada; o sistema não substitui OTC por preço aberto.</div>
+<div class="muted" style="margin-top:9px">Forex aberto: Twelve Data. Cripto aberto: Binance pública. OTC: candles reais da Quotex. O sistema nunca substitui OTC pelo preço do mercado aberto.</div>
 </div>
 {% if resultado %}
 <div class="grid">
@@ -664,7 +673,8 @@ HTML_INDEX = """
 
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
             MERCADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b><br>
-            ATIVO EM ANÁLISE: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
+            ATIVO EM ANÁLISE: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b><br>
+            FONTE DE DADOS: <b id="data-source" style="color:#00f2fe;">AGUARDANDO...</b>
             <div id="candle-timer" style="margin-top:7px; color:#94a3b8; font-family:'JetBrains Mono',monospace; font-size:11px;">
                 CANDLE M{{ tf }} • 00:00 DECORRIDOS • 00:00 RESTANTES
             </div>
@@ -935,6 +945,11 @@ HTML_INDEX = """
                     } else {
                         document.getElementById('current-asset').innerText = "SISTEMA PAUSADO";
                     }
+                }
+                if(document.getElementById('data-source')) {
+                    document.getElementById('data-source').innerText = data.rodando
+                        ? (data.fonte_dados || "AGUARDANDO...")
+                        : "SISTEMA PAUSADO";
                 }
                 if(document.getElementById('candle-timer')) {
                     atualizarCronometroCandle(data.timeframe || 5);
@@ -1420,7 +1435,7 @@ for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", ""
 
 # Ativos com fonte de preço real disponível para operação ao vivo.
 # OTC não entra nesta lista enquanto não houver uma fonte OTC verificável.
-ATIVOS_OPERAVEIS = list(dict.fromkeys(ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]))
+ATIVOS_OPERAVEIS = list(dict.fromkeys(ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]))
 
 # ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
 def validar_ohlc(ohlc, velas_minimas=30, tf=5):
@@ -1600,44 +1615,252 @@ def _buscar_twelve_data(ticker, tf, velas_minimas):
         return None
 
 
-def get_data_v2(ticker, tf, velas_minimas=100):
-    """Busca somente OHLC verificável, priorizando Binance para cripto e Twelve Data para Forex."""
-    if not ticker or not tf:
-        return None
 
-    # OTC não é mascarado como mercado aberto. Sem uma fonte OTC real, o bot
-    # deliberadamente não gera sinal para evitar analisar o ativo errado.
-    if "-OTC" in str(ticker).upper():
+# ================= CONECTOR DE CANDLES OTC DA QUOTEX =================
+class QuotexOTCFeed:
+    """
+    Mantém uma conexão assíncrona com a Quotex e fornece candles OTC
+    para o motor síncrono do Flask. Somente leitura; não executa ordens.
+    """
+    def __init__(self):
+        self._loop = None
+        self._thread = None
+        self._client = None
+        self._ready = threading.Event()
+        self._lock = threading.Lock()
+        self._last_error = ""
+        self._started = False
+
+    def _start_loop(self):
+        if self._started and self._thread and self._thread.is_alive():
+            return
+        self._started = True
+
+        def runner():
+            try:
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+                self._ready.set()
+                self._loop.run_forever()
+            except Exception as e:
+                self._last_error = f"Loop Quotex encerrado: {e}"
+                self._ready.set()
+
+        self._thread = threading.Thread(
+            target=runner,
+            name="quotex-otc-loop",
+            daemon=True
+        )
+        self._thread.start()
+        self._ready.wait(timeout=5)
+
+    @staticmethod
+    def _asset_to_quotex(ticker):
+        base = str(ticker or "").upper().strip()
+        if not base.endswith("-OTC"):
+            return None
+        return base[:-4] + "_otc"
+
+    async def _close_async(self):
+        client = self._client
+        self._client = None
+        if client:
+            try:
+                await client.close()
+            except Exception:
+                pass
+
+    async def _connect_async(self):
+        if self._client is not None:
+            try:
+                if await self._client.check_connect():
+                    return True
+            except Exception:
+                pass
+            await self._close_async()
+
+        if not QUOTEX_EMAIL or not QUOTEX_PASSWORD:
+            self._last_error = (
+                "QUOTEX_EMAIL e QUOTEX_PASSWORD não configuradas no Render."
+            )
+            return False
+
+        try:
+            from pyquotex.stable_api import Quotex
+        except Exception as e:
+            self._last_error = (
+                "Biblioteca pyquotex não instalada no Render. "
+                f"Erro: {e}"
+            )
+            return False
+
+        try:
+            ua = (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+            )
+            self._client = Quotex(
+                email=QUOTEX_EMAIL,
+                password=QUOTEX_PASSWORD,
+                lang="pt",
+                user_agent=ua
+            )
+
+            if QUOTEX_SSID:
+                try:
+                    self._client.set_session(ua, ssid=QUOTEX_SSID)
+                except Exception as e:
+                    print(f"⚠️ Quotex: não foi possível aplicar QUOTEX_SSID: {e}")
+
+            ok, motivo = await self._client.connect()
+            if not ok:
+                self._last_error = f"Falha ao conectar na Quotex: {motivo}"
+                await self._close_async()
+                return False
+
+            self._last_error = ""
+            print("✅ Quotex OTC: conexão de dados estabelecida.")
+            return True
+        except Exception as e:
+            self._last_error = f"Erro de conexão Quotex: {e}"
+            await self._close_async()
+            return False
+
+    @staticmethod
+    def _normalizar_candles(candles, tf, velas_minimas):
+        agora = time.time()
+        registros = []
+
+        if not isinstance(candles, (list, tuple)):
+            return None
+
+        for item in candles:
+            if not isinstance(item, dict):
+                continue
+            try:
+                ts = float(item.get("time"))
+                o = float(item.get("open"))
+                h = float(item.get("high"))
+                l = float(item.get("low"))
+                c = float(item.get("close"))
+                if not all(math.isfinite(x) for x in (ts, o, h, l, c)):
+                    continue
+                # Somente candles fechados entram na análise.
+                if ts + (int(tf) * 60) > agora:
+                    continue
+                registros.append((ts, o, h, l, c))
+            except (TypeError, ValueError):
+                continue
+
+        if not registros:
+            return None
+
+        registros.sort(key=lambda x: x[0])
+        unicos = {}
+        for row in registros:
+            unicos[row[0]] = row
+        registros = sorted(unicos.values(), key=lambda x: x[0])
+
+        ohlc = {
+            "time": np.array([x[0] for x in registros], dtype=float),
+            "open": np.array([x[1] for x in registros], dtype=float),
+            "high": np.array([x[2] for x in registros], dtype=float),
+            "low": np.array([x[3] for x in registros], dtype=float),
+            "close": np.array([x[4] for x in registros], dtype=float)
+        }
+        return validar_ohlc(ohlc, velas_minimas=velas_minimas, tf=tf)
+
+    async def _get_async(self, ticker, tf, velas_minimas):
+        asset = self._asset_to_quotex(ticker)
+        if not asset:
+            return None
+
+        if not await self._connect_async():
+            return None
+
+        periodo = {1: 60, 5: 300, 15: 900}.get(int(tf))
+        if not periodo:
+            self._last_error = f"Timeframe M{tf} não suportado pela fonte Quotex."
+            return None
+
+        try:
+            # O endpoint WebSocket da Quotex entrega as velas históricas.
+            # O retorno atual é suficiente para o motor que exige 100 velas.
+            candles = await self._client.get_candles(
+                asset=asset,
+                end_from_time=time.time(),
+                offset=periodo * 200,
+                period=periodo
+            )
+            dados = self._normalizar_candles(candles, tf, velas_minimas)
+            if dados is None:
+                self._last_error = (
+                    f"Quotex não retornou candles OTC fechados suficientes "
+                    f"para {asset} M{tf}."
+                )
+            return dados
+        except Exception as e:
+            self._last_error = f"Erro ao buscar {asset} M{tf} na Quotex: {e}"
+            try:
+                await self._close_async()
+            except Exception:
+                pass
+            return None
+
+    def get(self, ticker, tf, velas_minimas=100):
+        if "-OTC" not in str(ticker).upper():
+            return None
+
+        self._start_loop()
+        if not self._loop or not self._thread or not self._thread.is_alive():
+            self._last_error = "Loop de conexão Quotex não iniciou."
+            return None
+
+        with self._lock:
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self._get_async(ticker, tf, velas_minimas),
+                    self._loop
+                )
+                return future.result(timeout=25)
+            except Exception as e:
+                self._last_error = f"Timeout/erro no feed Quotex: {e}"
+                return None
+
+    def diagnostico(self):
+        if self._last_error:
+            return self._last_error
+        if not QUOTEX_EMAIL or not QUOTEX_PASSWORD:
+            return "QUOTEX_EMAIL/QUOTEX_PASSWORD não configuradas."
+        return "Quotex OTC pronta para conexão."
+
+QUOTEX_OTC_FEED = QuotexOTCFeed()
+
+def get_data_v2(ticker, tf, velas_minimas=100):
+    """Busca somente OHLC verificável das fontes correspondentes ao mercado."""
+    if not ticker or not tf:
         return None
 
     try:
         base_ticker = str(ticker).upper().strip()
 
-        # ================= CRIPTO: BINANCE =================
-        # MAPA_TICKERS transforma BTCUSD em BTC-USD. A Binance fornece o
-        # mercado público equivalente BTCUSDT, sem necessidade de API key.
-        if base_ticker.endswith("-USD"):
-            dados_binance = _buscar_binance(base_ticker, tf, velas_minimas)
-            if dados_binance is not None:
-                return dados_binance
+        # ================= OTC: QUOTEX =================
+        if base_ticker.endswith("-OTC"):
+            return QUOTEX_OTC_FEED.get(base_ticker, tf, velas_minimas=velas_minimas)
 
-            # Sem fallback: o painel identifica explicitamente a Binance como fonte da cripto.
-            return None
+        # ================= CRIPTO: BINANCE =================
+        if base_ticker.endswith("-USD"):
+            return _buscar_binance(base_ticker, tf, velas_minimas)
 
         # ================= FOREX: TWELVE DATA =================
-        # MAPA_TICKERS transforma EURUSD em EURUSD=X. A Twelve Data usa EUR/USD.
         if base_ticker.endswith("=X"):
-            dados_twelve = _buscar_twelve_data(base_ticker, tf, velas_minimas)
-            if dados_twelve is not None:
-                return dados_twelve
-
-            # Sem fallback: Forex só entra no backtest quando a Twelve Data responder.
-            return None
+            return _buscar_twelve_data(base_ticker, tf, velas_minimas)
 
         return None
     except Exception as e:
         print(f"⚠️ Fonte de mercado indisponível para {ticker} M{tf}: {e}")
         return None
+
 
 def calcular_ema(dados, periodo):
     if len(dados) < periodo:
@@ -1998,6 +2221,14 @@ def backtest_estrategia(data, estrategia, tf, expiracao_velas=1, modo_gale="SEM_
         "score_medio": round(float(np.mean(scores)), 2) if scores else 0.0
     }
 
+def nome_fonte_ativo(ativo_nome):
+    ativo_nome = str(ativo_nome or "").upper()
+    if ativo_nome.endswith("-OTC"):
+        return "Quotex OTC"
+    if ativo_nome in ATIVOS_BASE["CRIPTO_ABERTO"]:
+        return "Binance"
+    return "Twelve Data"
+
 def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionada, modo_gale="SEM_GALE"):
     """Executa a análise somente com fontes reais. Sem banco de resultados e sem dados sintéticos."""
     mercado = str(mercado or "ABERTO").upper()
@@ -2024,12 +2255,9 @@ def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionad
     fontes_indisponiveis = []
     cache = {}
     for ativo_nome in candidatos:
-        is_otc = "-OTC" in ativo_nome
-        if is_otc:
-            fontes_indisponiveis.append(f"{ativo_nome}: sem fonte OTC real configurada")
-            continue
-        ticker = MAPA_TICKERS.get(ativo_nome)
-        fonte = "Binance" if ativo_nome in ATIVOS_BASE["CRIPTO_ABERTO"] else "Twelve Data"
+        is_otc = "-OTC" in ativo_nome.upper()
+        ticker = ativo_nome if is_otc else MAPA_TICKERS.get(ativo_nome)
+        fonte = nome_fonte_ativo(ativo_nome)
         for tf in tfs:
             chave = (ticker, tf)
             if chave not in cache:
@@ -2040,6 +2268,8 @@ def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionad
                     motivo = "TWELVE_DATA_API_KEY não configurada no Render"
                 elif fonte == "Twelve Data":
                     motivo = "Twelve Data não retornou candles válidos; verifique créditos/limite da API e a chave configurada"
+                elif fonte == "Quotex OTC":
+                    motivo = QUOTEX_OTC_FEED.diagnostico()
                 else:
                     motivo = "fonte indisponível ou sem candles fechados suficientes"
                 fontes_indisponiveis.append(f"{ativo_nome} M{tf}: {motivo}")
@@ -2636,10 +2866,11 @@ def admin_backtest():
     modo_gale = request.args.get('gale', 'SEM_GALE').strip().upper()
     if modo_gale not in {'SEM_GALE', 'GALE1'}:
         return jsonify({"ok": False, "error": "Modo de Gale inválido. Use SEM_GALE ou GALE1."}), 400
-    ticker = MAPA_TICKERS.get(ativo, ativo)
+    ticker = ativo if "-OTC" in ativo else MAPA_TICKERS.get(ativo, ativo)
     data = get_data_v2(ticker, tf, velas_minimas=100)
     if data is None:
-        return jsonify({"ok": False, "error": "Não foi possível obter dados reais e fechados suficientes para o backtest."}), 503
+        detalhe = QUOTEX_OTC_FEED.diagnostico() if "-OTC" in ativo else "Verifique a fonte correspondente e as credenciais configuradas."
+        return jsonify({"ok": False, "error": f"Não foi possível obter dados reais e fechados suficientes para o backtest. {detalhe}"}), 503
     return jsonify({"ok": True, "resultado": backtest_estrategia(data, estrategia, tf, modo_gale=modo_gale)})
 
 @app.route('/resultado/<res>', methods=['POST'])
@@ -2857,6 +3088,7 @@ def confirmar_alerta_agendado(user_email, alert_id):
             "estrategia_fmt": est_fmt,
             "probabilidade": prob,
             "contexto_timeframe_superior": alerta.get("contexto_timeframe_superior", "N/D"),
+            "fonte_dados": alerta.get("fonte_dados", nome_fonte_ativo(ativo)),
             "tf": tf,
             "str_entrada": str_entrada,
             "str_saida": str_saida,
@@ -2991,32 +3223,25 @@ def bot_loop():
                     else:
                         ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
 
-                    # OTC não é incluído no motor até existir uma fonte de preço OTC
-                    # verificável. O sistema nunca substitui OTC pelo preço do mercado aberto.
-                    ativos_reais = [a for a in ativos if "-OTC" not in a.upper()]
+                    # Todas as categorias usam agora a fonte correspondente:
+                    # mercado aberto -> Binance/Twelve Data; OTC -> Quotex.
+                    ativos_reais = list(ativos)
                     ativo_selecionado = st.get("ativo_selecionado", "TODOS")
                     if ativo_selecionado != "TODOS":
-                        if ativo_selecionado in ativos_reais:
+                        if ativo_selecionado in ativos:
                             ativos_reais = [ativo_selecionado]
-                        elif ativo_selecionado in ativos:
-                            st["ativo_atual"] = ativo_selecionado
+                        else:
                             st["ultimo_sinal"] = (
                                 "<div class='system-console' style='color:#f59e0b;'>"
-                                f"⚠️ <b>{ativo_selecionado} NÃO DISPONÍVEL PARA ANÁLISE</b><br>"
-                                "Este ativo é OTC e não possui uma fonte de preço OTC real configurada. "
-                                "Nenhum sinal será gerado com dados substitutos."
+                                f"⚠️ <b>{ativo_selecionado} NÃO PERTENCE AO MERCADO SELECIONADO</b><br>"
+                                "Selecione um ativo compatível com o mercado escolhido."
                                 "</div>"
                             )
                             continue
 
                     if not ativos_reais:
-                        st["ativo_atual"] = "OTC SEM FONTE DE DADOS REAL"
-                        st["ultimo_sinal"] = (
-                            "<div class='system-console' style='color:#f59e0b;'>"
-                            "⚠️ <b>ANÁLISE OTC PAUSADA</b><br>"
-                            "Não existe fonte OTC verificável configurada. Nenhum sinal será gerado com dados substitutos."
-                            "</div>"
-                        )
+                        st["ativo_atual"] = "NENHUM ATIVO DISPONÍVEL"
+                        st["fonte_dados"] = "N/D"
                         continue
 
                     ativos_scan = ativos_reais.copy()
@@ -3032,7 +3257,8 @@ def bot_loop():
                         segundos_desde_inicio = (agora_candle.minute % tf) * 60 + agora_candle.second
                         st["candle_decorrido"] = segundos_desde_inicio
                         st["candle_restante"] = max(0, (tf * 60) - segundos_desde_inicio)
-                        ticker = MAPA_TICKERS.get(ativo, ativo)
+                        ticker = ativo if "-OTC" in ativo.upper() else MAPA_TICKERS.get(ativo, ativo)
+                        st["fonte_dados"] = nome_fonte_ativo(ativo)
 
                         if not alerta and not st.get("aguardando_confirmacao"):
                             st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[ANÁLISE PRICE ACTION + CONFIRMAÇÕES]</span></div><div class='tech-scanner'></div>"
@@ -3046,7 +3272,18 @@ def bot_loop():
                                 ohlc_cache[cache_key] = {"data": data, "time": time.time()}
 
                         if not data:
+                            if "-OTC" in ativo.upper():
+                                st["fonte_dados"] = "Quotex OTC — sem dados"
+                                erro_qx = QUOTEX_OTC_FEED.diagnostico()
+                                st["ultimo_sinal"] = (
+                                    "<div class='system-console' style='color:#f59e0b;'>"
+                                    f"⚠️ <b>QUOTEX OTC SEM DADOS</b><br>{erro_qx}"
+                                    "</div>"
+                                )
                             continue
+
+                        if "-OTC" in ativo.upper():
+                            st["fonte_dados"] = "Quotex OTC ✓"
 
                         sinal_encontrado = None
                         est_nome_encontrada = None
