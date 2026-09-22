@@ -39,6 +39,8 @@ TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
 QUOTEX_EMAIL = os.getenv("QUOTEX_EMAIL", "").strip()
 QUOTEX_PASSWORD = os.getenv("QUOTEX_PASSWORD", "")
 QUOTEX_SSID = os.getenv("QUOTEX_SSID", "").strip()
+QUOTEX_HOST = os.getenv("QUOTEX_HOST", "").strip().lower()
+QUOTEX_HOSTS = os.getenv("QUOTEX_HOSTS", "").strip()
 
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
 
@@ -1615,7 +1617,18 @@ class QuotexOTCFeed:
     """
     Mantém uma conexão assíncrona com a Quotex e fornece candles OTC
     para o motor síncrono do Flask. Somente leitura; não executa ordens.
+
+    A conexão tenta hosts suportados pelo PyQuotex em sequência. Isso é
+    importante quando o host padrão sofre bloqueio regional/Cloudflare.
     """
+    DEFAULT_HOSTS = (
+        "qxbroker.com",
+        "quotex.com",
+        "qxbroker.io",
+        "quotex.io",
+        "qxbroker.sqldb.tc",
+    )
+
     def __init__(self):
         self._loop = None
         self._thread = None
@@ -1624,6 +1637,7 @@ class QuotexOTCFeed:
         self._lock = threading.Lock()
         self._last_error = ""
         self._started = False
+        self._active_host = ""
 
     def _start_loop(self):
         if self._started and self._thread and self._thread.is_alive():
@@ -1655,9 +1669,66 @@ class QuotexOTCFeed:
             return None
         return base[:-4] + "_otc"
 
+    @classmethod
+    def _hosts(cls):
+        """Retorna os hosts em ordem, sem duplicatas."""
+        raw = QUOTEX_HOSTS
+        if raw:
+            candidatos = [x.strip().lower() for x in raw.split(",") if x.strip()]
+        elif QUOTEX_HOST:
+            candidatos = [QUOTEX_HOST]
+        else:
+            candidatos = list(cls.DEFAULT_HOSTS)
+
+        hosts = []
+        for host in candidatos:
+            host = host.replace("https://", "").replace("http://", "").strip("/")
+            if host and host not in hosts:
+                hosts.append(host)
+        return hosts or list(cls.DEFAULT_HOSTS)
+
+    @staticmethod
+    def _format_connection_error(error):
+        """Evita mensagens quebradas por incompatibilidades de atributos.
+        Algumas camadas de WebSocket expõem status_code, outras apenas texto.
+        """
+        if error is None:
+            return "erro desconhecido"
+
+        parts = []
+        for attr in ("status_code", "status", "code"):
+            try:
+                value = getattr(error, attr, None)
+                if value not in (None, "") and str(value) not in parts:
+                    parts.append(str(value))
+            except Exception:
+                pass
+
+        try:
+            message = str(error).strip()
+        except Exception:
+            message = repr(error)
+
+        # Evita exibir a exceção secundária 'reason_phrase' como se fosse
+        # a causa original do bloqueio.
+        if "reason_phrase" in message and not parts:
+            message = "Resposta HTTP rejeitada pelo servidor WebSocket (detalhes indisponíveis)."
+
+        if parts and message:
+            return f"HTTP/status {'/'.join(parts)} — {message}"
+        return message or "erro sem mensagem"
+
+    @staticmethod
+    def _is_rejection(reason):
+        text = str(reason or "").lower()
+        return any(token in text for token in (
+            "403", "forbidden", "rejected", "cloudflare", "handshake"
+        ))
+
     async def _close_async(self):
         client = self._client
         self._client = None
+        self._active_host = ""
         if client:
             try:
                 await client.close()
@@ -1684,41 +1755,73 @@ class QuotexOTCFeed:
         except Exception as e:
             self._last_error = (
                 "Biblioteca pyquotex não instalada no Render. "
-                f"Erro: {e}"
+                f"Erro: {self._format_connection_error(e)}"
             )
             return False
 
-        try:
-            ua = (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
-            )
-            self._client = Quotex(
-                email=QUOTEX_EMAIL,
-                password=QUOTEX_PASSWORD,
-                lang="pt",
-                user_agent=ua
-            )
+        ua = (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+        )
 
-            if QUOTEX_SSID:
-                try:
-                    self._client.set_session(ua, ssid=QUOTEX_SSID)
-                except Exception as e:
-                    print(f"⚠️ Quotex: não foi possível aplicar QUOTEX_SSID: {e}")
+        erros = []
+        hosts = self._hosts()
 
-            ok, motivo = await self._client.connect()
-            if not ok:
-                self._last_error = f"Falha ao conectar na Quotex: {motivo}"
+        for host in hosts:
+            try:
+                print(f"🔌 Quotex OTC: tentando host {host}...")
+                self._client = Quotex(
+                    email=QUOTEX_EMAIL,
+                    password=QUOTEX_PASSWORD,
+                    host=host,
+                    lang="pt",
+                    user_agent=ua,
+                )
+
+                # SSID é opcional. Quando não existe, o PyQuotex executa
+                # o fluxo normal de autenticação/login.
+                if QUOTEX_SSID:
+                    try:
+                        self._client.set_session(ua, ssid=QUOTEX_SSID)
+                    except Exception as e:
+                        print(
+                            "⚠️ Quotex: não foi possível aplicar QUOTEX_SSID; "
+                            f"seguindo com diagnóstico do host {host}: "
+                            f"{self._format_connection_error(e)}"
+                        )
+
+                ok, motivo = await self._client.connect()
+                if ok:
+                    self._active_host = host
+                    self._last_error = ""
+                    print(f"✅ Quotex OTC: conexão estabelecida via {host}.")
+                    return True
+
+                motivo_txt = self._format_connection_error(motivo)
+                erros.append(f"{host}: {motivo_txt}")
+                print(f"⚠️ Quotex OTC: {host} rejeitou a conexão: {motivo_txt}")
                 await self._close_async()
-                return False
 
-            self._last_error = ""
-            print("✅ Quotex OTC: conexão de dados estabelecida.")
-            return True
-        except Exception as e:
-            self._last_error = f"Erro de conexão Quotex: {e}"
-            await self._close_async()
-            return False
+                # 403/handshake/Cloudflare: tenta o próximo host.
+                # Outros erros também recebem tentativa no próximo host,
+                # pois o endpoint alternativo pode usar outra rota/região.
+                continue
+
+            except Exception as e:
+                motivo_txt = self._format_connection_error(e)
+                erros.append(f"{host}: {motivo_txt}")
+                print(f"⚠️ Quotex OTC: erro no host {host}: {motivo_txt}")
+                await self._close_async()
+
+        resumo = " | ".join(erros[-len(hosts):])
+        if resumo:
+            self._last_error = (
+                "Quotex recusou a conexão em todos os hosts testados. "
+                f"Diagnóstico: {resumo}"
+            )
+        else:
+            self._last_error = "Não foi possível estabelecer conexão com a Quotex."
+        return False
 
     @staticmethod
     def _normalizar_candles(candles, tf, velas_minimas):
@@ -1794,7 +1897,11 @@ class QuotexOTCFeed:
                 )
             return dados
         except Exception as e:
-            self._last_error = f"Erro ao buscar {asset} M{tf} na Quotex: {e}"
+            self._last_error = (
+                f"Erro ao buscar {asset} M{tf} na Quotex "
+                f"({self._active_host or 'host desconhecido'}): "
+                f"{self._format_connection_error(e)}"
+            )
             try:
                 await self._close_async()
             except Exception:
@@ -1816,9 +1923,12 @@ class QuotexOTCFeed:
                     self._get_async(ticker, tf, velas_minimas),
                     self._loop
                 )
-                return future.result(timeout=25)
+                return future.result(timeout=60)
             except Exception as e:
-                self._last_error = f"Timeout/erro no feed Quotex: {e}"
+                self._last_error = (
+                    "Timeout/erro no feed Quotex: "
+                    f"{self._format_connection_error(e)}"
+                )
                 return None
 
     def diagnostico(self):
@@ -1826,6 +1936,8 @@ class QuotexOTCFeed:
             return self._last_error
         if not QUOTEX_EMAIL or not QUOTEX_PASSWORD:
             return "QUOTEX_EMAIL/QUOTEX_PASSWORD não configuradas."
+        if self._active_host:
+            return f"Quotex OTC conectada via {self._active_host}."
         return "Quotex OTC pronta para conexão."
 
 QUOTEX_OTC_FEED = QuotexOTCFeed()
