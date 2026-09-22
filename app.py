@@ -674,7 +674,6 @@ HTML_INDEX = """
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
             MERCADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b><br>
             ATIVO EM ANÁLISE: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b><br>
-            FONTE DE DADOS: <b id="data-source" style="color:#00f2fe;">AGUARDANDO...</b>
             <div id="candle-timer" style="margin-top:7px; color:#94a3b8; font-family:'JetBrains Mono',monospace; font-size:11px;">
                 CANDLE M{{ tf }} • 00:00 DECORRIDOS • 00:00 RESTANTES
             </div>
@@ -945,11 +944,6 @@ HTML_INDEX = """
                     } else {
                         document.getElementById('current-asset').innerText = "SISTEMA PAUSADO";
                     }
-                }
-                if(document.getElementById('data-source')) {
-                    document.getElementById('data-source').innerText = data.rodando
-                        ? (data.fonte_dados || "AGUARDANDO...")
-                        : "SISTEMA PAUSADO";
                 }
                 if(document.getElementById('candle-timer')) {
                     atualizarCronometroCandle(data.timeframe || 5);
@@ -3261,7 +3255,7 @@ def bot_loop():
                         st["fonte_dados"] = nome_fonte_ativo(ativo)
 
                         if not alerta and not st.get("aguardando_confirmacao"):
-                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[ANÁLISE PRICE ACTION + CONFIRMAÇÕES]</span></div><div class='tech-scanner'></div>"
+                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})</div><div class='tech-scanner'></div>"
 
                         cache_key = f"{ticker}_{tf}"
                         if cache_key in ohlc_cache:
