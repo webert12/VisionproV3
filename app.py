@@ -449,6 +449,53 @@ label{display:block;color:#94a3b8;font-size:9px;font-weight:800;margin-bottom:5p
 </form>
 <div class="muted" style="margin-top:9px">Forex aberto: Twelve Data. Cripto aberto: Binance pública. OTC: candles reais da Quotex. O sistema nunca substitui OTC pelo preço do mercado aberto.</div>
 </div>
+{% if backtest_job %}
+<div class="card" id="backtest-progress-card">
+  <div class="section">⚙️ BACKTEST EM TEMPO REAL</div>
+  <div id="backtest-progress-message" class="muted">{{ backtest_job.mensagem or 'Preparando análise com dados reais...' }}</div>
+  <div style="height:10px;background:#1e293b;border-radius:8px;overflow:hidden;margin-top:10px;"><div id="backtest-progress-fill" style="height:100%;width:{{ backtest_job.percentual or 0 }}%;background:linear-gradient(90deg,#00f2fe,#10b981);transition:width .25s;"></div></div>
+  <div id="backtest-progress-text" style="margin-top:8px;color:#00f2fe;font-weight:800;font-size:11px;">{{ backtest_job.percentual or 0 }}%</div>
+</div>
+<script>
+(function(){
+  const jobId = {{ backtest_job_id|tojson }};
+  if(!jobId) return;
+  const msg = document.getElementById('backtest-progress-message');
+  const fill = document.getElementById('backtest-progress-fill');
+  const pct = document.getElementById('backtest-progress-text');
+  let encerrado = false;
+  async function acompanhar(){
+    if(encerrado) return;
+    try{
+      const r = await fetch('/admin/backtest/status?job=' + encodeURIComponent(jobId), {cache:'no-store'});
+      const d = await r.json();
+      if(!d.ok){ msg.textContent = d.error || 'Não foi possível consultar o progresso.'; return; }
+      const p = Math.max(0, Math.min(100, Number(d.percentual || 0)));
+      fill.style.width = p + '%';
+      pct.textContent = p + '% • ' + (d.mensagem || 'Processando...');
+      msg.textContent = d.mensagem || 'Processando...';
+      if(d.status === 'done'){
+        encerrado = true;
+        window.location.href = '/admin/estatisticas?mercado=' + encodeURIComponent('{{ filtros.mercado }}') + '&ativo=' + encodeURIComponent('{{ filtros.ativo }}') + '&tf=' + encodeURIComponent('{{ filtros.tf }}') + '&estrategia=' + encodeURIComponent('{{ filtros.estrategia }}') + '&gale=' + encodeURIComponent('{{ filtros.gale }}') + '&analisar=1&job=' + encodeURIComponent(jobId);
+        return;
+      }
+      if(d.status === 'error'){
+        encerrado = true;
+        msg.textContent = d.erro || d.mensagem || 'Falha na análise.';
+        pct.textContent = 'ERRO';
+        fill.style.width = '100%';
+        fill.style.background = '#ef4444';
+        return;
+      }
+    }catch(e){
+      msg.textContent = 'Conexão temporariamente indisponível. A análise continua no servidor...';
+    }
+    setTimeout(acompanhar, 900);
+  }
+  acompanhar();
+})();
+</script>
+{% endif %}
 {% if resultado %}
 <div class="grid">
 <div class="metric"><div class="label">Combinações analisadas</div><div class="value cyan">{{resultado.combinacoes}}</div></div>
@@ -466,7 +513,13 @@ label{display:block;color:#94a3b8;font-size:9px;font-weight:800;margin-bottom:5p
 </div>
 <div class="card"><div class="section">📌 MELHOR ESTRATÉGIA POR ATIVO + TIMEFRAME</div>{% if resultado.melhores_por_ativo %}<div class="table-wrap"><table><thead><tr><th>Ativo</th><th>TF</th><th>Estratégia</th><th>Fonte</th><th>Sinais</th><th>WIN</th><th>WIN G1</th><th>RED</th><th>Taxa histórica</th></tr></thead><tbody>{% for r in resultado.melhores_por_ativo %}<tr><td><strong>{{r.ativo}}</strong></td><td>M{{r.tf}}</td><td>{{r.estrategia_nome}}</td><td class="source">{{r.fonte}}</td><td>{{r.total}}</td><td class="green">{{r.wins}}</td><td class="green">{{r.wins_g1}}</td><td class="red">{{r.losses}}</td><td>{{'%.2f'|format(r.winrate)}}%</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="muted">Sem dados reais suficientes.</div>{% endif %}</div>
 {% endif %}
-</div></body></html>
+</div>
+<script>
+// Mantém uma pequena atividade HTTP enquanto a tela de backtest está aberta.
+// O backtest e o bot continuam em threads separadas no servidor.
+setInterval(() => { fetch('/status', {cache:'no-store'}).catch(() => {}); }, 15000);
+</script>
+</body></html>
 """
 
 HTML_TERMOS = """
@@ -2475,8 +2528,29 @@ def nome_fonte_ativo(ativo_nome):
         return "Binance"
     return "Twelve Data"
 
-def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionada, modo_gale="SEM_GALE"):
-    """Executa a análise somente com fontes reais. Sem banco de resultados e sem dados sintéticos."""
+# Jobs de backtest executados em background para nunca bloquear o bot em tempo real.
+BACKTEST_JOBS = {}
+BACKTEST_JOBS_LOCK = threading.Lock()
+BACKTEST_JOB_TTL = 1800
+
+def _atualizar_backtest_job(job_id, **updates):
+    with BACKTEST_JOBS_LOCK:
+        job = BACKTEST_JOBS.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+        job["updated_at"] = time.time()
+
+def _limpar_backtest_jobs():
+    limite = time.time() - BACKTEST_JOB_TTL
+    with BACKTEST_JOBS_LOCK:
+        antigos = [k for k, v in BACKTEST_JOBS.items() if v.get("updated_at", 0) < limite]
+        for k in antigos:
+            BACKTEST_JOBS.pop(k, None)
+
+def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionada, modo_gale="SEM_GALE", progress_callback=None):
+    """Executa a análise somente com fontes reais. Sem banco de resultados e sem dados sintéticos.
+    progress_callback é opcional e permite acompanhar a análise sem bloquear a interface."""
     mercado = str(mercado or "ABERTO").upper()
     ativo = str(ativo or "TODOS").upper()
     tf_selecionado = str(tf_selecionado or "TODOS")
@@ -2500,11 +2574,29 @@ def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionad
     linhas = []
     fontes_indisponiveis = []
     cache = {}
+    unidades_totais = max(1, len(candidatos) * len(tfs))
+    unidades_concluidas = 0
+    if progress_callback:
+        try:
+            progress_callback(0, unidades_totais, "Preparando dados reais...", "INICIANDO")
+        except Exception:
+            pass
     for ativo_nome in candidatos:
         is_otc = "-OTC" in ativo_nome.upper()
         ticker = ativo_nome if is_otc else MAPA_TICKERS.get(ativo_nome)
         fonte = nome_fonte_ativo(ativo_nome)
         for tf in tfs:
+            unidades_concluidas += 1
+            if progress_callback:
+                try:
+                    progress_callback(
+                        unidades_concluidas - 1,
+                        unidades_totais,
+                        f"Obtendo candles reais: {ativo_nome} M{tf}",
+                        "DADOS"
+                    )
+                except Exception:
+                    pass
             chave = (ticker, tf)
             if chave not in cache:
                 cache[chave] = get_data_v2(ticker, tf, velas_minimas=100)
@@ -2524,7 +2616,17 @@ def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionad
                 r = backtest_estrategia(data, estrategia, tf, expiracao_velas=1, modo_gale=modo_gale)
                 if r["total"] == 0:
                     continue
-                linhas.append({"mercado":"ABERTO", "ativo":ativo_nome, "fonte":fonte, "tf":tf, "estrategia":estrategia, "estrategia_nome":NOME_ESTRATEGIAS_DISPLAY.get(estrategia, estrategia), **r})
+                linhas.append({"mercado":("OTC" if is_otc else "ABERTO"), "ativo":ativo_nome, "fonte":fonte, "tf":tf, "estrategia":estrategia, "estrategia_nome":NOME_ESTRATEGIAS_DISPLAY.get(estrategia, estrategia), **r})
+            if progress_callback:
+                try:
+                    progress_callback(
+                        unidades_concluidas,
+                        unidades_totais,
+                        f"Analisado: {ativo_nome} M{tf}",
+                        "ANALISE"
+                    )
+                except Exception:
+                    pass
 
     linhas.sort(key=lambda x: (x["winrate"], x["avaliados"], x["score_medio"]), reverse=True)
     melhores = {}
@@ -2784,6 +2886,70 @@ def admin_panel():
         if now - USUARIOS_ONLINE[u] > 60: del USUARIOS_ONLINE[u]
     return render_template_string(HTML_ADM, lista=carregar_usuarios(), admin=ADMIN_EMAIL, online_count=len(USUARIOS_ONLINE), online_list=USUARIOS_ONLINE.keys())
 
+@app.route('/admin/backtest/status')
+def admin_backtest_status():
+    if session.get('user') != ADMIN_EMAIL:
+        return abort(403)
+    job_id = request.args.get('job', '').strip()
+    _limpar_backtest_jobs()
+    with BACKTEST_JOBS_LOCK:
+        job = dict(BACKTEST_JOBS.get(job_id, {})) if job_id else {}
+    if not job:
+        return jsonify({"ok": False, "status": "not_found", "error": "Análise não encontrada ou expirada."}), 404
+    resultado = job.get("resultado")
+    payload = {
+        "ok": True,
+        "status": job.get("status", "running"),
+        "percentual": job.get("percentual", 0),
+        "concluidas": job.get("concluidas", 0),
+        "total": job.get("total", 0),
+        "mensagem": job.get("mensagem", "Processando..."),
+        "etapa": job.get("etapa", "INICIANDO"),
+        "resultado": resultado,
+        "erro": job.get("erro", "")
+    }
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return response
+
+def _rodar_backtest_em_background(job_id, mercado, ativo, tf, estrategia, modo_gale):
+    try:
+        def progresso(concluidas, total, mensagem, etapa):
+            percentual = int(min(99, round((concluidas / max(1, total)) * 100)))
+            _atualizar_backtest_job(
+                job_id,
+                status="running",
+                percentual=percentual,
+                concluidas=concluidas,
+                total=total,
+                mensagem=mensagem,
+                etapa=etapa
+            )
+
+        resultado = executar_backtest_real(
+            mercado, ativo, tf, estrategia, modo_gale, progress_callback=progresso
+        )
+        _atualizar_backtest_job(
+            job_id,
+            status="done",
+            percentual=100,
+            mensagem="Análise concluída com dados reais.",
+            etapa="CONCLUIDO",
+            resultado=resultado,
+            erro=""
+        )
+    except Exception as exc:
+        logging.exception("Falha no backtest em background")
+        _atualizar_backtest_job(
+            job_id,
+            status="error",
+            percentual=100,
+            mensagem="A análise foi interrompida por um erro.",
+            etapa="ERRO",
+            resultado=None,
+            erro=f"Falha na análise real: {exc}"
+        )
+
 @app.route('/admin/estatisticas')
 def admin_estatisticas():
     if session.get('user') != ADMIN_EMAIL:
@@ -2803,14 +2969,40 @@ def admin_estatisticas():
     if modo_gale not in {'SEM_GALE', 'GALE1'}: modo_gale = 'SEM_GALE'
 
     resultado = None
-    if request.args.get('analisar') == '1':
-        try:
-            resultado = executar_backtest_real(mercado, ativo, tf, estrategia, modo_gale)
-        except Exception as e:
-            logging.exception('Falha no backtest real')
-            resultado = {'combinacoes':0,'sinais':0,'wins':0,'losses':0,'winrate':0.0,'melhor_taxa':0.0,'linhas':[],'melhores_por_ativo':[],'erro':f'Falha na análise real: {e}'}
+    job_id = request.args.get('job', '').strip()
+    job = None
 
-    return render_template_string(HTML_ESTATISTICAS, filtros={'mercado':mercado,'ativo':ativo,'tf':tf,'estrategia':estrategia,'gale':modo_gale}, ativos=ativos, estrategias=estrategias, resultado=resultado)
+    # Nunca executa o backtest pesado dentro da requisição HTTP.
+    # Isso mantém o robô de análise em tempo real independente do backtest.
+    if request.args.get('analisar') == '1' and not job_id:
+        _limpar_backtest_jobs()
+        job_id = str(time.time_ns())
+        with BACKTEST_JOBS_LOCK:
+            BACKTEST_JOBS[job_id] = {
+                "status": "running",
+                "percentual": 0,
+                "concluidas": 0,
+                "total": 0,
+                "mensagem": "Preparando análise com dados reais...",
+                "etapa": "INICIANDO",
+                "resultado": None,
+                "erro": "",
+                "created_at": time.time(),
+                "updated_at": time.time()
+            }
+        threading.Thread(
+            target=_rodar_backtest_em_background,
+            args=(job_id, mercado, ativo, tf, estrategia, modo_gale),
+            daemon=True
+        ).start()
+
+    if job_id:
+        with BACKTEST_JOBS_LOCK:
+            job = dict(BACKTEST_JOBS.get(job_id, {}))
+        if job and job.get("status") == "done":
+            resultado = job.get("resultado")
+
+    return render_template_string(HTML_ESTATISTICAS, filtros={'mercado':mercado,'ativo':ativo,'tf':tf,'estrategia':estrategia,'gale':modo_gale}, ativos=ativos, estrategias=estrategias, resultado=resultado, backtest_job=job, backtest_job_id=job_id)
 
 
 @app.route('/adm/renovar/<email>', methods=['POST'])
@@ -2862,12 +3054,61 @@ def adm_excluir(email):
     excluir_usuario_db(email)
     return redirect('/admin_panel')
 
+def restaurar_estado_da_sessao(user, st):
+    """Reidrata configuração do robô a partir da sessão quando o usuário
+    retorna ao painel ou quando uma requisição chega a outro worker/processo.
+    Não substitui um estado já carregado durante a vida normal do processo."""
+    if not user or not st or st.get("_sessao_hidratada"):
+        return st
+
+    cfg = session.get("vision_bot_config") or {}
+    if isinstance(cfg, dict):
+        try:
+            tf = int(cfg.get("timeframe", st.get("timeframe", 5)))
+            if tf in (1, 5, 15):
+                st["timeframe"] = tf
+        except (TypeError, ValueError):
+            pass
+
+        mercado = str(cfg.get("tipo_mercado", st.get("tipo_mercado", "TODOS"))).upper()
+        if mercado in {"TODOS", "ABERTO_TODOS", "OTC_TODOS", "FOREX_ABERTO", "FOREX_OTC", "CRIPTO_ABERTO", "CRIPTO_OTC"}:
+            st["tipo_mercado"] = mercado
+
+        selecao = cfg.get("ativos_selecionados", st.get("ativos_selecionados", ["TODOS"]))
+        st["ativos_selecionados"] = normalizar_selecao_ativos(selecao)
+        st["ativo_selecionado"] = resumo_selecao_ativos(st["ativos_selecionados"])
+
+        estrategia = str(cfg.get("estrategia", st.get("estrategia", "TODAS"))).upper()
+        if estrategia == "TODAS" or estrategia in LISTA_ESTRATEGIAS or "," in estrategia:
+            st["estrategia"] = estrategia
+
+        if bool(cfg.get("bot_iniciado", False)):
+            st["bot_iniciado"] = True
+            st["bot_pausado"] = bool(cfg.get("bot_pausado", False))
+            if not st["bot_pausado"] and not st.get("inicio_varredura"):
+                st["inicio_varredura"] = time.time() + 1
+
+    st["_sessao_hidratada"] = True
+    return st
+
+def salvar_configuracao_sessao(st):
+    """Persiste somente configuração/estado de execução não sensível na sessão."""
+    session["vision_bot_config"] = {
+        "timeframe": int(st.get("timeframe", 5)),
+        "tipo_mercado": str(st.get("tipo_mercado", "TODOS")),
+        "ativos_selecionados": list(st.get("ativos_selecionados", ["TODOS"])),
+        "estrategia": str(st.get("estrategia", "TODAS")),
+        "bot_iniciado": bool(st.get("bot_iniciado", False)),
+        "bot_pausado": bool(st.get("bot_pausado", True))
+    }
+
 @app.route('/')
 def index():
     if 'user' not in session: return redirect('/login')
     user = session['user']
     USUARIOS_ONLINE[user] = time.time()
     st = get_user_state(user)
+    restaurar_estado_da_sessao(user, st)
     return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], ativo_selecionado=st.get("ativo_selecionado", "TODOS"), ativos_selecionados=st.get("ativos_selecionados", ["TODOS"]), resumo_ativos=resumo_selecao_ativos(st.get("ativos_selecionados", ["TODOS"])), user=user, admin=ADMIN_EMAIL, ATIVOS_BASE=ATIVOS_BASE, ATIVOS_OPERAVEIS=ATIVOS_OPERAVEIS, NOME_ESTRATEGIAS_DISPLAY=NOME_ESTRATEGIAS_DISPLAY, LISTA_ESTRATEGIAS=LISTA_ESTRATEGIAS)
 
 @app.route('/status')
@@ -2877,6 +3118,7 @@ def status():
     USUARIOS_ONLINE[user] = time.time()
     
     st = get_user_state(user)
+    restaurar_estado_da_sessao(user, st)
     usuarios = carregar_usuarios()
     u_info = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
     historico = buscar_historico_bd(user)
@@ -2912,6 +3154,7 @@ def command(cmd):
         return jsonify({"ok": False})
     
     st = get_user_state(user)
+    restaurar_estado_da_sessao(user, st)
 
     if cmd == "toggle_telegram":
         if user != ADMIN_EMAIL:
@@ -2975,6 +3218,7 @@ def command(cmd):
         
         st["ativo_atual"] = "INICIANDO VARREDURA..."
         st["ultimo_sinal"] = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE DINÂMICA</b><br><span style='color:#00f2fe;'>[VARRENDO TODOS OS ATIVOS...]</span></div><div class='tech-scanner'></div>"
+        salvar_configuracao_sessao(st)
         
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
@@ -2993,6 +3237,7 @@ def command(cmd):
         st["bot_pausado"] = not st["bot_pausado"]
         status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if st["bot_pausado"] else f"🔍 ANALISANDO: {st['ativo_atual']} (M{st['timeframe']})"
         st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO 30 VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
+        salvar_configuracao_sessao(st)
         msg_pause = "⏸ <b>SISTEMA PAUSADO</b>" if st["bot_pausado"] else "▶️ <b>SISTEMA RETOMADO!</b>"
         enviar_telegram(msg_pause, user_solicitante=user)
         return jsonify({"ok": True})
@@ -3048,11 +3293,13 @@ def command(cmd):
             f"Assertividade: {stats['winrate']:.1f}%"
             f"</div>"
         )
+        salvar_configuracao_sessao(st)
         enviar_telegram(msg_encerramento, user_solicitante=user)
         return jsonify({"ok": True, "estatisticas": stats})
 
     elif cmd.startswith("tf_"):
         st["timeframe"] = int(cmd.split('_')[1])
+        salvar_configuracao_sessao(st)
     elif cmd.startswith("mkt_"):
         st["tipo_mercado"] = cmd.split('_', 1)[1]
         # Sincroniza o seletor de mercado com os presets de ativos.
@@ -3069,6 +3316,7 @@ def command(cmd):
         st["ativos_selecionados"] = normalizar_selecao_ativos([preset])
         st["ativo_selecionado"] = resumo_selecao_ativos(st["ativos_selecionados"])
         st["sinais_enviados"].clear()
+        salvar_configuracao_sessao(st)
     elif cmd.startswith("ativos_"):
         bruto = cmd.replace("ativos_", "", 1)
         valores = [v.strip().upper() for v in bruto.split(',') if v.strip()]
@@ -3094,6 +3342,7 @@ def command(cmd):
             f"O robô analisará a seleção escolhida."
             f"</div>"
         )
+        salvar_configuracao_sessao(st)
     elif cmd.startswith("ativo_"):
         # Compatibilidade com comandos antigos de seleção de um único ativo.
         ativo_escolhido = cmd.replace("ativo_", "", 1).upper()
@@ -3117,8 +3366,10 @@ def command(cmd):
                 f"O robô analisará somente este ativo."
                 f"</div>"
             )
+            salvar_configuracao_sessao(st)
     elif cmd.startswith("set_est_"):
         st["estrategia"] = cmd.replace("set_est_", "")
+        salvar_configuracao_sessao(st)
     
     return jsonify({"ok": True})
 
