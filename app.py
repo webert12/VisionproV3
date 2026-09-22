@@ -31,7 +31,20 @@ CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "").strip()
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 FLASK_SECRET = os.getenv("FLASK_SECRET", "").strip()
-TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
+TWELVE_DATA_API_KEY = (
+    os.getenv("TWELVE_DATA_API_KEY", "").strip()
+    or os.getenv("TWELVEDATA_API_KEY", "").strip()
+)
+
+def obter_twelve_data_api_key():
+    """Lê a chave da Twelve Data diretamente do ambiente a cada requisição.
+    Aceita os dois nomes usados no Render: TWELVE_DATA_API_KEY e TWELVEDATA_API_KEY.
+    """
+    return (
+        os.getenv("TWELVE_DATA_API_KEY", "").strip()
+        or os.getenv("TWELVEDATA_API_KEY", "").strip()
+        or TWELVE_DATA_API_KEY
+    )
 
 # ================= FONTE OTC DA QUOTEX =================
 # Credenciais somente via variáveis de ambiente do Render.
@@ -339,6 +352,13 @@ HTML_ADM = """
         .offline { background: #475569; color: #cbd5e1; }
     
         .asset-selection-box { background:#08111f; border:1px solid #1e3a4a; border-radius:12px; padding:9px; max-height:330px; overflow-y:auto; }
+        .asset-selection-details { background:#08111f; border:1px solid #1e3a4a; border-radius:10px; overflow:hidden; }
+        .asset-selection-details > summary { list-style:none; cursor:pointer; padding:10px 12px; color:#22d3ee; font-size:10px; font-weight:900; letter-spacing:.2px; }
+        .asset-selection-details > summary::-webkit-details-marker { display:none; }
+        .asset-selection-details > summary::after { content:'▼'; float:right; color:#64748b; transition:transform .15s; }
+        .asset-selection-details[open] > summary::after { transform:rotate(180deg); }
+        #ativos-selecao-resumo-compacto { color:#94a3b8; font-weight:700; margin-left:5px; }
+        .asset-selection-content { padding:0 9px 9px; }
         .asset-category { padding:8px 0 10px; border-bottom:1px solid #172536; }
         .asset-category:last-child { border-bottom:0; }
         .asset-category-title { color:#22d3ee; font-weight:800; font-size:12px; margin-bottom:6px; }
@@ -799,38 +819,43 @@ HTML_INDEX = """
             <div class="settings-grid full">
                 <div class="setting-group">
                     <label>ATIVOS PARA OPERAR</label>
-                    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
-                        <button type="button" class="asset-preset" onclick="selecionarPresetAtivos('TODOS')">🌐 TODOS</button>
-                        <button type="button" class="asset-preset" onclick="selecionarPresetAtivos('ABERTOS')">🟢 ABERTOS</button>
-                        <button type="button" class="asset-preset" onclick="selecionarPresetAtivos('OTC')">🌙 OTC</button>
-                        <button type="button" class="asset-preset" onclick="selecionarPresetAtivos('FOREX')">📈 FOREX</button>
-                        <button type="button" class="asset-preset" onclick="selecionarPresetAtivos('CRIPTO')">🪙 CRIPTO</button>
-                    </div>
-                    <div class="asset-selection-box">
-                        <div class="asset-category">
-                            <div class="asset-category-title">📈 FOREX</div>
-                            <div class="asset-category-actions">
-                                <button type="button" onclick="selecionarPresetAtivos('FOREX_ABERTO')">🟢 Abertos</button>
-                                <button type="button" onclick="selecionarPresetAtivos('FOREX_OTC')">🌙 OTC</button>
+                    <details class="asset-selection-details">
+                        <summary>⚙️ CONFIGURAR ATIVOS <span id="ativos-selecao-resumo-compacto">{{ resumo_ativos }}</span></summary>
+                        <div class="asset-selection-content">
+                            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
+                                <button type="button" class="asset-preset" onclick="selecionarPresetAtivos('TODOS')">🌐 TODOS</button>
+                                <button type="button" class="asset-preset" onclick="selecionarPresetAtivos('ABERTOS')">🟢 ABERTOS</button>
+                                <button type="button" class="asset-preset" onclick="selecionarPresetAtivos('OTC')">🌙 OTC</button>
+                                <button type="button" class="asset-preset" onclick="selecionarPresetAtivos('FOREX')">📈 FOREX</button>
+                                <button type="button" class="asset-preset" onclick="selecionarPresetAtivos('CRIPTO')">🪙 CRIPTO</button>
                             </div>
-                            <div class="asset-list">
-                                {% for a in ATIVOS_BASE['FOREX_ABERTO'] %}<label><input type="checkbox" class="ativo-check" value="{{a}}" {% if a in ativos_selecionados %}checked{% endif %} onchange="alterarAtivosIndividuais()"><span>{{a}} <small>ABERTO</small></span></label>{% endfor %}
-                                {% for a in ATIVOS_BASE['FOREX_OTC'] %}<label><input type="checkbox" class="ativo-check" value="{{a}}" {% if a in ativos_selecionados %}checked{% endif %} onchange="alterarAtivosIndividuais()"><span>{{a}} <small>OTC</small></span></label>{% endfor %}
+                            <div class="asset-selection-box">
+                                <div class="asset-category">
+                                    <div class="asset-category-title">📈 FOREX</div>
+                                    <div class="asset-category-actions">
+                                        <button type="button" onclick="selecionarPresetAtivos('FOREX_ABERTO')">🟢 Abertos</button>
+                                        <button type="button" onclick="selecionarPresetAtivos('FOREX_OTC')">🌙 OTC</button>
+                                    </div>
+                                    <div class="asset-list">
+                                        {% for a in ATIVOS_BASE['FOREX_ABERTO'] %}<label><input type="checkbox" class="ativo-check" value="{{a}}" {% if a in ativos_selecionados %}checked{% endif %} onchange="alterarAtivosIndividuais()"><span>{{a}} <small>ABERTO</small></span></label>{% endfor %}
+                                        {% for a in ATIVOS_BASE['FOREX_OTC'] %}<label><input type="checkbox" class="ativo-check" value="{{a}}" {% if a in ativos_selecionados %}checked{% endif %} onchange="alterarAtivosIndividuais()"><span>{{a}} <small>OTC</small></span></label>{% endfor %}
+                                    </div>
+                                </div>
+                                <div class="asset-category">
+                                    <div class="asset-category-title">🪙 CRIPTOMOEDAS</div>
+                                    <div class="asset-category-actions">
+                                        <button type="button" onclick="selecionarPresetAtivos('CRIPTO_ABERTO')">🟢 Abertas</button>
+                                        <button type="button" onclick="selecionarPresetAtivos('CRIPTO_OTC')">🌙 OTC</button>
+                                    </div>
+                                    <div class="asset-list">
+                                        {% for a in ATIVOS_BASE['CRIPTO_ABERTO'] %}<label><input type="checkbox" class="ativo-check" value="{{a}}" {% if a in ativos_selecionados %}checked{% endif %} onchange="alterarAtivosIndividuais()"><span>{{a}} <small>ABERTO</small></span></label>{% endfor %}
+                                        {% for a in ATIVOS_BASE['CRIPTO_OTC'] %}<label><input type="checkbox" class="ativo-check" value="{{a}}" {% if a in ativos_selecionados %}checked{% endif %} onchange="alterarAtivosIndividuais()"><span>{{a}} <small>OTC</small></span></label>{% endfor %}
+                                    </div>
+                                </div>
                             </div>
+                            <div id="ativos-selecao-resumo" style="font-size:10px;color:#94a3b8;margin-top:7px;line-height:1.4;">Seleção: <b style="color:#22d3ee;">{{ resumo_ativos }}</b></div>
                         </div>
-                        <div class="asset-category">
-                            <div class="asset-category-title">🪙 CRIPTOMOEDAS</div>
-                            <div class="asset-category-actions">
-                                <button type="button" onclick="selecionarPresetAtivos('CRIPTO_ABERTO')">🟢 Abertas</button>
-                                <button type="button" onclick="selecionarPresetAtivos('CRIPTO_OTC')">🌙 OTC</button>
-                            </div>
-                            <div class="asset-list">
-                                {% for a in ATIVOS_BASE['CRIPTO_ABERTO'] %}<label><input type="checkbox" class="ativo-check" value="{{a}}" {% if a in ativos_selecionados %}checked{% endif %} onchange="alterarAtivosIndividuais()"><span>{{a}} <small>ABERTO</small></span></label>{% endfor %}
-                                {% for a in ATIVOS_BASE['CRIPTO_OTC'] %}<label><input type="checkbox" class="ativo-check" value="{{a}}" {% if a in ativos_selecionados %}checked{% endif %} onchange="alterarAtivosIndividuais()"><span>{{a}} <small>OTC</small></span></label>{% endfor %}
-                            </div>
-                        </div>
-                    </div>
-                    <div id="ativos-selecao-resumo" style="font-size:10px;color:#94a3b8;margin-top:7px;line-height:1.4;">Seleção: <b style="color:#22d3ee;">{{ resumo_ativos }}</b> • Você pode escolher 1, vários ou qualquer combinação de Forex/Cripto, Aberto/OTC.</div>
+                    </details>
                 </div>
             </div>
             
@@ -978,10 +1003,15 @@ HTML_INDEX = """
             const el = document.getElementById('ativos-selecao-resumo');
             if (!el) return;
             if (!valores || valores.length === 0) {
-                el.innerHTML = 'Seleção: <b style="color:#f59e0b;">TODOS</b> • Você pode escolher 1, vários ou qualquer combinação de Forex/Cripto, Aberto/OTC.';
+                el.innerHTML = 'Seleção: <b style="color:#f59e0b;">TODOS</b>';
+                const compact = document.getElementById('ativos-selecao-resumo-compacto');
+                if (compact) compact.textContent = 'TODOS';
                 return;
             }
-            el.innerHTML = 'Seleção: <b style="color:#22d3ee;">' + (valores.length === 1 ? valores[0] : valores.length + ' ATIVOS SELECIONADOS') + '</b> • Você pode escolher 1, vários ou qualquer combinação de Forex/Cripto, Aberto/OTC.';
+            const resumo = valores.length === 1 ? valores[0] : valores.length + ' ATIVOS SELECIONADOS';
+            el.innerHTML = 'Seleção: <b style="color:#22d3ee;">' + resumo + '</b>';
+            const compact = document.getElementById('ativos-selecao-resumo-compacto');
+            if (compact) compact.textContent = resumo;
         }
 
         function enviarSelecaoAtivos(valores) {
@@ -1728,7 +1758,8 @@ def _simbolo_twelve_data(ticker):
 
 def _buscar_twelve_data(ticker, tf, velas_minimas):
     """Busca candles Forex reais pela Twelve Data usando a chave do Render."""
-    if not TWELVE_DATA_API_KEY:
+    api_key = obter_twelve_data_api_key()
+    if not api_key:
         return None
 
     simbolo = _simbolo_twelve_data(ticker)
@@ -1746,7 +1777,7 @@ def _buscar_twelve_data(ticker, tf, velas_minimas):
                 "outputsize": max(100, min(5000, velas_minimas + 30)),
                 "timezone": "UTC",
                 "order": "asc",
-                "apikey": TWELVE_DATA_API_KEY
+                "apikey": api_key
             },
             headers={"User-Agent": "Vision-Trade-PRO-V3"},
             timeout=7.0
@@ -2602,8 +2633,8 @@ def executar_backtest_real(mercado, ativo, tf_selecionado, estrategia_selecionad
                 cache[chave] = get_data_v2(ticker, tf, velas_minimas=100)
             data = cache[chave]
             if data is None:
-                if fonte == "Twelve Data" and not TWELVE_DATA_API_KEY:
-                    motivo = "TWELVE_DATA_API_KEY não configurada no Render"
+                if fonte == "Twelve Data" and not obter_twelve_data_api_key():
+                    motivo = "Chave da Twelve Data não configurada no Render. Use TWELVE_DATA_API_KEY ou TWELVEDATA_API_KEY."
                 elif fonte == "Twelve Data":
                     motivo = "Twelve Data não retornou candles válidos; verifique créditos/limite da API e a chave configurada"
                 elif fonte == "Quotex OTC":
