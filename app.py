@@ -23,11 +23,23 @@ def agora_brasilia():
     return datetime.now(FUSO_SP)
 
 # ================= CONFIGURAÇÕES DE AMBIENTE E BOT TELEGRAM =================
-TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "").strip()
-CHAT_ID_TELEGRAM = os.getenv("CHAT_ID_TELEGRAM", "-1002979466366")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@vision.com").strip().lower()
+def _required_env(name, aliases=()):
+    value = os.getenv(name)
+    if not value:
+        for alias in aliases:
+            value = os.getenv(alias)
+            if value:
+                break
+    if not value or not value.strip():
+        raise RuntimeError(f"Variável de ambiente obrigatória não configurada: {name}")
+    return value.strip()
 
-DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL", "").strip()
+# Dados sensíveis ficam EXCLUSIVAMENTE nas Environment Variables do Render.
+# Não existe fallback de token, chat ID, e-mail administrativo ou chave secreta no código.
+TOKEN_TELEGRAM = _required_env("TOKEN_TELEGRAM")
+CHAT_ID_TELEGRAM = _required_env("CHAT_ID_TELEGRAM")
+ADMIN_EMAIL = _required_env("ADMIN_EMAIL").lower()
+DB_URL = _required_env("DB_URL", aliases=("DATABASE_URL",))
 
 def get_db_connection():
     if not DB_URL:
@@ -134,7 +146,7 @@ def deletar_mensagem_atrasada(msg_id, delay):
     deletar_mensagem_telegram(msg_id)
 
 # ================= SERVIDOR FLASK =================
-APP_SECRET = os.getenv("FLASK_SECRET", "chave_secreta_vision_pro_ultra_premium_v3_security")
+APP_SECRET = _required_env("FLASK_SECRET")
 app = Flask(__name__)
 app.secret_key = APP_SECRET
 log = logging.getLogger('werkzeug')
@@ -640,10 +652,56 @@ HTML_INDEX = """
             });
         }
 
+        let timerState = { candleEnd: 0, entryEnd: 0, running: false, entryTime: null, aguardando: false };
+        let serverClockOffset = 0;
+
+        function formatarContagem(segundos) {
+            const total = Math.max(0, Math.ceil(Number(segundos) || 0));
+            const m = Math.floor(total / 60);
+            const sec = total % 60;
+            return String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+        }
+
+        function atualizarRelogios() {
+            const agora = (Date.now() / 1000) + serverClockOffset;
+            const candleEl = document.getElementById('candle-timer');
+            if (candleEl) {
+                candleEl.innerText = timerState.running
+                    ? ('⏳ FECHAMENTO DO CANDLE: ' + formatarContagem(timerState.candleEnd - agora))
+                    : '⏸ CANDLE: PAUSADO';
+            }
+
+            const entryEl = document.getElementById('entry-timer');
+            const clockEl = document.getElementById('entry-clock');
+            if (entryEl && clockEl) {
+                const restante = timerState.entryEnd ? (timerState.entryEnd - agora) : 0;
+                if (timerState.entryTime && restante > 0) {
+                    entryEl.innerText = '🎯 ENTRADA EM: ' + formatarContagem(restante);
+                    clockEl.innerText = '⏰ HORÁRIO EXATO DA ENTRADA: ' + timerState.entryTime;
+                } else if (timerState.entryTime && timerState.aguardando) {
+                    entryEl.innerText = '🎯 ENTRADA CONFIRMADA — EXECUTE NO HORÁRIO INDICADO';
+                    clockEl.innerText = '⏰ HORÁRIO DA ENTRADA: ' + timerState.entryTime;
+                } else {
+                    entryEl.innerText = '🎯 AGUARDANDO SINAL DE ENTRADA';
+                    clockEl.innerText = 'Horário exato: --:--:--';
+                }
+            }
+        }
+
+        setInterval(atualizarRelogios, 1000);
+
         async function atualizarPainel() {
             try {
                 const r = await fetch('/status', { cache: 'no-store' });
                 const data = await r.json();
+                // Sincroniza os relógios com o servidor apenas quando chega um novo estado.
+                serverClockOffset = Number(data.server_now || (Date.now() / 1000)) - (Date.now() / 1000);
+                timerState.running = !!data.rodando;
+                timerState.candleEnd = Number(data.candle_end_ts || 0);
+                timerState.entryEnd = data.entry_end_ts ? Number(data.entry_end_ts) : 0;
+                timerState.entryTime = data.entry_time || null;
+                timerState.aguardando = !!data.aguardando;
+                atualizarRelogios();
                 const panel = document.getElementById('panel-text');
                 if(panel && data.html) panel.innerHTML = data.html;
                 if(document.getElementById('win-count')) document.getElementById('win-count').innerText = data.wins;
@@ -658,25 +716,6 @@ HTML_INDEX = """
                         document.getElementById('current-asset').innerText = data.ativo_atual || "VARRENDO...";
                     } else {
                         document.getElementById('current-asset').innerText = "SISTEMA PAUSADO";
-                    }
-                }
-                if(document.getElementById('candle-timer')) {
-                    const total = Math.max(0, Number(data.candle_remaining || 0));
-                    const m = Math.floor(total / 60); const sec = Math.floor(total % 60);
-                    document.getElementById('candle-timer').innerText = data.rodando ? ('⏳ FECHAMENTO DO CANDLE: ' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0')) : '⏸ CANDLE: PAUSADO';
-                }
-                if(document.getElementById('entry-timer')) {
-                    const entry = Math.max(0, Number(data.entry_remaining || 0));
-                    if(data.entry_time && entry > 0) {
-                        const em = Math.floor(entry / 60), es = Math.floor(entry % 60);
-                        document.getElementById('entry-timer').innerText = '🎯 ENTRADA EM: ' + String(em).padStart(2,'0') + ':' + String(es).padStart(2,'0');
-                        document.getElementById('entry-clock').innerText = '⏰ HORÁRIO EXATO DA ENTRADA: ' + data.entry_time;
-                    } else if(data.entry_time && data.aguardando) {
-                        document.getElementById('entry-timer').innerText = '🎯 ENTRADA CONFIRMADA — EXECUTE NO HORÁRIO INDICADO';
-                        document.getElementById('entry-clock').innerText = '⏰ HORÁRIO DA ENTRADA: ' + data.entry_time;
-                    } else {
-                        document.getElementById('entry-timer').innerText = '🎯 AGUARDANDO SINAL DE ENTRADA';
-                        document.getElementById('entry-clock').innerText = 'Horário exato: --:--:--';
                     }
                 }
 
@@ -698,8 +737,9 @@ HTML_INDEX = """
             } catch (err) {
                 console.warn('Falha ao atualizar o painel:', err);
             } finally {
-                // Nova consulta 250ms após a resposta, sem acumular requisições.
-                setTimeout(atualizarPainel, 250);
+                // Atualiza dados do painel sem usar a consulta HTTP como relógio.
+                // Os cronômetros continuam correndo localmente de 1 em 1 segundo.
+                setTimeout(atualizarPainel, 1000);
             }
         }
 
@@ -1039,16 +1079,16 @@ ATIVOS_BASE = {
         "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCAD", "EURCHF"
     ],
     "CRIPTO_ABERTO": [
-        "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "ADAUSD", "AVAXUSD",
-        "LINKUSD", "DOGEUSD", "DOTUSD", "MATICUSD", "LTCUSD", "SHIBUSD", "TRXUSD"
+        "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "AVAXUSD",
+        "LINKUSD", "DOGEUSD", "DOTUSD", "LTCUSD", "SHIBUSD", "TRXUSD"
     ],
     "FOREX_OTC": [
         "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC", "USDCAD-OTC", "USDCHF-OTC", "NZDUSD-OTC",
         "EURGBP-OTC", "EURJPY-OTC", "GBPJPY-OTC", "AUDJPY-OTC", "EURAUD-OTC", "EURCAD-OTC", "EURCHF-OTC"
     ],
     "CRIPTO_OTC": [
-        "BTCUSD-OTC", "ETHUSD-OTC", "SOLUSD-OTC", "BNBUSD-OTC", "XRPUSD-OTC", "ADAUSD-OTC", "AVAXUSD-OTC",
-        "LINKUSD-OTC", "DOGEUSD-OTC", "DOTUSD-OTC", "MATICUSD-OTC", "LTCUSD-OTC", "SHIBUSD-OTC", "TRXUSD-OTC"
+        "BTCUSD-OTC", "ETHUSD-OTC", "SOLUSD-OTC", "BNBUSD-OTC", "XRPUSD-OTC", "AVAXUSD-OTC",
+        "LINKUSD-OTC", "DOGEUSD-OTC", "DOTUSD-OTC", "LTCUSD-OTC", "SHIBUSD-OTC", "TRXUSD-OTC"
     ]
 }
 
@@ -1451,8 +1491,11 @@ def status():
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
         "notificacao": st["notificacao"],
         "timeframe": st["timeframe"],
-        "candle_remaining": max(0, int((st["timeframe"] * 60) - (time.time() % (st["timeframe"] * 60)))),
-        "entry_remaining": max(0, round((st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp() - time.time(), 1)) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else 0,
+        "server_now": time.time(),
+        "candle_end_ts": (math.floor(time.time() / (st["timeframe"] * 60)) + 1) * (st["timeframe"] * 60),
+        "candle_remaining": max(0.0, ((math.floor(time.time() / (st["timeframe"] * 60)) + 1) * (st["timeframe"] * 60)) - time.time()),
+        "entry_end_ts": (((st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else None),
+        "entry_remaining": max(0.0, (st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp() - time.time()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else 0,
         "entry_time": ((st.get("alerta_ativo") or {}).get("str_entrada") if st.get("alerta_ativo") else (re.search(r"ENTRADA:</b> ([0-9:]+)", st.get("sinal_permanente") or "") or [None, None])[1])
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
