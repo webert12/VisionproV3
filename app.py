@@ -69,6 +69,9 @@ def get_user_state(email):
             "sinais_enviados": {},
             "alerta_ativo": None,  # Guarda informações do alerta ativo no ciclo
             "timer_confirmacao": None,  # Timer independente para não depender da varredura
+            "telegram_alert_status": {},  # status dos alertas Telegram: active/cancelled
+            "ultima_confirmacao_msg_id": None,  # última confirmação enviada ao Telegram
+            "ultima_confirmacao_alert_id": None,
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
             "candle_remaining": 0,
@@ -1546,6 +1549,9 @@ def command(cmd):
                 pass
         st["timer_confirmacao"] = None
         st["alerta_ativo"] = None
+        st["telegram_alert_status"] = {}
+        st["ultima_confirmacao_msg_id"] = None
+        st["ultima_confirmacao_alert_id"] = None
         st["sessao_resultados"] = []
         st["inicio_varredura"] = time.time() + 2 
         st["sinais_enviados"].clear() 
@@ -1584,8 +1590,7 @@ def command(cmd):
             except Exception:
                 pass
         st["timer_confirmacao"] = None
-        if st.get("alerta_ativo") and st["alerta_ativo"].get("msg_id"):
-            deletar_mensagem_telegram(st["alerta_ativo"]["msg_id"])
+        cancelar_alerta_telegram(st, st.get("alerta_ativo"))
         st["alerta_ativo"] = None
         # Envia o fechamento ANTES de limpar os resultados da sessão.
         enviar_telegram(mensagem_encerramento_sessao(st), user_solicitante=user)
@@ -1677,6 +1682,14 @@ def resultado(res):
     user = session.get('user')
     if user:
         st = get_user_state(user)
+        # Capture references before the panel clears the active signal.
+        alerta_atual = st.get("alerta_ativo")
+        confirmacao_msg_id = st.get("ultima_confirmacao_msg_id")
+
+        if res in ("win", "g1", "red", "pular"):
+            # Qualquer resultado encerra o ciclo do alerta atual.
+            cancelar_alerta_telegram(st, alerta_atual)
+
         if res == 'win':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "Win")
@@ -1693,8 +1706,18 @@ def resultado(res):
             registrar_resultado_sessao(st, "red")
             enviar_telegram(mensagem_resultado_telegram(st, "red"), user_solicitante=user)
         elif res == 'pular':
-            atualizar_ultimo_sinal_bd(user, "Ignorado")
-            enviar_telegram("⚠️ <b>SINAL IGNORADO / PULADO</b>", user_solicitante=user)
+            # Se o sinal já foi confirmado, apagar a confirmação anterior.
+            if confirmacao_msg_id:
+                deletar_mensagem_telegram(confirmacao_msg_id)
+                st["ultima_confirmacao_msg_id"] = None
+                st["ultima_confirmacao_alert_id"] = None
+
+            # O aviso de PULADO permanece somente por 5 segundos.
+            enviar_telegram(
+                "⚠️ <b>SINAL IGNORADO / PULADO</b>",
+                auto_delete=5,
+                user_solicitante=user
+            )
 
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
@@ -1710,9 +1733,13 @@ def resultado(res):
     
     return redirect('/')
 
+
 # ================= ENVIO TELEGRAM ASSÍNCRONO =================
 def enviar_telegram_em_background(mensagem, user_email, alert_id=None, deletar_msg_id=None, st=None):
-    """Executa operações do Telegram fora do loop de análise."""
+    """Envia alerta em background e evita que um alerta cancelado reapareça.
+    Se o alerta for cancelado durante o envio, a mensagem recém-enviada é
+    apagada imediatamente para manter o Telegram sincronizado com o painel.
+    """
     def worker():
         try:
             if deletar_msg_id:
@@ -1720,21 +1747,40 @@ def enviar_telegram_em_background(mensagem, user_email, alert_id=None, deletar_m
                     deletar_mensagem_telegram(deletar_msg_id)
                 except Exception as e:
                     print(f"⚠️ Falha ao deletar alerta antigo no Telegram: {e}")
-            # Se o alerta já foi substituído enquanto o Telegram estava processando,
-            # não envia a mensagem antiga.
+
             if st is not None and alert_id is not None:
-                atual = st.get("alerta_ativo")
-                if atual and atual.get("alert_id") != alert_id:
-                    return
+                st.setdefault("telegram_alert_status", {})[alert_id] = "active"
 
             novo_id = enviar_telegram(mensagem, auto_delete=None, user_solicitante=user_email)
+            if not novo_id:
+                return
+
             if st is not None and alert_id is not None:
+                status = st.setdefault("telegram_alert_status", {}).get(alert_id, "cancelled")
                 atual = st.get("alerta_ativo")
-                if atual and atual.get("alert_id") == alert_id:
-                    atual["msg_id"] = novo_id
+                if status != "active" or (atual and atual.get("alert_id") != alert_id):
+                    # O alerta foi confirmado, pulado, substituído ou cancelado
+                    # enquanto a requisição ao Telegram estava em andamento.
+                    deletar_mensagem_telegram(novo_id)
+                    return
+                atual["msg_id"] = novo_id
         except Exception as e:
             print(f"⚠️ Erro no envio Telegram em background: {e}")
     threading.Thread(target=worker, daemon=True).start()
+
+
+def cancelar_alerta_telegram(st, alerta=None):
+    """Cancela e apaga o alerta/pre-alerta atual do Telegram."""
+    alerta = alerta or st.get("alerta_ativo")
+    if not alerta:
+        return
+    alert_id = alerta.get("alert_id")
+    if alert_id:
+        st.setdefault("telegram_alert_status", {})[alert_id] = "cancelled"
+    msg_id = alerta.get("msg_id")
+    if msg_id:
+        deletar_mensagem_telegram(msg_id)
+
 
 
 # ================= CONFIRMAÇÃO PRECISA DO SINAL =================
@@ -1762,6 +1808,15 @@ def confirmar_alerta_agendado(user_email, alert_id):
         prob = alerta["probabilidade"]
         tf = alerta["tf"]
         str_entrada = alerta["str_entrada"]
+        alerta_msg_id = alerta.get("msg_id")
+        alerta_id_atual = alerta.get("alert_id")
+
+        # A confirmação substitui o alerta: o pré-alerta precisa desaparecer
+        # do Telegram no momento em que a entrada é confirmada.
+        if alerta_id_atual:
+            st.setdefault("telegram_alert_status", {})[alerta_id_atual] = "cancelled"
+        if alerta_msg_id:
+            deletar_mensagem_telegram(alerta_msg_id)
 
         cor_direcao = "#10b981" if sinal == "CALL" else "#ef4444"
 
@@ -1809,9 +1864,13 @@ def confirmar_alerta_agendado(user_email, alert_id):
             except Exception as e:
                 print(f"⚠️ Erro ao registrar sinal confirmado: {e}")
             try:
-                enviar_telegram(
+                msg_id_confirmacao = enviar_telegram(
                     _msg, auto_delete=None, user_solicitante=_user
                 )
+                if msg_id_confirmacao:
+                    st_local = get_user_state(_user)
+                    st_local["ultima_confirmacao_msg_id"] = msg_id_confirmacao
+                    st_local["ultima_confirmacao_alert_id"] = alerta_id_atual
             except Exception as e:
                 print(f"⚠️ Erro ao enviar confirmação Telegram: {e}")
 
@@ -1971,6 +2030,8 @@ def bot_loop():
                                     )
 
                                     # Troca o alerta no painel imediatamente.
+                                    st["ultima_confirmacao_msg_id"] = None
+                                    st["ultima_confirmacao_alert_id"] = None
                                     st["alerta_ativo"] = {
                                         "ativo": ativo,
                                         "sinal": sinal_encontrado,
@@ -2041,6 +2102,8 @@ def bot_loop():
                                 
                                 novo_alert_id = str(time.time_ns())
 
+                                st["ultima_confirmacao_msg_id"] = None
+                                st["ultima_confirmacao_alert_id"] = None
                                 st["alerta_ativo"] = {
                                     "ativo": ativo,
                                     "sinal": sinal_encontrado,
