@@ -58,7 +58,8 @@ def get_user_state(email):
             "alerta_ativo": None,  # Guarda informações do alerta ativo no ciclo
             "timer_confirmacao": None,  # Timer independente para não depender da varredura
             "notificacao": None,
-            "notificacao_ultima_hora": 0.0
+            "notificacao_ultima_hora": 0.0,
+            "candle_remaining": 0
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -69,6 +70,12 @@ def get_client_ip():
 
 # ================= ENVIO E DELEÇÃO TELEGRAM =================
 def enviar_telegram(mensagem, auto_delete=None, user_solicitante=None):
+    # Telegram só pode ser usado quando o ADM ativou o envio e somente para mensagens
+    # originadas da sessão administrativa. Usuários comuns nunca enviam ao Telegram.
+    if user_solicitante and user_solicitante.strip().lower() != ADMIN_EMAIL:
+        return None
+    if not telegram_envio_ativo():
+        return None
     if not TOKEN_TELEGRAM or not CHAT_ID_TELEGRAM:
         print("⚠️ Telegram: TOKEN_TELEGRAM ou CHAT_ID_TELEGRAM não configurado.")
         return None
@@ -164,6 +171,11 @@ HTML_ADM = """
                 el.style.display = "block";
             }
         }
+    function renovarCustom(email, idx) {
+            const meses = parseInt(document.getElementById('meses-'+idx).value || '0', 10);
+            if (!meses || meses < 1 || meses > 120) { alert('Informe de 1 a 120 meses.'); return; }
+            location.href = '/adm/renovar/' + encodeURIComponent(email) + '/' + meses;
+        }
     </script>
 </head>
 <body>
@@ -195,11 +207,18 @@ HTML_ADM = """
                 <input type="hidden" name="email_original" value="{{ email }}">
                 <b>E-mail:</b> <input type="text" name="novo_email" value="{{ email }}">
                 <b>Nova Senha (deixe em branco para manter):</b> <input type="password" name="nova_senha" placeholder="Alterar senha...">
-                <b>Expira em:</b> {{ info.criado_em }}<br><br>
+                <b>Expira em:</b> {{ info.expira_em or info.criado_em }}<br>
+                <b>Status:</b> {% if info.bloqueado %}<span style="color:#ef4444;">BLOQUEADO</span>{% else %}<span style="color:#10b981;">LIBERADO</span>{% endif %}<br><br>
                 <button type="submit" class="btn-adm blue">SALVAR ALTERAÇÕES</button>
-                <a href="/adm/renovar/{{ email }}" class="btn-adm green">RENOVAR +30 DIAS</a>
+                <a href="/adm/renovar/{{ email }}/1" class="btn-adm green">+1 MÊS</a>
+                <a href="/adm/renovar/{{ email }}/3" class="btn-adm green">+3 MESES</a>
+                <a href="/adm/renovar/{{ email }}/6" class="btn-adm green">+6 MESES</a>
+                <a href="/adm/renovar/{{ email }}/12" class="btn-adm green">+12 MESES</a>
                 <a href="/adm/liberar_ip/{{ email }}" class="btn-adm orange">LIBERAR DISPOSITIVOS / IPS</a>
+                <input type="number" min="1" max="120" id="meses-{{ loop.index }}" placeholder="Meses personalizados">
+                <button type="button" class="btn-adm blue" onclick="renovarCustom('{{ email }}', {{ loop.index }})">RENOVAR MESES</button>
                 {% if email != admin %}
+                {% if info.bloqueado %}<a href="/adm/bloquear/{{ email }}/liberar" class="btn-adm blue">DESBLOQUEAR</a>{% else %}<a href="/adm/bloquear/{{ email }}/bloquear" class="btn-adm red" onclick="return confirm('Bloquear este usuário?')">BLOQUEAR</a>{% endif %}
                 <a href="/adm/excluir/{{ email }}" class="btn-adm red" onclick="return confirm('Excluir?')">EXCLUIR</a>
                 {% endif %}
             </form>
@@ -405,8 +424,17 @@ HTML_INDEX = """
             <a href="/logout" class="btn-logout">SAIR</a>
         </div>
 
-        <button class="btn-notify" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
-        <button class="btn-test-tg" onclick="sendCommand('test_telegram')">🧪 TESTAR CONEXÃO TELEGRAM</button>
+        <div class="tools-box">
+            <button class="btn-notify" onclick="toggleFerramentas()">⚙️ FERRAMENTAS E NOTIFICAÇÕES</button>
+            <div id="ferramentas-box" style="display:none;">
+                <button class="btn-notify" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
+                {% if user == admin %}
+                <button class="btn-test-tg" onclick="sendCommand('test_telegram')">🧪 TESTAR CONEXÃO TELEGRAM</button>
+                <button class="btn-test-tg" id="btn-telegram-toggle" onclick="toggleTelegram()">{{ '🟢 ENVIO TELEGRAM ATIVADO' if telegram_ativo else '🔴 ENVIO TELEGRAM DESATIVADO' }}</button>
+                <div style="font-size:10px;color:#94a3b8;text-align:center;margin:6px 0 10px;">Quando ativado pelo ADM, somente mensagens da sessão ADM são enviadas ao Telegram.</div>
+                {% endif %}
+            </div>
+        </div>
 
         <div class="placar-card">
             <div class="placar-grid">
@@ -607,6 +635,20 @@ HTML_INDEX = """
             }
         }
 
+        function toggleFerramentas() {
+            const box = document.getElementById('ferramentas-box');
+            box.style.display = box.style.display === 'block' ? 'none' : 'block';
+        }
+
+        function toggleTelegram() {
+            fetch('/command/telegram_toggle').then(r => r.json()).then(data => {
+                if (data.ok) {
+                    const b = document.getElementById('btn-telegram-toggle');
+                    b.innerText = data.telegram_ativo ? '🟢 ENVIO TELEGRAM ATIVADO' : '🔴 ENVIO TELEGRAM DESATIVADO';
+                } else if (data.error) alert(data.error);
+            });
+        }
+
         function sendCommand(cmd) {
             fetch('/command/' + cmd).then(r => r.json()).then(data => {
                 if(data.redirect) window.location.href = data.redirect;
@@ -632,6 +674,11 @@ HTML_INDEX = """
                     } else {
                         document.getElementById('current-asset').innerText = "SISTEMA PAUSADO";
                     }
+                }
+                if(document.getElementById('candle-timer')) {
+                    const total = Number(data.candle_remaining || 0);
+                    const m = Math.floor(total / 60); const sec = total % 60;
+                    document.getElementById('candle-timer').innerText = data.rodando ? ('⏳ FECHAMENTO DO CANDLE: ' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0')) : '⏸ CANDLE: PAUSADO';
                 }
 
                 if(data.notificacao && data.notificacao.id !== lastNotifId) {
@@ -688,6 +735,16 @@ def init_db():
             );
             
             ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ips_autorizados VARCHAR(255) DEFAULT '[]';
+            ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS expira_em DATE;
+            ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS bloqueado BOOLEAN DEFAULT FALSE;
+            UPDATE usuarios SET expira_em = COALESCE(expira_em, (criado_em::date + INTERVAL '30 days')::date);
+
+            CREATE TABLE IF NOT EXISTS sistema_config (
+                chave VARCHAR(100) PRIMARY KEY,
+                valor VARCHAR(255) NOT NULL
+            );
+            INSERT INTO sistema_config (chave, valor) VALUES ('telegram_envio_ativo', '0')
+            ON CONFLICT (chave) DO NOTHING;
 
             CREATE TABLE IF NOT EXISTS historico_sinais (
                 id SERIAL PRIMARY KEY,
@@ -713,6 +770,27 @@ def parse_ips(ips_raw):
         return json.loads(ips_raw)
     except Exception:
         return []
+
+def telegram_envio_ativo():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT valor FROM sistema_config WHERE chave = %s;", ("telegram_envio_ativo",))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        return bool(row and str(row[0]).lower() in ("1", "true", "on", "sim"))
+    except Exception:
+        return False
+
+def definir_telegram_envio(ativo):
+    try:
+        conn = get_db_connection(); cur = conn.cursor()
+        cur.execute("INSERT INTO sistema_config (chave, valor) VALUES (%s,%s) ON CONFLICT (chave) DO UPDATE SET valor=EXCLUDED.valor;", ("telegram_envio_ativo", "1" if ativo else "0"))
+        conn.commit(); cur.close(); conn.close()
+        return True
+    except Exception as e:
+        print(f"Erro ao alterar trava Telegram: {e}")
+        return False
 
 def carregar_usuarios():
     try:
@@ -747,12 +825,12 @@ def salvar_usuario(email, senha, data=None, ip_inicial=None):
         conn = get_db_connection()
         cur = conn.cursor()
         query = """
-            INSERT INTO usuarios (email, senha, criado_em, wins, reds, winrate, ips_autorizados)
-            VALUES (%s, %s, %s, 0, 0, 0.0, %s)
+            INSERT INTO usuarios (email, senha, criado_em, expira_em, bloqueado, wins, reds, winrate, ips_autorizados)
+            VALUES (%s, %s, %s, (%s::date + INTERVAL '30 days')::date, FALSE, 0, 0, 0.0, %s)
             ON CONFLICT (email) DO UPDATE 
             SET senha = EXCLUDED.senha;
         """
-        cur.execute(query, (email_clean, senha_hash, data_criacao, ips))
+        cur.execute(query, (email_clean, senha_hash, data_criacao, data_criacao, ips))
         conn.commit()
         cur.close()
         conn.close()
@@ -828,17 +906,38 @@ def zerar_estatisticas_usuario(email):
     except Exception:
         pass
 
-def renovar_usuario_db(email):
+def renovar_usuario_db(email, meses=1):
     try:
-        hoje = agora_brasilia().strftime("%Y-%m-%d")
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("UPDATE usuarios SET criado_em = %s WHERE email = %s;", (hoje, email.strip().lower()))
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception:
-        pass
+        meses = max(1, min(int(meses), 120))
+        dias = meses * 30
+        email_clean = email.strip().lower()
+        conn = get_db_connection(); cur = conn.cursor()
+        cur.execute("SELECT expira_em FROM usuarios WHERE email = %s;", (email_clean,))
+        row = cur.fetchone()
+        hoje = agora_brasilia().date()
+        if row and row[0]:
+            base = row[0] if row[0] > hoje else hoje
+        else:
+            base = hoje
+        nova_data = base + timedelta(days=dias)
+        cur.execute("UPDATE usuarios SET expira_em = %s, bloqueado = FALSE WHERE email = %s;", (nova_data, email_clean))
+        conn.commit(); cur.close(); conn.close()
+        return nova_data
+    except Exception as e:
+        print(f"Erro ao renovar usuário: {e}")
+        return None
+
+def bloquear_usuario_db(email, bloqueado=True):
+    try:
+        email_clean = email.strip().lower()
+        if email_clean == ADMIN_EMAIL: return False
+        conn = get_db_connection(); cur = conn.cursor()
+        cur.execute("UPDATE usuarios SET bloqueado = %s WHERE email = %s;", (bool(bloqueado), email_clean))
+        conn.commit(); cur.close(); conn.close()
+        return True
+    except Exception as e:
+        print(f"Erro ao bloquear usuário: {e}")
+        return False
 
 def excluir_usuario_db(email):
     try:
@@ -857,19 +956,16 @@ def verificar_assinatura(email):
     email_clean = email.strip().lower()
     if email_clean == ADMIN_EMAIL: return True, 999
     try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT criado_em FROM usuarios WHERE email = %s;", (email_clean,))
-        res = cur.fetchone()
-        cur.close()
-        conn.close()
-
+        conn = get_db_connection(); cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT expira_em, bloqueado FROM usuarios WHERE email = %s;", (email_clean,))
+        res = cur.fetchone(); cur.close(); conn.close()
         if not res: return False, 0
-        
-        criado_str = str(res["criado_em"]).split("T")[0]
-        data_criacao = datetime.strptime(criado_str, "%Y-%m-%d")
-        dias_restantes = 30 - (agora_brasilia().replace(tzinfo=None) - data_criacao).days
-        return (True, dias_restantes) if dias_restantes > 0 else (False, 0)
+        if res.get("bloqueado"): return False, -1
+        expira = res.get("expira_em")
+        if not expira:
+            return False, 0
+        dias_restantes = (expira - agora_brasilia().date()).days
+        return (True, dias_restantes) if dias_restantes >= 0 else (False, 0)
     except Exception:
         return True, 30
 
@@ -1218,6 +1314,8 @@ def login():
 
         ativo, dias = verificar_assinatura(e)
         if not ativo:
+            if dias == -1:
+                return render_template_string(HTML_LOGIN, erro="🚫 ACESSO BLOQUEADO PELO ADMINISTRADOR.")
             return render_template_string(HTML_LOGIN, erro=f"Assinatura expirada (Dias: {dias}).")
 
         session['user'] = e
@@ -1267,10 +1365,16 @@ def admin_panel():
         if now - USUARIOS_ONLINE[u] > 60: del USUARIOS_ONLINE[u]
     return render_template_string(HTML_ADM, lista=carregar_usuarios(), admin=ADMIN_EMAIL, online_count=len(USUARIOS_ONLINE), online_list=USUARIOS_ONLINE.keys())
 
-@app.route('/adm/renovar/<email>')
-def adm_renovar(email):
+@app.route('/adm/renovar/<email>/<int:meses>')
+def adm_renovar(email, meses):
     if session.get('user') != ADMIN_EMAIL: return abort(403)
-    renovar_usuario_db(email)
+    renovar_usuario_db(email, meses)
+    return redirect('/admin_panel')
+
+@app.route('/adm/bloquear/<email>/<acao>')
+def adm_bloquear(email, acao):
+    if session.get('user') != ADMIN_EMAIL: return abort(403)
+    bloquear_usuario_db(email, acao == 'bloquear')
     return redirect('/admin_panel')
 
 @app.route('/adm/liberar_ip/<email>')
@@ -1314,7 +1418,7 @@ def index():
     user = session['user']
     USUARIOS_ONLINE[user] = time.time()
     st = get_user_state(user)
-    return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL)
+    return render_template_string(HTML_INDEX, modo=st["tipo_mercado"], tf=st["timeframe"], estrat=st["estrategia"], user=user, admin=ADMIN_EMAIL, telegram_ativo=telegram_envio_ativo())
 
 @app.route('/status')
 def status():
@@ -1322,6 +1426,13 @@ def status():
     if not user: return jsonify({})
     USUARIOS_ONLINE[user] = time.time()
     
+    if user != ADMIN_EMAIL:
+        ativo_assinatura, dias_assinatura = verificar_assinatura(user)
+        if not ativo_assinatura:
+            USUARIOS_ONLINE.pop(user, None)
+            session.clear()
+            return jsonify({"redirect": "/login", "error": "Acesso bloqueado ou assinatura expirada."})
+
     st = get_user_state(user)
     usuarios = carregar_usuarios()
     u_info = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
@@ -1339,7 +1450,9 @@ def status():
         "ativo_atual": st["ativo_atual"],
         "mercado": st["tipo_mercado"],
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
-        "notificacao": st["notificacao"]
+        "notificacao": st["notificacao"],
+        "timeframe": st["timeframe"],
+        "candle_remaining": max(0, int(st.get("candle_remaining", 0)))
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -1353,7 +1466,16 @@ def command(cmd):
     
     st = get_user_state(user)
 
+    if cmd == "telegram_toggle":
+        if user != ADMIN_EMAIL:
+            return jsonify({"ok": False, "error": "Somente o ADM pode alterar o envio Telegram."}), 403
+        ativo = not telegram_envio_ativo()
+        definir_telegram_envio(ativo)
+        return jsonify({"ok": True, "telegram_ativo": ativo})
+
     if cmd == "test_telegram":
+        if user != ADMIN_EMAIL:
+            return jsonify({"ok": False, "error": "Somente o ADM pode testar o Telegram."}), 403
         msg_teste = (
             f"🧪 <b>TESTE DE COMUNICAÇÃO - VISION PRO V3</b>\n\n"
             f"✅ Conexão estabelecida com sucesso com o Telegram!\n"
@@ -1602,6 +1724,9 @@ def bot_loop():
 
             for user_email, st in usuarios_ativos:
                 try:
+                    tf_atual = max(1, int(st.get("timeframe", 5)))
+                    periodo_candle = tf_atual * 60
+                    st["candle_remaining"] = int(periodo_candle - (now_ts % periodo_candle))
                     if not st.get("bot_iniciado") or st.get("bot_pausado"):
                         continue
 
