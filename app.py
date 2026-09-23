@@ -393,13 +393,7 @@ HTML_INDEX = """
         .select-wrapper::after { content: "▼"; position: absolute; right: 12px; top: 12px; color: #00f2fe; font-size: 10px; pointer-events: none; }
         .modern-select { background: #0f172a; color: #f1f5f9; border: 1px solid #1e293b; padding: 10px 12px; border-radius: 8px; font-weight: 600; font-size: 12px; width: 100%; outline: none; appearance: none; cursor: pointer; transition: 0.2s; }
         .modern-select:hover, .modern-select:focus { border-color: #00f2fe; box-shadow: 0 0 8px rgba(0,242,254,0.2); }
-
-        .broker-flex { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 5px; scrollbar-width: none; }
-        .broker-flex::-webkit-scrollbar { display: none; }
-        .btn-broker { min-width: 100px; flex: 1; border: 1px solid #1e293b; background: #0f172a; color: #cbd5e1; padding: 10px; border-radius: 8px; font-weight: 700; font-size: 11px; cursor: pointer; transition: 0.3s; text-align: center; white-space: nowrap;}
-        .btn-broker:hover { color: #fff; border-color: #00f2fe; background: #1e293b; }
-
-        .btn-toggle-hist { width: 100%; padding: 10px; background: rgba(0, 242, 254, 0.08); border: 1px dashed #00f2fe; color: #00f2fe; border-radius: 8px; font-weight: bold; font-size: 11px; cursor: pointer; margin-top: 10px; transition: 0.3s; }
+.btn-toggle-hist { width: 100%; padding: 10px; background: rgba(0, 242, 254, 0.08); border: 1px dashed #00f2fe; color: #00f2fe; border-radius: 8px; font-weight: bold; font-size: 11px; cursor: pointer; margin-top: 10px; transition: 0.3s; }
         .btn-toggle-hist:hover { background: rgba(0, 242, 254, 0.2); }
 
         .btn-test-tg { width: 100%; padding: 10px; background: rgba(59, 130, 246, 0.15); border: 1px solid #3b82f6; color: #3b82f6; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 8px; transition: 0.3s; text-transform: uppercase; }
@@ -453,15 +447,15 @@ HTML_INDEX = """
             </div>
             <div class="winrate-bar"><div id="wr-fill" class="winrate-fill"></div></div>
         </div>
-
-        <div id="broker-view-container">
-            <button class="btn-close-broker" onclick="closeBrokerView()">❌ FECHAR CORRETORA</button>
-            <iframe id="brokerIframe" class="broker-iframe-inline" src=""></iframe>
-        </div>
-
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
             MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
             ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
+        </div>
+
+        <div id="timing-panel" style="background:rgba(16,185,129,0.06); border:1px solid rgba(16,185,129,0.28); border-radius:12px; padding:12px; margin-bottom:12px; text-align:center; font-size:12px; line-height:1.7;">
+            <div id="candle-timer" style="color:#00f2fe; font-weight:800;">⏳ FECHAMENTO DO CANDLE: --:--</div>
+            <div id="entry-timer" style="color:#38ef7d; font-weight:900; font-size:14px; margin-top:3px;">🎯 AGUARDANDO SINAL DE ENTRADA</div>
+            <div id="entry-clock" style="color:#94a3b8; font-size:11px;">Horário exato: --:--:--</div>
         </div>
 
         <div class="status-box" id="panel-text">Aguardando Comando...</div>
@@ -525,15 +519,6 @@ HTML_INDEX = """
                     </div>
                 </div>
             </div>
-
-            <span class="section-label" style="margin-top: 5px;">Plataformas de Operação</span>
-            <div class="broker-flex">
-                <button class="btn-broker" onclick="openBroker('https://qxbroker.com')">🌐 Quotex</button>
-                <button class="btn-broker" onclick="openBroker('https://iqoption.com')">📈 IQ Option</button>
-                <button class="btn-broker" onclick="openBroker('https://binomo.com')">🟡 Binomo</button>
-                <button class="btn-broker" onclick="openBroker('https://pocketoption.com')">🟦 Pocket Opt.</button>
-            </div>
-
             {% if user == admin %}
             <button onclick="location.href='/admin_panel'" style="width:100%; margin-top:15px; padding:12px; background:rgba(0,242,254,0.1); border:1px solid #00f2fe; color:#00f2fe; font-weight:bold; border-radius:10px; cursor:pointer;">🛡️ ABRIR PAINEL ADMINISTRATIVO</button>
             {% endif %}
@@ -676,9 +661,23 @@ HTML_INDEX = """
                     }
                 }
                 if(document.getElementById('candle-timer')) {
-                    const total = Number(data.candle_remaining || 0);
-                    const m = Math.floor(total / 60); const sec = total % 60;
+                    const total = Math.max(0, Number(data.candle_remaining || 0));
+                    const m = Math.floor(total / 60); const sec = Math.floor(total % 60);
                     document.getElementById('candle-timer').innerText = data.rodando ? ('⏳ FECHAMENTO DO CANDLE: ' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0')) : '⏸ CANDLE: PAUSADO';
+                }
+                if(document.getElementById('entry-timer')) {
+                    const entry = Math.max(0, Number(data.entry_remaining || 0));
+                    if(data.entry_time && entry > 0) {
+                        const em = Math.floor(entry / 60), es = Math.floor(entry % 60);
+                        document.getElementById('entry-timer').innerText = '🎯 ENTRADA EM: ' + String(em).padStart(2,'0') + ':' + String(es).padStart(2,'0');
+                        document.getElementById('entry-clock').innerText = '⏰ HORÁRIO EXATO DA ENTRADA: ' + data.entry_time;
+                    } else if(data.entry_time && data.aguardando) {
+                        document.getElementById('entry-timer').innerText = '🎯 ENTRADA CONFIRMADA — EXECUTE NO HORÁRIO INDICADO';
+                        document.getElementById('entry-clock').innerText = '⏰ HORÁRIO DA ENTRADA: ' + data.entry_time;
+                    } else {
+                        document.getElementById('entry-timer').innerText = '🎯 AGUARDANDO SINAL DE ENTRADA';
+                        document.getElementById('entry-clock').innerText = 'Horário exato: --:--:--';
+                    }
                 }
 
                 if(data.notificacao && data.notificacao.id !== lastNotifId) {
@@ -1452,7 +1451,9 @@ def status():
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
         "notificacao": st["notificacao"],
         "timeframe": st["timeframe"],
-        "candle_remaining": max(0, int(st.get("candle_remaining", 0)))
+        "candle_remaining": max(0, int((st["timeframe"] * 60) - (time.time() % (st["timeframe"] * 60)))),
+        "entry_remaining": max(0, round((st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp() - time.time(), 1)) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else 0,
+        "entry_time": ((st.get("alerta_ativo") or {}).get("str_entrada") if st.get("alerta_ativo") else (re.search(r"ENTRADA:</b> ([0-9:]+)", st.get("sinal_permanente") or "") or [None, None])[1])
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
