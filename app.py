@@ -71,7 +71,8 @@ def get_user_state(email):
             "timer_confirmacao": None,  # Timer independente para não depender da varredura
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
-            "candle_remaining": 0
+            "candle_remaining": 0,
+            "sessao_resultados": []
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -1545,6 +1546,7 @@ def command(cmd):
                 pass
         st["timer_confirmacao"] = None
         st["alerta_ativo"] = None
+        st["sessao_resultados"] = []
         st["inicio_varredura"] = time.time() + 2 
         st["sinais_enviados"].clear() 
         
@@ -1585,11 +1587,15 @@ def command(cmd):
         if st.get("alerta_ativo") and st["alerta_ativo"].get("msg_id"):
             deletar_mensagem_telegram(st["alerta_ativo"]["msg_id"])
         st["alerta_ativo"] = None
+        # Envia o fechamento ANTES de limpar os resultados da sessão.
+        enviar_telegram(mensagem_encerramento_sessao(st), user_solicitante=user)
+
         st["ativo_atual"] = "DESCONECTADO"
         st["ultimo_sinal"] = "Aguardando Comando..."
         
+        # Mantém o comportamento anterior de zerar o placar geral no encerramento.
         zerar_estatisticas_usuario(user)
-        enviar_telegram("🔴 <b>ROBÔ ENCERRADO!</b>", user_solicitante=user)
+        st["sessao_resultados"] = []
         return jsonify({"ok": True})
 
     elif cmd.startswith("tf_"): 
@@ -1601,6 +1607,71 @@ def command(cmd):
     
     return jsonify({"ok": True})
 
+def registrar_resultado_sessao(st, resultado):
+    """Guarda os resultados confirmados da sessão atual, até os 5 primeiros sinais."""
+    if resultado not in ("win", "g1", "red"):
+        return
+    resultados = st.setdefault("sessao_resultados", [])
+    if len(resultados) < 5:
+        resultados.append(resultado)
+
+def placar_sessao(st):
+    resultados = st.get("sessao_resultados", [])
+    wins = sum(1 for r in resultados if r in ("win", "g1"))
+    reds = sum(1 for r in resultados if r == "red")
+    total = wins + reds
+    aproveitamento = round((wins / total) * 100, 1) if total else 0.0
+    return wins, reds, aproveitamento
+
+def formatar_resultados_sessao(st):
+    """Monta as linhas 1ª a 5ª para o fechamento da sessão."""
+    simbolos = {"win": "✅", "g1": "🔄", "red": "❌"}
+    resultados = st.get("sessao_resultados", [])
+    linhas = []
+    for i in range(5):
+        marca = simbolos.get(resultados[i], "—") if i < len(resultados) else "—"
+        linhas.append(f"{i + 1}ª — {marca}")
+    return "\n".join(linhas)
+
+def mensagem_resultado_telegram(st, resultado):
+    wins, reds, _ = placar_sessao(st)
+    placar = f"{wins} / {reds}"
+    if resultado == "win":
+        return (
+            "Vision Trade FREE 📈:\n"
+            "💎 <b>TA NA CONTA! WIN DIRETO!</b> 💎\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🔥 A IA do Vision Pro não falha. Operação encerrada com precisão cirúrgica!\n"
+            "🚀 Mais um lucro garantido para o bolso!\n\n"
+            f"📊 Placar Geral: {placar}"
+        )
+    if resultado == "g1":
+        return (
+            "🔄 <b>VITÓRIA CONFIRMADA NO GALE 1!</b> 🔄\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ Recuperação e lucro! Nossa estratégia de proteção funcionou perfeitamente.\n"
+            "💪 O mercado tentou, mas a nossa análise venceu!\n\n"
+            f"Placar Geral: {placar}"
+        )
+    return (
+        "🛑 <b>ANÁLISE ENCERRADA - STOP LOSS</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ O mercado apresentou volatilidade atípica.\n\n"
+        f"📊 Placar Geral: {placar}"
+    )
+
+def mensagem_encerramento_sessao(st):
+    wins, reds, aproveitamento = placar_sessao(st)
+    linhas = formatar_resultados_sessao(st)
+    return (
+        "🛑 <b>Sessão encerrada!!!</b>\n"
+        "Voltamos amanhã às 20h\n\n"
+        "📊 <b>RESULTADO DA SESSÃO:</b>\n"
+        f"{linhas}\n"
+        f"🏆 <b>PLACAR FINAL: {wins} / {reds}</b>\n"
+        f"Uma sessão com {aproveitamento:g}% de acerto"
+    )
+
 @app.route('/resultado/<res>')
 def resultado(res):
     user = session.get('user')
@@ -1609,15 +1680,18 @@ def resultado(res):
         if res == 'win':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "Win")
-            enviar_telegram("💎 <b>RESULTADO: WIN DIRETO!</b> ✅", user_solicitante=user)
+            registrar_resultado_sessao(st, "win")
+            enviar_telegram(mensagem_resultado_telegram(st, "win"), user_solicitante=user)
         elif res == 'g1':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "WinG1")
-            enviar_telegram("🔄 <b>RESULTADO: WIN NO GALE 1!</b> ✅", user_solicitante=user)
+            registrar_resultado_sessao(st, "g1")
+            enviar_telegram(mensagem_resultado_telegram(st, "g1"), user_solicitante=user)
         elif res == 'red':
             atualizar_estatisticas_usuario(user, False)
             atualizar_ultimo_sinal_bd(user, "Red")
-            enviar_telegram("📉 <b>RESULTADO: STOP LOSS / RED</b> ❌", user_solicitante=user)
+            registrar_resultado_sessao(st, "red")
+            enviar_telegram(mensagem_resultado_telegram(st, "red"), user_solicitante=user)
         elif res == 'pular':
             atualizar_ultimo_sinal_bd(user, "Ignorado")
             enviar_telegram("⚠️ <b>SINAL IGNORADO / PULADO</b>", user_solicitante=user)
