@@ -10,6 +10,7 @@ import os
 import logging
 import numpy as np
 import re
+import html as html_lib
 from datetime import datetime, timedelta
 from flask import Flask, render_template_string, request, jsonify, session, redirect, abort, Response
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -75,6 +76,9 @@ def get_user_state(email):
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
             "candle_remaining": 0,
+            "news_guard_status": "AGUARDANDO CALENDÁRIO",
+            "news_guard_event": None,
+            "news_guard_updated": 0.0,
             "sessao_resultados": []
         }
     return DADOS_USUARIOS[email_clean]
@@ -466,6 +470,7 @@ HTML_INDEX = """
         <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
             MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
             ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
+            <div id="news-guard-status" style="margin-top:5px; color:#f59e0b; font-size:11px; font-weight:700;">🛡️ TRAVA DE NOTÍCIAS: INICIALIZANDO...</div>
         </div>
 
         <div id="timing-panel" style="background:rgba(16,185,129,0.06); border:1px solid rgba(16,185,129,0.28); border-radius:12px; padding:12px; margin-bottom:12px; text-align:center; font-size:12px; line-height:1.7;">
@@ -715,6 +720,11 @@ HTML_INDEX = """
                 if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
                 
                 if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
+                if(document.getElementById('news-guard-status')) {
+                    const ng = document.getElementById('news-guard-status');
+                    ng.innerText = '🛡️ TRAVA DE NOTÍCIAS: ' + (data.news_guard_status || 'AGUARDANDO CALENDÁRIO');
+                    ng.style.color = String(data.news_guard_status || '').includes('BLOQUEADO') ? '#ef4444' : '#f59e0b';
+                }
                 if(document.getElementById('current-asset')) {
                     if(data.rodando) {
                         document.getElementById('current-asset').innerText = data.ativo_atual || "VARRENDO...";
@@ -1101,7 +1111,192 @@ MAPA_TICKERS = {}
 for par in ATIVOS_BASE["FOREX_ABERTO"]: MAPA_TICKERS[par] = par + "=X"
 for par in ATIVOS_BASE["CRIPTO_ABERTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
 for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X")
+
 for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
+
+# ================= TRAVA DE NOTÍCIAS / CALENDÁRIO INVESTING.COM =================
+# No calendário econômico do Investing.com, 1/2/3 touros (no app)
+# correspondem a impacto baixo, moderado e alto. A proteção usa 2 e 3.
+NEWS_MIN_IMPACT = 2
+NEWS_LOCK_BEFORE_MIN = 30
+NEWS_LOCK_AFTER_MIN = 30
+NEWS_CACHE_TTL = 60
+
+INVESTING_CALENDAR_CACHE = {"updated": 0.0, "events": [], "ok": False, "error": ""}
+INVESTING_CALENDAR_LOCK = threading.Lock()
+
+
+def _limpar_html_investing(valor):
+    if not valor:
+        return ""
+    valor = re.sub(r"<script[^>]*>.*?</script>", " ", str(valor), flags=re.I | re.S)
+    valor = re.sub(r"<style[^>]*>.*?</style>", " ", valor, flags=re.I | re.S)
+    valor = re.sub(r"<[^>]+>", " ", valor)
+    return re.sub(r"\s+", " ", html_lib.unescape(valor)).strip()
+
+
+def _parsear_datetime_investing(valor):
+    if not valor:
+        return None
+    bruto = str(valor).strip()
+    for fmt in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            dt_utc = pytz.utc.localize(datetime.strptime(bruto, fmt))
+            return dt_utc.astimezone(FUSO_SP)
+        except ValueError:
+            continue
+    return None
+
+
+def _extrair_eventos_investing(html_resposta):
+    if not html_resposta:
+        return []
+    texto = html_resposta.decode("utf-8", errors="ignore") if isinstance(html_resposta, bytes) else html_resposta
+    try:
+        obj = json.loads(texto) if isinstance(texto, str) else None
+        if isinstance(obj, dict) and obj.get("data"):
+            texto = obj["data"]
+    except Exception:
+        pass
+
+    rows = re.findall(
+        r"<tr\b[^>]*(?:class=[\"'][^\"']*js-event-item[^\"']*|id=[\"']eventRowId_[^\"']+)[^>]*>.*?</tr>",
+        str(texto), flags=re.I | re.S
+    )
+    eventos = []
+    for row in rows:
+        m_dt = re.search(r'(?:data-event-datetime|event_timestamp)=[\"\']([^\"\']+)', row, flags=re.I)
+        dt_evento = _parsear_datetime_investing(m_dt.group(1) if m_dt else "")
+        if not dt_evento:
+            continue
+        m_cur = re.search(r'<td[^>]*class=[\"\'][^\"\']*flagCur[^\"\']*[\"\'][^>]*>(.*?)</td>', row, flags=re.I | re.S)
+        currency_text = _limpar_html_investing(m_cur.group(1) if m_cur else "")
+        currencies = re.findall(r"\b[A-Z]{3}\b", currency_text.upper())
+        currency = currencies[0] if currencies else ""
+        m_sent = re.search(r'<td[^>]*class=[\"\'][^\"\']*sentiment[^\"\']*[\"\'][^>]*>(.*?)</td>', row, flags=re.I | re.S)
+        sentiment_html = m_sent.group(1) if m_sent else ""
+        impacto = len(re.findall(r"grayFullBullishIcon", sentiment_html, flags=re.I))
+        if impacto <= 0:
+            m_bull = re.search(r'data-img_key=[\"\']bull([1-3])[\"\']', sentiment_html, flags=re.I)
+            impacto = int(m_bull.group(1)) if m_bull else 0
+        m_event = re.search(r'<td[^>]*class=[\"\'][^\"\']*event[^\"\']*[\"\'][^>]*>(.*?)</td>', row, flags=re.I | re.S)
+        nome_evento = _limpar_html_investing(m_event.group(1) if m_event else "")
+        if currency and impacto >= NEWS_MIN_IMPACT:
+            eventos.append({"datetime": dt_evento, "currency": currency, "impact": impacto, "event": nome_evento or "Evento econômico"})
+    return eventos
+
+
+def atualizar_calendario_investing(force=False):
+    """Atualiza o calendário no máximo a cada 60 s e mantém cache em caso de falha."""
+    agora_ts = time.time()
+    with INVESTING_CALENDAR_LOCK:
+        if not force and (agora_ts - INVESTING_CALENDAR_CACHE.get("updated", 0)) < NEWS_CACHE_TTL:
+            return INVESTING_CALENDAR_CACHE.get("ok", False)
+
+        hoje = agora_brasilia().date()
+        amanha = hoje + timedelta(days=1)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0 Safari/537.36",
+            "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": "https://www.investing.com/economic-calendar/",
+        }
+        eventos = []
+        erro = ""
+        sucesso_fonte = False
+        urls = [
+            "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData",
+            "https://br.investing.com/economic-calendar/Service/getCalendarFilteredData",
+        ]
+        for url in urls:
+            try:
+                with requests.Session() as sess:
+                    base = url.split("/Service/")[0] + "/"
+                    try:
+                        sess.get(base, headers={"User-Agent": headers["User-Agent"]}, timeout=8)
+                    except Exception:
+                        pass
+                    payload = {
+                        "dateFrom": hoje.strftime("%Y-%m-%d"),
+                        "dateTo": amanha.strftime("%Y-%m-%d"),
+                        "timeZone": "8",
+                        "timeFilter": "timeRemain",
+                        "currentTab": "custom",
+                        "limit_from": "0",
+                    }
+                    resp = sess.post(url, data=payload, headers=headers, timeout=10)
+                    if resp.status_code == 200:
+                        sucesso_fonte = True
+                        eventos = _extrair_eventos_investing(resp.text)
+                    if not eventos:
+                        resp2 = sess.get(base, headers={"User-Agent": headers["User-Agent"]}, timeout=10)
+                        if resp2.status_code == 200:
+                            sucesso_fonte = True
+                            eventos = _extrair_eventos_investing(resp2.text)
+                    if sucesso_fonte:
+                        break
+            except Exception as exc:
+                erro = str(exc)
+
+        if sucesso_fonte:
+            # Uma resposta válida sem eventos de 2/3 touros é uma situação
+            # normal (por exemplo, períodos de baixa agenda), não uma falha.
+            INVESTING_CALENDAR_CACHE["events"] = eventos
+            INVESTING_CALENDAR_CACHE["ok"] = True
+            INVESTING_CALENDAR_CACHE["error"] = ""
+        else:
+            INVESTING_CALENDAR_CACHE["ok"] = False
+            INVESTING_CALENDAR_CACHE["error"] = erro or "Fonte indisponível"
+        INVESTING_CALENDAR_CACHE["updated"] = agora_ts
+        return INVESTING_CALENDAR_CACHE["ok"]
+
+
+def moedas_do_ativo(ativo):
+    base = str(ativo or "").upper().replace("-OTC", "")
+    cripto = {x.replace("-OTC", "") for x in (ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["CRIPTO_OTC"])}
+    if base in cripto:
+        # Para cripto, eventos de USD de alto impacto entram como proteção macro.
+        return ["USD"]
+    if len(base) >= 6:
+        return [base[:3], base[3:6]]
+    return []
+
+
+def ativo_bloqueado_por_noticia(ativo, agora=None):
+    agora = agora or agora_brasilia()
+    moedas = set(moedas_do_ativo(ativo))
+    if not moedas:
+        return False, None
+    cache_ok = atualizar_calendario_investing()
+    eventos = INVESTING_CALENDAR_CACHE.get("events", [])
+    if not cache_ok:
+        # Falha no calendário = fail-closed para evitar operar sem a proteção.
+        return True, {"currency": ",".join(sorted(moedas)), "impact": NEWS_MIN_IMPACT,
+                      "event": "Calendário Investing.com indisponível — proteção preventiva", "datetime": agora}
+    inicio_janela = timedelta(minutes=NEWS_LOCK_BEFORE_MIN)
+    fim_janela = timedelta(minutes=NEWS_LOCK_AFTER_MIN)
+    melhor = None
+    distancia_melhor = None
+    for evento in eventos:
+        if evento.get("currency") not in moedas or evento.get("impact", 0) < NEWS_MIN_IMPACT:
+            continue
+        dt_evento = evento.get("datetime")
+        if not dt_evento or not (dt_evento - inicio_janela <= agora <= dt_evento + fim_janela):
+            continue
+        distancia = abs((agora - dt_evento).total_seconds())
+        if distancia_melhor is None or distancia < distancia_melhor:
+            distancia_melhor, melhor = distancia, evento
+    return melhor is not None, melhor
+
+
+def resumo_trava_noticias(evento):
+    if not evento:
+        return ""
+    dt = evento.get("datetime")
+    horario = dt.strftime("%H:%M") if hasattr(dt, "strftime") else "--:--"
+    impacto = int(evento.get("impact", NEWS_MIN_IMPACT))
+    touros = "🐂" * max(1, min(3, impacto))
+    return f"🔒 {touros} {evento.get('currency', '')} — {evento.get('event', 'Evento')} às {horario} | trava ±30 min"
 
 # ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
 def get_data_v2(ticker, tf, velas_minimas=30):
@@ -1491,6 +1686,8 @@ def status():
         "winrate": u_info.get("winrate", 0.0), 
         "historico": historico,
         "ativo_atual": st["ativo_atual"],
+        "news_guard_status": st.get("news_guard_status", "AGUARDANDO CALENDÁRIO"),
+        "news_guard_event": st.get("news_guard_event"),
         "mercado": st["tipo_mercado"],
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
         "notificacao": st["notificacao"],
@@ -1527,7 +1724,7 @@ def command(cmd):
         msg_teste = (
             f"🧪 <b>TESTE DE COMUNICAÇÃO - VISION PRO V3</b>\n\n"
             f"✅ Conexão estabelecida com sucesso com o Telegram!\n"
-            f"👤 Usuário: {user}\n"
+            f"👤 Usuário: Vision Pro\n"
             f"⏰ Horário: {agora_brasilia().strftime('%H:%M:%S')}"
         )
         msg_id = enviar_telegram(msg_teste, user_solicitante=user)
@@ -1553,6 +1750,9 @@ def command(cmd):
         st["ultima_confirmacao_msg_id"] = None
         st["ultima_confirmacao_alert_id"] = None
         st["sessao_resultados"] = []
+        st["news_guard_status"] = "CONSULTANDO INVESTING.COM"
+        st["news_guard_event"] = None
+        st["news_guard_updated"] = 0.0
         st["inicio_varredura"] = time.time() + 2 
         st["sinais_enviados"].clear() 
         
@@ -1562,7 +1762,7 @@ def command(cmd):
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
             f"🟢 <b>Status:</b> Análise de 30 velas ativada\n"
-            f"👤 <b>Usuário:</b> {user}\n"
+            f"👤 <b>Usuário:</b> Vision Pro\n"
             f"📊 <b>Timeframe:</b> M{st['timeframe']}\n"
             f"🌐 <b>Mercado:</b> {st['tipo_mercado']}\n"
             f"⚙️ <b>Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(st['estrategia'], st['estrategia'])}\n\n"
@@ -1596,6 +1796,8 @@ def command(cmd):
         enviar_telegram(mensagem_encerramento_sessao(st), user_solicitante=user)
 
         st["ativo_atual"] = "DESCONECTADO"
+        st["news_guard_status"] = "DESATIVADA"
+        st["news_guard_event"] = None
         st["ultimo_sinal"] = "Aguardando Comando..."
         
         # Mantém o comportamento anterior de zerar o placar geral no encerramento.
@@ -1958,6 +2160,27 @@ def bot_loop():
 
                         if not alerta and not st.get("aguardando_confirmacao"):
                             st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
+
+                        # 🛡️ TRAVA FUNDAMENTAL DE NOTÍCIAS
+                        # Eventos de 2 ou 3 touros bloqueiam o ativo por 30 min
+                        # antes e 30 min depois; os demais ativos seguem normalmente.
+                        bloqueado_noticia, evento_noticia = ativo_bloqueado_por_noticia(ativo, agora_scan)
+                        if bloqueado_noticia:
+                            st["news_guard_status"] = "BLOQUEADO POR NOTÍCIA"
+                            st["news_guard_event"] = {
+                                "currency": evento_noticia.get("currency", ""),
+                                "impact": int(evento_noticia.get("impact", NEWS_MIN_IMPACT)),
+                                "event": evento_noticia.get("event", "Evento"),
+                                "datetime": evento_noticia.get("datetime").strftime("%H:%M:%S") if hasattr(evento_noticia.get("datetime"), "strftime") else "--:--:--",
+                            }
+                            st["ultimo_sinal"] = (
+                                f"<div class='system-console' style='color:#ef4444;'>🛡️ <b>ATIVO BLOQUEADO POR NOTÍCIA</b><br>"
+                                f"{resumo_trava_noticias(evento_noticia)}<br>"
+                                f"<span style='color:#94a3b8;'>Nenhuma análise será executada neste ativo durante a janela de proteção.</span></div>"
+                            )
+                            continue
+                        st["news_guard_status"] = "ATIVA — SEM BLOQUEIO"
+                        st["news_guard_event"] = None
 
                         cache_key = f"{ticker}_{tf}"
                         if cache_key in ohlc_cache:
