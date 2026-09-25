@@ -480,7 +480,7 @@ HTML_INDEX = """
             MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
             ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
             <div id="news-guard-status" style="margin-top:5px; color:#f59e0b; font-size:11px; font-weight:700;">🛡️ TRAVA DE NOTÍCIAS: INICIALIZANDO...</div>
-            <button id="news-locked-toggle" class="news-locked-toggle" onclick="toggleAtivosBloqueados()" style="display:none;">🔒 VER ATIVOS BLOQUEADOS (0)</button>
+            <button id="news-locked-toggle" class="news-locked-toggle" onclick="toggleAtivosBloqueados()" style="display:block;">🔒 VER ATIVOS BLOQUEADOS (0)</button>
             <div id="news-locked-panel" class="news-locked-panel">
                 <div class="news-locked-title">🔒 ATIVOS FORA DA ANÁLISE POR NOTÍCIA</div>
                 <div id="news-locked-list"><div class="news-locked-empty">Nenhum ativo bloqueado.</div></div>
@@ -730,14 +730,19 @@ HTML_INDEX = """
             if (!btn || !panel || !box) return;
 
             const itens = Array.isArray(lista) ? lista : [];
+            // O botão fica SEMPRE visível. A lista continua escondida até o usuário
+            // tocar/clicar no botão. Assim o usuário consegue consultar mesmo quando
+            // não existe nenhum bloqueio naquele instante.
+            btn.style.display = 'block';
+
             if (!itens.length) {
-                btn.style.display = 'none';
+                // Se a lista ficou vazia, fecha somente o painel. Não escondemos o botão.
                 panel.classList.remove('open');
+                btn.innerText = '🔒 VER ATIVOS BLOQUEADOS (0)';
                 box.innerHTML = '<div class="news-locked-empty">Nenhum ativo bloqueado por notícia no momento.</div>';
                 return;
             }
 
-            btn.style.display = 'block';
             const aberto = panel.classList.contains('open');
             btn.innerText = (aberto ? '🔽 OCULTAR' : '🔒 VER') + ' ATIVOS BLOQUEADOS (' + itens.length + ')';
 
