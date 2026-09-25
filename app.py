@@ -78,6 +78,7 @@ def get_user_state(email):
             "candle_remaining": 0,
             "news_guard_status": "AGUARDANDO CALENDÁRIO",
             "news_guard_event": None,
+            "news_blocked_assets": [],
             "news_guard_updated": 0.0,
             "sessao_resultados": []
         }
@@ -429,6 +430,14 @@ HTML_INDEX = """
 
         .btn-notify { width: 100%; padding: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; }
         .btn-notify:hover { background: rgba(16, 185, 129, 0.3); }
+        .news-locked-toggle { width:100%; padding:9px 10px; margin-top:8px; border:1px solid rgba(239,68,68,0.45); background:rgba(239,68,68,0.08); color:#fca5a5; border-radius:9px; cursor:pointer; font-size:11px; font-weight:800; text-transform:uppercase; transition:0.2s; }
+        .news-locked-toggle:hover { background:rgba(239,68,68,0.16); border-color:rgba(239,68,68,0.75); }
+        .news-locked-panel { display:none; margin-top:8px; padding:9px; border:1px solid rgba(239,68,68,0.28); background:rgba(2,6,23,0.72); border-radius:10px; text-align:left; }
+        .news-locked-panel.open { display:block; }
+        .news-locked-title { color:#fca5a5; font-size:10px; font-weight:900; letter-spacing:.4px; margin-bottom:7px; }
+        .news-locked-item { padding:8px; margin-top:6px; border-radius:8px; background:rgba(239,68,68,0.06); border-left:3px solid #ef4444; font-size:10px; line-height:1.45; }
+        .news-locked-item b { color:#f8fafc; font-size:11px; }
+        .news-locked-empty { color:#64748b; font-size:10px; text-align:center; padding:7px 3px; }
     </style>
 </head>
 <body>
@@ -471,6 +480,11 @@ HTML_INDEX = """
             MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
             ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
             <div id="news-guard-status" style="margin-top:5px; color:#f59e0b; font-size:11px; font-weight:700;">🛡️ TRAVA DE NOTÍCIAS: INICIALIZANDO...</div>
+            <button id="news-locked-toggle" class="news-locked-toggle" onclick="toggleAtivosBloqueados()" style="display:none;">🔒 VER ATIVOS BLOQUEADOS (0)</button>
+            <div id="news-locked-panel" class="news-locked-panel">
+                <div class="news-locked-title">🔒 ATIVOS FORA DA ANÁLISE POR NOTÍCIA</div>
+                <div id="news-locked-list"><div class="news-locked-empty">Nenhum ativo bloqueado.</div></div>
+            </div>
         </div>
 
         <div id="timing-panel" style="background:rgba(16,185,129,0.06); border:1px solid rgba(16,185,129,0.28); border-radius:12px; padding:12px; margin-bottom:12px; text-align:center; font-size:12px; line-height:1.7;">
@@ -699,6 +713,46 @@ HTML_INDEX = """
 
         setInterval(atualizarRelogios, 1000);
 
+        function toggleAtivosBloqueados() {
+            const panel = document.getElementById('news-locked-panel');
+            const btn = document.getElementById('news-locked-toggle');
+            if (!panel || !btn) return;
+            const aberto = panel.classList.toggle('open');
+            const countMatch = (btn.innerText || '').match(/([0-9]+)/);
+            const count = countMatch ? countMatch[1] : '0';
+            btn.innerText = (aberto ? '🔽 OCULTAR' : '🔒 VER') + ' ATIVOS BLOQUEADOS (' + count + ')';
+        }
+
+        function atualizarAtivosBloqueados(lista) {
+            const btn = document.getElementById('news-locked-toggle');
+            const panel = document.getElementById('news-locked-panel');
+            const box = document.getElementById('news-locked-list');
+            if (!btn || !panel || !box) return;
+
+            const itens = Array.isArray(lista) ? lista : [];
+            if (!itens.length) {
+                btn.style.display = 'none';
+                panel.classList.remove('open');
+                box.innerHTML = '<div class="news-locked-empty">Nenhum ativo bloqueado por notícia no momento.</div>';
+                return;
+            }
+
+            btn.style.display = 'block';
+            const aberto = panel.classList.contains('open');
+            btn.innerText = (aberto ? '🔽 OCULTAR' : '🔒 VER') + ' ATIVOS BLOQUEADOS (' + itens.length + ')';
+
+            box.innerHTML = itens.map(item => {
+                const impacto = Math.max(1, Math.min(3, parseInt(item.impact || 2, 10)));
+                const touros = '🐂'.repeat(impacto);
+                const ativo = String(item.ativo || 'ATIVO');
+                const moeda = String(item.currency || '');
+                const evento = String(item.event || 'Evento econômico');
+                const horario = String(item.horario || '--:--');
+                const liberacao = String(item.liberacao || '--:--');
+                return `<div class="news-locked-item"><b>🚫 ${ativo}</b><br>${touros} ${moeda} — ${evento}<br><span style="color:#94a3b8;">Notícia: ${horario} | Liberação: ${liberacao}</span></div>`;
+            }).join('');
+        }
+
         async function atualizarPainel() {
             try {
                 const r = await fetch('/status', { cache: 'no-store' });
@@ -725,6 +779,7 @@ HTML_INDEX = """
                     ng.innerText = '🛡️ TRAVA DE NOTÍCIAS: ' + (data.news_guard_status || 'AGUARDANDO CALENDÁRIO');
                     ng.style.color = String(data.news_guard_status || '').includes('BLOQUEADO') ? '#ef4444' : '#f59e0b';
                 }
+                atualizarAtivosBloqueados(data.news_blocked_assets || []);
                 if(document.getElementById('current-asset')) {
                     if(data.rodando) {
                         document.getElementById('current-asset').innerText = data.ativo_atual || "VARRENDO...";
@@ -1845,6 +1900,7 @@ def status():
         "ativo_atual": st["ativo_atual"],
         "news_guard_status": st.get("news_guard_status", "AGUARDANDO CALENDÁRIO"),
         "news_guard_event": st.get("news_guard_event"),
+        "news_blocked_assets": st.get("news_blocked_assets", []),
         "mercado": st["tipo_mercado"],
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
         "notificacao": st["notificacao"],
@@ -1909,6 +1965,7 @@ def command(cmd):
         st["sessao_resultados"] = []
         st["news_guard_status"] = "CONSULTANDO INVESTING.COM"
         st["news_guard_event"] = None
+        st["news_blocked_assets"] = []
         st["news_guard_updated"] = 0.0
         st["inicio_varredura"] = time.time() + 2 
         st["sinais_enviados"].clear() 
@@ -1955,6 +2012,7 @@ def command(cmd):
         st["ativo_atual"] = "DESCONECTADO"
         st["news_guard_status"] = "DESATIVADA"
         st["news_guard_event"] = None
+        st["news_blocked_assets"] = []
         st["ultimo_sinal"] = "Aguardando Comando..."
         
         # Mantém o comportamento anterior de zerar o placar geral no encerramento.
@@ -2314,6 +2372,7 @@ def bot_loop():
 
                     ativos_bloqueados = set()
                     eventos_bloqueados = {}
+                    detalhes_bloqueados = []
 
                     if calendario_ok:
                         for ativo_candidato in ativos:
@@ -2321,6 +2380,16 @@ def bot_loop():
                             if evento_candidato:
                                 ativos_bloqueados.add(ativo_candidato)
                                 eventos_bloqueados[ativo_candidato] = evento_candidato
+                                dt_evento = evento_candidato.get("datetime")
+                                dt_liberacao = (dt_evento + timedelta(minutes=NEWS_LOCK_AFTER_MIN)) if dt_evento else None
+                                detalhes_bloqueados.append({
+                                    "ativo": ativo_candidato,
+                                    "currency": evento_candidato.get("currency", ""),
+                                    "impact": int(evento_candidato.get("impact", NEWS_MIN_IMPACT)),
+                                    "event": evento_candidato.get("event", "Evento econômico"),
+                                    "horario": dt_evento.strftime("%H:%M") if hasattr(dt_evento, "strftime") else "--:--",
+                                    "liberacao": dt_liberacao.strftime("%H:%M") if hasattr(dt_liberacao, "strftime") else "--:--",
+                                })
 
                         if ativos_bloqueados:
                             st["news_guard_status"] = f"{len(ativos_bloqueados)} ATIVO(S) BLOQUEADO(S) POR NOTÍCIA"
@@ -2338,6 +2407,9 @@ def bot_loop():
                         st["news_guard_status"] = "INVESTING INDISPONÍVEL — ANÁLISE LIBERADA"
                         st["news_guard_event"] = None
                         st["news_guard_updated"] = time.time()
+
+                    detalhes_bloqueados.sort(key=lambda x: (x.get("liberacao", "99:99"), x.get("ativo", "")))
+                    st["news_blocked_assets"] = detalhes_bloqueados
 
                     # Somente ativos sem notícia de 2/3 touros entram na lista de análise.
                     ativos_scan = [a for a in ativos if a not in ativos_bloqueados]
