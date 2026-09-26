@@ -406,6 +406,10 @@ HTML_INDEX = """
         .tool-btn,.history-btn,.admin-btn{width:100%;padding:10px;border-radius:9px;background:#0b131f;border:1px solid #1c2b3d;color:#8edff0;font-size:9px;font-weight:900;text-transform:uppercase}.tool-btn:hover,.history-btn:hover{border-color:rgba(0,217,255,.35)}.admin-btn{color:#8ab4ff;border-color:rgba(96,165,250,.25)}.tools-content,.history{display:none;margin-top:8px}.tools-content.open,.history.open{display:grid;gap:7px}.tg-btn,.notify-btn{width:100%;padding:9px;border-radius:8px;background:#0a111a;border:1px solid #1d2b3c;color:#94a3b8;font-size:9px;font-weight:900}.history-list{max-height:220px;overflow:auto}.history-item{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);font-family:'JetBrains Mono';font-size:9px}.history-item:last-child{border-bottom:0}.history-result{font-weight:900;padding:4px 7px;border-radius:7px;border:1px solid transparent}.history-win,.history-g1{color:#4ade80;background:rgba(34,197,94,.08);border-color:rgba(34,197,94,.22)}.history-red{color:#fb7185;background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.22)}
         .section{display:none}.section.active{display:block}.section-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.section-head h2{font-size:15px}.section-head p{font-size:9px;color:#69798d}.table-card{overflow:auto}.data-table{width:100%;border-collapse:collapse;min-width:620px}.data-table th{font-size:8px;color:#66758a;text-transform:uppercase;text-align:left;padding:10px;border-bottom:1px solid var(--line)}.data-table td{font-size:9px;padding:10px;border-bottom:1px solid rgba(255,255,255,.045)}
         .asset-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;max-height:290px;overflow:auto;padding:8px;background:#080e16;border:1px solid #182536;border-radius:10px}.asset-check{display:flex;align-items:center;gap:6px;padding:7px 8px;background:#0b121d;border:1px solid #182536;border-radius:8px;color:#aebdcd;font-size:8px;font-weight:800}.asset-check input{accent-color:#00d9ff}.asset-check.selected{border-color:rgba(0,217,255,.35);color:#dffbff;background:rgba(0,217,255,.05)}.picker-actions{display:flex;gap:7px}.picker-actions button{flex:1;padding:9px;border-radius:8px;background:#0b131f;border:1px solid #1c2b3d;color:#9fe7f5;font-size:8px;font-weight:900}.backtest-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.backtest-results{display:grid;gap:10px}.bt-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}.bt-table{width:100%;border-collapse:collapse;min-width:760px}.bt-table th,.bt-table td{padding:9px;border-bottom:1px solid rgba(255,255,255,.05);font-size:8px;text-align:left}.bt-table th{color:#66758a;text-transform:uppercase}.bt-win{color:#4ade80;font-weight:900}.bt-loss{color:#fb7185;font-weight:900}.bt-g1{color:#fbbf24;font-weight:900}.bt-note{font-size:8px;color:#718096;line-height:1.5}.warmup-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 8px;border-radius:8px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:8px;font-weight:900}
+        .calc-top-btn{margin-top:7px;display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:9px;background:rgba(0,217,255,.06);border:1px solid rgba(0,217,255,.2);color:#9fe7f5;font-size:9px;font-weight:900;text-transform:uppercase}
+        .calc-top-btn:hover{border-color:rgba(0,217,255,.45);background:rgba(0,217,255,.1)}
+        .calc-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr);gap:12px}.calc-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.calc-result-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.calc-stat{background:#0b121d;border:1px solid #182536;border-radius:12px;padding:11px;text-align:center}.calc-stat .k{font-size:8px;color:#66758a;font-weight:900;text-transform:uppercase}.calc-stat .v{font-family:'JetBrains Mono';font-size:17px;font-weight:900;margin-top:4px;color:#dce6f2}.calc-profile{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.calc-profile label{cursor:pointer}.calc-profile input{display:none}.calc-profile span{display:block;text-align:center;padding:10px 7px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-profile input:checked+span{border-color:rgba(0,217,255,.45);background:rgba(0,217,255,.08);color:#dffbff}.calc-mode{display:grid;grid-template-columns:1fr 1fr;gap:7px}.calc-mode label{cursor:pointer}.calc-mode input{display:none}.calc-mode span{display:block;text-align:center;padding:10px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-mode input:checked+span{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.07);color:#bbf7d0}.calc-plan{display:grid;gap:7px}.calc-plan-row{display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border-radius:9px;background:#0b121d;border:1px solid #182536;font-size:9px}.calc-plan-row b{color:#dce6f2}.calc-plan-row span{color:#7f8da0;text-align:right}.calc-warning{padding:10px;border-radius:10px;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:9px;line-height:1.5}.calc-ok{padding:10px;border-radius:10px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.18);color:#86efac;font-size:9px;line-height:1.5}.calc-note{font-size:8px;color:#718096;line-height:1.55}.calc-section-title{font-size:10px;font-weight:900;color:#dce6f2;margin-bottom:8px}.calc-input-suffix{position:relative}.calc-input-suffix input{padding-right:35px}.calc-input-suffix span{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:9px;color:#66758a;font-weight:900}
+
         .mobile-nav{display:none}.mobile-only{display:none}.desktop-only{display:block}
         .toast{position:fixed;right:20px;bottom:20px;background:#101a28;border:1px solid #24354a;border-radius:10px;padding:10px 13px;font-size:10px;color:#dbe8f5;opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s;z-index:100}.toast.show{opacity:1;transform:none}
         @media(max-width:1100px){.grid-main{grid-template-columns:1fr}.sidebar{width:210px}.main{width:calc(100% - 210px);margin-left:210px}.signal-meta{grid-template-columns:repeat(2,1fr)}}
@@ -415,6 +419,8 @@ HTML_INDEX = """
             .mobile-nav{position:fixed;display:grid;grid-template-columns:repeat(7,1fr);left:8px;right:8px;bottom:8px;height:60px;background:rgba(8,14,22,.96);border:1px solid #203044;border-radius:16px;z-index:60;box-shadow:0 10px 35px rgba(0,0,0,.45);padding:4px}.mobile-nav button{border:0;background:transparent;color:#65758a;font-size:7px;font-weight:900;border-radius:11px;min-width:0}.mobile-nav button.active{background:rgba(0,217,255,.08);color:#dffbff}.mobile-nav span{display:block;font-size:15px;margin-bottom:2px}
             .topbar .top-meta{gap:5px}.topbar{gap:6px}.hero-top .mini{max-width:160px}.locked-btn{padding:11px}.section-head{margin-top:2px}.table-card{border-radius:12px}.asset-picker{grid-template-columns:repeat(2,minmax(0,1fr));max-height:360px}.backtest-grid{grid-template-columns:1fr 1fr}.bt-summary{grid-template-columns:repeat(2,1fr)}
         }
+        @media(max-width:900px){.calc-grid{grid-template-columns:1fr}.calc-result-grid{grid-template-columns:repeat(2,1fr)}}
+        @media(max-width:560px){.calc-fields{grid-template-columns:1fr}.calc-profile{grid-template-columns:1fr}.calc-mode{grid-template-columns:1fr}.calc-top-btn{font-size:8px;padding:6px 8px}}
         @media(min-width:1400px){.main{padding-left:32px;padding-right:32px}.grid-main{grid-template-columns:minmax(0,1.65fr) minmax(350px,.8fr)}}
         @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
     </style>
@@ -430,6 +436,7 @@ HTML_INDEX = """
             <button data-view="protecao" onclick="abrirView('protecao',this)">🛡️ <span>Proteção</span></button>
             <button data-view="historico" onclick="abrirView('historico',this)">📈 <span>Histórico</span></button>
             <button data-view="backtest" onclick="abrirView('backtest',this)">🧪 <span>Backtest</span></button>
+            <button data-view="calculadora" onclick="abrirView('calculadora',this)">🧮 <span>Calculadora</span></button>
             <button data-view="config" onclick="abrirView('config',this)">⚙️ <span>Configurações</span></button>
         </nav>
         <div class="sidebar-footer">Sistema de análise estatística e técnica. Os alertas não garantem resultados financeiros. Opere com responsabilidade.</div>
@@ -437,7 +444,7 @@ HTML_INDEX = """
 
     <main class="main">
         <div class="topbar">
-            <div><div class="page-title">VISION <span>PRO</span></div><div class="mini">Terminal de análise em tempo real</div></div>
+            <div><div class="page-title">VISION <span>PRO</span></div><div class="mini">Terminal de análise em tempo real</div><button class="calc-top-btn" onclick="abrirView('calculadora',document.querySelector('[data-view=calculadora]'))">🧮 CALCULADORA DE GESTÃO DE BANCA</button></div>
             <div class="top-meta"><div class="status-pill"><span class="live-dot"></span><span id="top-status">ONLINE</span></div><a class="logout" href="/logout">SAIR</a></div>
         </div>
 
@@ -567,6 +574,42 @@ HTML_INDEX = """
                 <div id="backtest-results" class="backtest-results" style="margin-top:12px"><div class="card"><div class="card-pad empty">Escolha os parâmetros e execute o backtest.</div></div></div>
             </section>
 
+            <section id="view-calculadora" class="view">
+                <div class="section-head"><div><h2>🧮 Calculadora de Gestão de Banca</h2><p>Simule uma trajetória de banca com mão fixa ou Soros usando parâmetros explícitos.</p></div><div class="warmup-badge">⚠️ Simulação, não garantia de resultado</div></div>
+                <div class="calc-grid">
+                    <div class="card">
+                        <div class="card-head"><div><div class="eyebrow">Planejamento</div><div class="card-title">Defina a meta da banca</div></div></div>
+                        <div class="card-pad">
+                            <div class="calc-fields">
+                                <div class="field"><label>Banca inicial (R$)</label><input class="select" id="calc-bankroll" type="number" min="1" step="0.01" value="100"></div>
+                                <div class="field"><label>Lucro desejado (R$)</label><input class="select" id="calc-target" type="number" min="1" step="0.01" value="1000"></div>
+                                <div class="field"><label>Prazo (dias)</label><input class="select" id="calc-days" type="number" min="1" max="365" step="1" value="30"></div>
+                                <div class="field"><label>Payout líquido por WIN</label><div class="calc-input-suffix"><input class="select" id="calc-payout" type="number" min="1" max="99.99" step="0.1" value="80"><span>%</span></div></div>
+                                <div class="field"><label>Taxa de acerto estimada</label><div class="calc-input-suffix"><input class="select" id="calc-winrate" type="number" min="50" max="99.99" step="0.1" value="70"><span>%</span></div></div>
+                                <div class="field"><label>Níveis de Soros</label><select class="select" id="calc-soros-levels"><option value="1">1 nível (sem progressão)</option><option value="2" selected>2 níveis</option><option value="3">3 níveis</option><option value="4">4 níveis</option></select></div>
+                            </div>
+                            <div class="calc-section-title" style="margin-top:12px">Perfil de risco</div>
+                            <div class="calc-profile">
+                                <label><input type="radio" name="calc-profile" value="conservador" checked onchange="atualizarPerfilCalc()"><span>🟢 CONSERVADOR<br><small>1% por entrada</small></span></label>
+                                <label><input type="radio" name="calc-profile" value="moderado" onchange="atualizarPerfilCalc()"><span>🟡 MODERADO<br><small>2% por entrada</small></span></label>
+                                <label><input type="radio" name="calc-profile" value="agressivo" onchange="atualizarPerfilCalc()"><span>🔴 AGRESSIVO<br><small>4% por entrada</small></span></label>
+                            </div>
+                            <div class="calc-section-title" style="margin-top:12px">Método de entrada</div>
+                            <div class="calc-mode">
+                                <label><input type="radio" name="calc-mode" value="fixa" checked onchange="atualizarPerfilCalc()"><span>💵 MÃO FIXA</span></label>
+                                <label><input type="radio" name="calc-mode" value="soros" onchange="atualizarPerfilCalc()"><span>📈 SOROS</span></label>
+                            </div>
+                            <div id="calc-mode-help" class="calc-note" style="margin-top:8px">Mão fixa: o valor-base permanece igual em cada entrada. O resultado esperado depende da taxa de acerto e do payout informados.</div>
+                            <button class="action start" style="width:100%;margin-top:12px" onclick="calcularGestaoBanca()">🧮 CALCULAR PLANO</button>
+                        </div>
+                    </div>
+                    <div id="calc-results" class="card">
+                        <div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Plano de gestão</div></div><div class="mini">Aguardando cálculo</div></div>
+                        <div class="card-pad"><div class="empty">Preencha os parâmetros e clique em “Calcular plano”.</div></div>
+                    </div>
+                </div>
+            </section>
+
             <section id="view-config" class="view">
                 <div class="section-head"><div><h2>⚙️ Configurações</h2><p>Parâmetros operacionais do motor.</p></div></div>
                 <div class="card"><div class="card-pad controls">
@@ -591,6 +634,7 @@ HTML_INDEX = """
     <button data-view="protecao" onclick="abrirView('protecao',this)"><span>🛡️</span>Proteção</button>
     <button data-view="historico" onclick="abrirView('historico',this)"><span>📈</span>Histórico</button>
     <button data-view="backtest" onclick="abrirView('backtest',this)"><span>🧪</span>Backtest</button>
+    <button data-view="calculadora" onclick="abrirView('calculadora',this)"><span>🧮</span>Banca</button>
     <button data-view="config" onclick="abrirView('config',this)"><span>⚙️</span>Config</button>
 </div>
 <div id="toast" class="toast"></div>
@@ -608,6 +652,7 @@ function abrirView(name,btn){
     if(name==='analise' && latestData) renderAnalysis(latestData);
     if(name==='historico' && latestData) renderHistory(latestData.historico||[]);
     if(name==='backtest' && latestData) { const m=document.getElementById('bt-market'); if(m) renderAssetPicker('bt-assets',m.value,[]); }
+    if(name==='calculadora') atualizarPerfilCalc();
 }
 function toggleBox(id){const e=document.getElementById(id); if(e)e.classList.toggle('open')}
 function toast(msg){const e=document.getElementById('toast');if(!e)return;e.innerText=msg;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2200)}
@@ -628,6 +673,39 @@ function btLimparAtivos(){document.querySelectorAll('#bt-assets input').forEach(
 function executarBacktest(){const box=document.getElementById('backtest-results');const assets=pickerValues('bt-assets');if(!assets.length){toast('Selecione pelo menos um ativo para o backtest');return}box.innerHTML='<div class="card"><div class="card-pad empty">⏳ Executando backtest histórico...</div></div>';fetch('/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({timeframe:Number(document.getElementById('bt-tf').value),market:document.getElementById('bt-market').value,estrategia:document.getElementById('bt-est').value,g1:document.getElementById('bt-g1').value==='sim',limit:Number(document.getElementById('bt-limit').value),assets})}).then(r=>r.json()).then(d=>{if(!d.ok){box.innerHTML='<div class="card"><div class="card-pad empty">❌ '+(d.error||'Falha no backtest')+'</div></div>';return}renderBacktestResults(d)}).catch(()=>{box.innerHTML='<div class="card"><div class="card-pad empty">❌ Falha de comunicação com o servidor.</div></div>'})}
 function renderBacktestResults(d){const box=document.getElementById('backtest-results');const s=d.summary||{};const cards=[['Entradas',s.entradas||0,''],['Wins',s.wins||0,'bt-win'],['G1',s.g1||0,'bt-g1'],['Loss',s.losses||0,'bt-loss'],['Assertividade',((s.assertividade||0).toFixed? s.assertividade.toFixed(1):s.assertividade)+'%','']];let html='<div class="card"><div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Backtest histórico</div></div><div class="mini">'+(d.meta||'')+'</div></div><div class="card-pad"><div class="bt-summary">'+cards.map(c=>`<div class="stat-box"><div class="stat-k">${c[0]}</div><div class="stat-v ${c[2]}">${c[1]}</div></div>`).join('')+'</div></div></div>';const mk=(arr,key)=>'<div class="card"><div class="card-head"><div><div class="eyebrow">Ranking</div><div class="card-title">'+key+'</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Nome</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(arr||[]).map(x=>`<tr><td><b>${x.nome||x.ativo||x.estrategia||'--'}</b></td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+=mk(d.top_assets,'Melhores ativos');html+=mk(d.top_strategies,'Melhores estratégias');html+='<div class="card"><div class="card-head"><div><div class="eyebrow">Detalhamento</div><div class="card-title">Ativo × estratégia</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Ativo</th><th>Estratégia</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(d.rows||[]).map(x=>`<tr><td><b>${x.ativo}</b></td><td>${x.estrategia}</td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+='<div class="card"><div class="card-pad bt-note">Fonte: '+(d.source||'dados históricos públicos')+'. '+(d.note||'')+'</div></div>';box.innerHTML=html}
 function atualizarAssetPickers(d){assetsCatalog=d.assets_catalog||{};const m=d.mercado||'TODOS';const selected=d.selected_assets||[];const op=document.getElementById('operating-assets');if(op&&!op.dataset.userEditing){renderAssetPicker('operating-assets',m,selected)}const btM=document.getElementById('bt-market');if(btM&&!document.getElementById('bt-assets')?.dataset.initialized){document.getElementById('bt-assets').dataset.initialized='1';renderAssetPicker('bt-assets',btM.value,[])} }
+function atualizarPerfilCalc(){
+    const mode=document.querySelector('input[name="calc-mode"]:checked')?.value||'fixa';
+    const help=document.getElementById('calc-mode-help');
+    if(help) help.innerText=mode==='soros'
+        ? 'Soros: após um WIN, o próximo valor usa o valor da entrada mais o lucro daquele WIN. Um LOSS reinicia no valor-base. O cálculo mostra a exposição máxima e os níveis usados.'
+        : 'Mão fixa: o valor-base permanece igual em cada entrada. O resultado esperado depende da taxa de acerto e do payout informados.';
+}
+function moedaBR(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
+function pctBR(v){return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1})+'%';}
+function calcularGestaoBanca(){
+    const payload={
+        bankroll:Number(document.getElementById('calc-bankroll').value),
+        target_profit:Number(document.getElementById('calc-target').value),
+        days:Number(document.getElementById('calc-days').value),
+        payout:Number(document.getElementById('calc-payout').value)/100,
+        winrate:Number(document.getElementById('calc-winrate').value)/100,
+        profile:document.querySelector('input[name="calc-profile"]:checked')?.value||'conservador',
+        mode:document.querySelector('input[name="calc-mode"]:checked')?.value||'fixa',
+        soros_levels:Number(document.getElementById('calc-soros-levels').value)
+    };
+    const box=document.getElementById('calc-results');
+    box.innerHTML='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Calculando...</div></div></div><div class="card-pad"><div class="empty">⏳ Calculando plano matemático...</div></div>';
+    fetch('/calculadora',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+      .then(async r=>{const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'Não foi possível calcular');return d})
+      .then(renderCalculadora)
+      .catch(e=>{box.innerHTML='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Erro no cálculo</div></div></div><div class="card-pad"><div class="calc-warning">❌ '+e.message+'</div></div></div>'});
+}
+function renderCalculadora(d){
+    const box=document.getElementById('calc-results'),s=d.summary||{},p=d.parameters||{},plan=d.plan||[];
+    const cards=[['Entrada base',moedaBR(s.entrada_base)],['Entradas estimadas',s.entradas_estimadas||'--'],['Entradas/dia',s.entradas_por_dia||'--'],['Lucro esperado/entrada',moedaBR(s.lucro_esperado_por_entrada)],['Meta total',moedaBR(p.target_profit)],['Banca final alvo',moedaBR(p.bankroll+p.target_profit)],['Máx. exposição',moedaBR(s.exposicao_maxima)],['EV por entrada',moedaBR(s.valor_esperado_entrada)]];
+    let html='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Plano '+String(p.profile||'').toUpperCase()+' • '+(p.mode==='soros'?'SOROS':'MÃO FIXA')+'</div></div><div class="mini">'+(p.days||0)+' dia(s)</div></div><div class="card-pad"><div class="calc-result-grid">'+cards.map(c=>`<div class="calc-stat"><div class="k">${c[0]}</div><div class="v">${c[1]}</div></div>`).join('')+'</div><div style="margin-top:12px" class="calc-section-title">Plano sugerido por dia</div><div class="calc-plan">'+plan.map(x=>`<div class="calc-plan-row"><b>Dia ${x.dia}</b><span>${x.entradas} entrada(s) • base ${moedaBR(x.entrada_base)}${x.nivel_maximo?` • até ${moedaBR(x.nivel_maximo)}`:''}</span></div>`).join('')+'</div><div style="margin-top:10px" class="${s.viavel?'calc-ok':'calc-warning'}">${d.message||''}</div><div style="margin-top:9px" class="calc-note">${d.note||''}</div></div>';
+    box.innerHTML=html;
+}
 function registrarResultado(res){fetch('/resultado/'+res,{cache:'no-store'}).then(()=>toast('Resultado registrado')).catch(()=>toast('Falha ao registrar resultado'))}
 function toggleTelegram(){fetch('/command/telegram_toggle',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d.ok){const b=document.getElementById('btn-telegram-toggle');if(b)b.innerText=d.telegram_ativo?'🟢 ENVIO TELEGRAM ATIVADO':'🔴 ENVIO TELEGRAM DESATIVADO';}})}
 function solicitarPermissaoNotificacao(){if(!('Notification'in window)){alert('Este navegador não suporta notificações.');return}Notification.requestPermission().then(p=>{const b=document.getElementById('btn-enable-notify');if(p==='granted'){if(b)b.innerText='✅ NOTIFICAÇÕES NATIVAS ATIVADAS';toast('Notificações ativadas')}else alert('Permissão de notificação recusada.')})}
@@ -2030,6 +2108,137 @@ def backtest():
     except Exception as e:
         print(f"⚠️ Backtest: {e}")
         return jsonify({"ok":False,"error":"Não foi possível concluir o backtest com os dados disponíveis agora."}), 500
+
+@app.route('/calculadora', methods=['POST'])
+def calculadora_gestao():
+    """Calculadora matemática de gestão de banca.
+
+    Não usa histórico do bot nem promete resultados. Todos os parâmetros de
+    payout e taxa de acerto são explícitos para evitar transformar uma hipótese
+    em uma suposta garantia. O Soros é calculado por valor esperado por ciclo,
+    com reinício no valor-base após um loss.
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        banca = float(payload.get('bankroll', 0))
+        meta = float(payload.get('target_profit', 0))
+        dias = int(payload.get('days', 0))
+        payout = float(payload.get('payout', 0))
+        winrate = float(payload.get('winrate', 0))
+        perfil = str(payload.get('profile', 'conservador')).lower()
+        modo = str(payload.get('mode', 'fixa')).lower()
+        niveis = int(payload.get('soros_levels', 1))
+
+        if banca <= 0 or meta <= 0:
+            return jsonify({'ok': False, 'error': 'Banca inicial e lucro desejado precisam ser maiores que zero.'}), 400
+        if not 1 <= dias <= 365:
+            return jsonify({'ok': False, 'error': 'O prazo deve estar entre 1 e 365 dias.'}), 400
+        if not 0 < payout < 1:
+            return jsonify({'ok': False, 'error': 'O payout deve ficar entre 1% e 99,99%.'}), 400
+        if not 0.5 <= winrate <= 0.9999:
+            return jsonify({'ok': False, 'error': 'A taxa de acerto estimada deve ficar entre 50% e 99,99%.'}), 400
+        if perfil not in ('conservador', 'moderado', 'agressivo'):
+            perfil = 'conservador'
+        if modo not in ('fixa', 'soros'):
+            modo = 'fixa'
+        niveis = max(1, min(niveis, 4))
+
+        risco = {'conservador': 0.01, 'moderado': 0.02, 'agressivo': 0.04}[perfil]
+        entrada_base = round(banca * risco, 2)
+        if entrada_base < 0.01:
+            entrada_base = 0.01
+
+        # Valor esperado líquido de uma entrada com mão fixa.
+        ev_unit = entrada_base * (winrate * payout - (1.0 - winrate))
+        lucro_win_base = entrada_base * payout
+        wins_sem_loss = math.ceil(meta / lucro_win_base) if lucro_win_base > 0 else None
+
+        if modo == 'fixa':
+            ev_per_entry = ev_unit
+            entradas = math.ceil(meta / ev_per_entry) if ev_per_entry > 0 else None
+            exposicao_max = entrada_base
+            lucro_esperado = ev_per_entry
+            max_level = 1
+        else:
+            # Soros: stake do nível l = base * (1+payout)^l.
+            # Um ciclo termina no primeiro loss ou ao concluir todos os níveis.
+            # O EV do ciclo é calculado exatamente pelas probabilidades fornecidas,
+            # sem escolher uma sequência aleatória de wins/losses.
+            ev_cycle = 0.0
+            expected_entries_cycle = 0.0
+            max_level = niveis
+            stake = entrada_base
+            exposicao_max = entrada_base
+            for level in range(1, niveis + 1):
+                prob_reach = winrate ** (level - 1)
+                expected_entries_cycle += prob_reach
+                ev_cycle += prob_reach * stake * (winrate * payout - (1.0 - winrate))
+                exposicao_max = max(exposicao_max, stake)
+                stake *= (1.0 + payout)
+            ev_per_entry = ev_cycle / expected_entries_cycle if expected_entries_cycle else 0.0
+            entradas = math.ceil(meta / ev_per_entry) if ev_per_entry > 0 else None
+            lucro_esperado = ev_per_entry
+
+        entradas_dia = math.ceil(entradas / dias) if entradas else None
+        # Plano diário é apenas uma distribuição matemática das entradas; não força
+        # o usuário a operar nem trata a meta como garantia.
+        plan = []
+        if entradas:
+            restante = entradas
+            for dia in range(1, dias + 1):
+                dias_restantes = dias - dia + 1
+                hoje = math.ceil(restante / dias_restantes)
+                plan.append({
+                    'dia': dia,
+                    'entradas': hoje,
+                    'entrada_base': round(entrada_base, 2),
+                    'nivel_maximo': round(exposicao_max, 2) if modo == 'soros' else None
+                })
+                restante -= hoje
+        else:
+            plan = [{'dia': i, 'entradas': 0, 'entrada_base': round(entrada_base, 2), 'nivel_maximo': round(exposicao_max, 2) if modo == 'soros' else None} for i in range(1, min(dias, 30)+1)]
+
+        viavel = bool(ev_per_entry > 0 and entradas is not None)
+        if not viavel:
+            mensagem = 'Com os parâmetros informados, o valor esperado por entrada não é positivo. A meta não pode ser projetada matematicamente sem alterar os parâmetros.'
+        elif entradas_dia > 50:
+            mensagem = f'Plano matematicamente positivo, mas exige cerca de {entradas_dia} entradas por dia; isso é um volume elevado para o prazo escolhido.'
+        elif modo == 'soros' and exposicao_max > banca * 0.15:
+            mensagem = 'O Soros escolhido pode concentrar mais de 15% da banca em uma única entrada nos níveis altos. A exposição máxima está destacada para você avaliar antes de usar.'
+        else:
+            mensagem = 'Plano matematicamente positivo sob as hipóteses informadas. A taxa de acerto e o payout são estimativas e não garantem o resultado real.'
+
+        note = (
+            f'Perfil {perfil}: risco-base de {risco*100:.0f}% da banca ({moeda := "R$"} {entrada_base:,.2f}). '
+            f'Payout informado: {payout*100:.1f}%. Taxa de acerto usada na projeção: {winrate*100:.1f}%. '
+            f'Para mão fixa, o valor por entrada permanece em {entrada_base:.2f}. '
+            + (f'No Soros, o valor cresce apenas após WIN e reinicia no valor-base após LOSS; nível máximo calculado: {niveis}.' if modo == 'soros' else 'Sem progressão: cada entrada usa o mesmo valor-base.')
+        ).replace(',', 'X').replace('.', ',').replace('X', '.')
+
+        def br(v):
+            return round(float(v), 2)
+
+        summary = {
+            'entrada_base': br(entrada_base),
+            'entradas_estimadas': entradas,
+            'entradas_por_dia': entradas_dia,
+            'lucro_esperado_por_entrada': br(lucro_esperado),
+            'valor_esperado_entrada': br(ev_per_entry),
+            'exposicao_maxima': br(exposicao_max),
+            'wins_sem_loss': wins_sem_loss,
+            'viavel': viavel
+        }
+        return jsonify({
+            'ok': True,
+            'parameters': {'bankroll': br(banca), 'target_profit': br(meta), 'days': dias, 'payout': payout, 'winrate': winrate, 'profile': perfil, 'mode': modo, 'soros_levels': niveis},
+            'summary': summary,
+            'plan': plan,
+            'message': mensagem,
+            'note': note
+        })
+    except Exception as e:
+        print(f'⚠️ Calculadora de banca: {e}')
+        return jsonify({'ok': False, 'error': 'Não foi possível concluir o cálculo com os parâmetros informados.'}), 400
 
 @app.route('/command/<cmd>')
 def command(cmd):
