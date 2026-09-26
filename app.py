@@ -726,9 +726,37 @@ function calcularGestaoBanca(){
       .catch(e=>{box.innerHTML='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Erro no cálculo</div></div></div><div class="card-pad"><div class="calc-warning">❌ '+e.message+'</div></div></div>'});
 }
 function renderCalculadora(d){
-    const box=document.getElementById('calc-results'),s=d.summary||{},p=d.parameters||{},plan=d.plan||[];
-    const cards=[['Entrada base',moedaBR(s.entrada_base)],['Entradas estimadas',s.entradas_estimadas||'--'],['Entradas/dia',s.entradas_por_dia||'--'],['Lucro esperado/entrada',moedaBR(s.lucro_esperado_por_entrada)],['Meta total',moedaBR(p.target_profit)],['Banca final alvo',moedaBR(p.bankroll+p.target_profit)],['Máx. exposição',moedaBR(s.exposicao_maxima)],['EV por entrada',moedaBR(s.valor_esperado_entrada)]];
-    let html='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Plano '+String(p.profile||'').toUpperCase()+' • '+(p.mode==='soros'?'SOROS':'MÃO FIXA')+'</div></div><div class="mini">'+(p.days||0)+' dia(s)</div></div><div class="card-pad"><div class="calc-result-grid">'+cards.map(c=>`<div class="calc-stat"><div class="k">${c[0]}</div><div class="v">${c[1]}</div></div>`).join('')+'</div><div style="margin-top:12px" class="calc-section-title">Plano sugerido por dia</div><div class="calc-plan">'+plan.map(x=>`<div class="calc-plan-row"><b>Dia ${x.dia}</b><span>${x.entradas} entrada(s) • base ${moedaBR(x.entrada_base)}${x.nivel_maximo?` • até ${moedaBR(x.nivel_maximo)}`:''}</span></div>`).join('')+'</div><div style="margin-top:10px" class="${s.viavel?'calc-ok':'calc-warning'}">${d.message||''}</div><div style="margin-top:9px" class="calc-note">${d.note||''}</div></div>';
+    const box=document.getElementById('calc-results');
+    if(!box)return;
+    const s=d.summary||{}, p=d.parameters||{}, plan=Array.isArray(d.plan)?d.plan:[];
+    const cards=[
+        ['Entrada base',moedaBR(s.entrada_base)],
+        ['Entradas estimadas',s.entradas_estimadas||'--'],
+        ['Entradas/dia',s.entradas_por_dia||'--'],
+        ['Lucro esperado/entrada',moedaBR(s.lucro_esperado_por_entrada)],
+        ['Meta total',moedaBR(p.target_profit)],
+        ['Banca final alvo',moedaBR((Number(p.bankroll)||0)+(Number(p.target_profit)||0))],
+        ['Máx. exposição',moedaBR(s.exposicao_maxima)],
+        ['EV por entrada',moedaBR(s.valor_esperado_entrada)]
+    ];
+    let html='';
+    html+='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Plano '+String(p.profile||'').toUpperCase()+' • '+(p.mode==='soros'?'SOROS':'MÃO FIXA')+'</div></div><div class="mini">'+(p.days||0)+' dia(s)</div></div>';
+    html+='<div class="card-pad">';
+    html+='<div class="calc-result-grid">';
+    cards.forEach(function(c){html+='<div class="calc-stat"><div class="k">'+c[0]+'</div><div class="v">'+c[1]+'</div></div>';});
+    html+='</div>';
+    html+='<div style="margin-top:12px" class="calc-section-title">Plano sugerido por dia</div><div class="calc-plan">';
+    if(plan.length){
+        plan.forEach(function(x){
+            html+='<div class="calc-plan-row"><b>Dia '+(x.dia||'--')+'</b><span>'+(x.entradas||0)+' entrada(s) • base '+moedaBR(x.entrada_base)+(x.nivel_maximo?' • até '+moedaBR(x.nivel_maximo):'')+'</span></div>';
+        });
+    }else{
+        html+='<div class="empty">Nenhum plano diário calculado.</div>';
+    }
+    html+='</div>';
+    html+='<div style="margin-top:10px" class="'+(s.viavel?'calc-ok':'calc-warning')+'">'+(d.message||'')+'</div>';
+    html+='<div style="margin-top:9px" class="calc-note">'+(d.note||'')+'</div>';
+    html+='</div>';
     box.innerHTML=html;
 }
 function registrarResultado(res){fetch('/resultado/'+res,{cache:'no-store'}).then(()=>toast('Resultado registrado')).catch(()=>toast('Falha ao registrar resultado'))}
