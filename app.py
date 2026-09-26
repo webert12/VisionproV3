@@ -385,7 +385,7 @@ HTML_INDEX = """
         .page-title{font-size:20px;font-weight:900;letter-spacing:.2px}.page-title span{color:var(--cyan)}
         .top-meta{display:flex;align-items:center;gap:8px}.status-pill{padding:7px 10px;border:1px solid rgba(34,197,94,.25);background:rgba(34,197,94,.07);border-radius:999px;color:#86efac;font-size:10px;font-weight:900}.logout{padding:7px 11px;border-radius:9px;text-decoration:none;color:#fca5a5;border:1px solid rgba(239,68,68,.22);background:rgba(239,68,68,.06);font-size:10px;font-weight:800}
         .workspace{max-width:1500px;margin:auto}.view{display:none}.view.active{display:block}
-        .grid-main{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,.85fr);gap:14px;align-items:start}
+        .grid-main{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,.85fr);gap:14px;align-items:start}.central-layout{grid-template-columns:1fr}.central-layout>aside{width:100%;min-width:0}.central-layout>aside>.card{width:100%}
         .card{background:linear-gradient(145deg,rgba(15,23,36,.98),rgba(9,15,24,.98));border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}.card-pad{padding:16px}.card-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}.eyebrow{font-size:9px;color:#718096;font-weight:900;letter-spacing:1.1px;text-transform:uppercase}.card-title{font-size:13px;font-weight:900;margin-top:4px}.mini{font-size:10px;color:var(--muted)}
         .hero{min-height:300px;position:relative;background:radial-gradient(circle at 50% 0%,rgba(0,217,255,.07),transparent 50%),linear-gradient(145deg,#0d1724,#090e17);border-color:rgba(0,217,255,.18)}
         .hero-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.asset-tag{font-family:'JetBrains Mono';font-size:12px;color:#d8f9ff;background:rgba(0,217,255,.08);border:1px solid rgba(0,217,255,.18);padding:7px 9px;border-radius:9px}.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px rgba(34,197,94,.8);margin-right:5px}
@@ -439,7 +439,7 @@ HTML_INDEX = """
 
         <div class="workspace">
             <section id="view-central" class="view active">
-                <div class="grid-main">
+                <div class="grid-main central-layout">
                     <div>
                         <div class="card hero">
                             <div class="card-pad">
