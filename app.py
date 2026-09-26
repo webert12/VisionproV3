@@ -408,7 +408,14 @@ HTML_INDEX = """
         .asset-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;max-height:290px;overflow:auto;padding:8px;background:#080e16;border:1px solid #182536;border-radius:10px}.asset-check{display:flex;align-items:center;gap:6px;padding:7px 8px;background:#0b121d;border:1px solid #182536;border-radius:8px;color:#aebdcd;font-size:8px;font-weight:800}.asset-check input{accent-color:#00d9ff}.asset-check.selected{border-color:rgba(0,217,255,.35);color:#dffbff;background:rgba(0,217,255,.05)}.picker-actions{display:flex;gap:7px}.picker-actions button{flex:1;padding:9px;border-radius:8px;background:#0b131f;border:1px solid #1c2b3d;color:#9fe7f5;font-size:8px;font-weight:900}.backtest-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.backtest-results{display:grid;gap:10px}.bt-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}.bt-table{width:100%;border-collapse:collapse;min-width:760px}.bt-table th,.bt-table td{padding:9px;border-bottom:1px solid rgba(255,255,255,.05);font-size:8px;text-align:left}.bt-table th{color:#66758a;text-transform:uppercase}.bt-win{color:#4ade80;font-weight:900}.bt-loss{color:#fb7185;font-weight:900}.bt-g1{color:#fbbf24;font-weight:900}.bt-note{font-size:8px;color:#718096;line-height:1.5}.warmup-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 8px;border-radius:8px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:8px;font-weight:900}
         .calc-top-btn{margin-top:7px;display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:9px;background:rgba(0,217,255,.06);border:1px solid rgba(0,217,255,.2);color:#9fe7f5;font-size:9px;font-weight:900;text-transform:uppercase}
         .calc-top-btn:hover{border-color:rgba(0,217,255,.45);background:rgba(0,217,255,.1)}
-        .calc-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr);gap:12px}.calc-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.calc-result-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.calc-stat{background:#0b121d;border:1px solid #182536;border-radius:12px;padding:11px;text-align:center}.calc-stat .k{font-size:8px;color:#66758a;font-weight:900;text-transform:uppercase}.calc-stat .v{font-family:'JetBrains Mono';font-size:17px;font-weight:900;margin-top:4px;color:#dce6f2}.calc-profile{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.calc-profile label{cursor:pointer}.calc-profile input{display:none}.calc-profile span{display:block;text-align:center;padding:10px 7px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-profile input:checked+span{border-color:rgba(0,217,255,.45);background:rgba(0,217,255,.08);color:#dffbff}.calc-mode{display:grid;grid-template-columns:1fr 1fr;gap:7px}.calc-mode label{cursor:pointer}.calc-mode input{display:none}.calc-mode span{display:block;text-align:center;padding:10px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-mode input:checked+span{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.07);color:#bbf7d0}.calc-plan{display:grid;gap:7px}.calc-plan-row{display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border-radius:9px;background:#0b121d;border:1px solid #182536;font-size:9px}.calc-plan-row b{color:#dce6f2}.calc-plan-row span{color:#7f8da0;text-align:right}.calc-warning{padding:10px;border-radius:10px;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:9px;line-height:1.5}.calc-ok{padding:10px;border-radius:10px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.18);color:#86efac;font-size:9px;line-height:1.5}.calc-note{font-size:8px;color:#718096;line-height:1.55}.calc-section-title{font-size:10px;font-weight:900;color:#dce6f2;margin-bottom:8px}.calc-input-suffix{position:relative}.calc-input-suffix input{padding-right:35px}.calc-input-suffix span{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:9px;color:#66758a;font-weight:900}
+        .calc-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr);gap:12px}.calc-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.calc-result-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.calc-stat{background:#0b121d;border:1px solid #182536;border-radius:12px;padding:11px;text-align:center}.calc-stat .k{font-size:8px;color:#66758a;font-weight:900;text-transform:uppercase}.calc-stat .v{font-family:'JetBrains Mono';font-size:17px;font-weight:900;margin-top:4px;color:#dce6f2}.calc-profile{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.calc-profile label{cursor:pointer}.calc-profile input{display:none}.calc-profile span{display:block;text-align:center;padding:10px 7px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-profile input:checked+span{border-color:rgba(0,217,255,.45);background:rgba(0,217,255,.08);color:#dffbff}.calc-mode{display:grid;grid-template-columns:1fr 1fr;gap:7px}.calc-mode label{cursor:pointer}.calc-mode input{display:none}.calc-mode span{display:block;text-align:center;padding:10px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-mode input:checked+span{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.07);color:#bbf7d0}.calc-plan{display:grid;gap:7px}.calc-plan-row{display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border-radius:9px;background:#0b121d;border:1px solid #182536;font-size:9px}.calc-plan-row b{color:#dce6f2}.calc-plan-row span{color:#7f8da0;text-align:right}.calc-warning{padding:10px;border-radius:10px;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:9px;line-height:1.5}.calc-ok{padding:10px;border-radius:10px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.18);color:#86efac;font-size:9px;line-height:1.5}.calc-note{font-size:8px;color:#718096;line-height:1.55}
+        .calc-modal{position:fixed!important;inset:0;z-index:200;display:none!important;padding:22px;overflow:auto;background:rgba(2,6,12,.82);backdrop-filter:blur(8px)}
+        .calc-modal.active{display:block!important}
+        .calc-modal-inner{max-width:1180px;margin:0 auto;padding-bottom:40px}
+        .calc-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+        .calc-close{border:1px solid rgba(239,68,68,.25);background:rgba(239,68,68,.07);color:#fca5a5;border-radius:9px;padding:8px 12px;font-size:10px;font-weight:900;cursor:pointer}
+        @media(max-width:700px){.calc-modal{padding:12px 10px 28px}.calc-modal-inner{width:100%}.calc-modal-head{position:sticky;top:0;z-index:3;padding:4px 0 8px;background:rgba(2,6,12,.92);backdrop-filter:blur(8px)}}
+.calc-section-title{font-size:10px;font-weight:900;color:#dce6f2;margin-bottom:8px}.calc-input-suffix{position:relative}.calc-input-suffix input{padding-right:35px}.calc-input-suffix span{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:9px;color:#66758a;font-weight:900}
 
         .mobile-nav{display:none}.mobile-only{display:none}.desktop-only{display:block}
         .toast{position:fixed;right:20px;bottom:20px;background:#101a28;border:1px solid #24354a;border-radius:10px;padding:10px 13px;font-size:10px;color:#dbe8f5;opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s;z-index:100}.toast.show{opacity:1;transform:none}
@@ -436,7 +443,6 @@ HTML_INDEX = """
             <button data-view="protecao" onclick="abrirView('protecao',this)">🛡️ <span>Proteção</span></button>
             <button data-view="historico" onclick="abrirView('historico',this)">📈 <span>Histórico</span></button>
             <button data-view="backtest" onclick="abrirView('backtest',this)">🧪 <span>Backtest</span></button>
-            <button data-view="calculadora" onclick="abrirView('calculadora',this)">🧮 <span>Calculadora</span></button>
             <button data-view="config" onclick="abrirView('config',this)">⚙️ <span>Configurações</span></button>
         </nav>
         <div class="sidebar-footer">Sistema de análise estatística e técnica. Os alertas não garantem resultados financeiros. Opere com responsabilidade.</div>
@@ -444,7 +450,7 @@ HTML_INDEX = """
 
     <main class="main">
         <div class="topbar">
-            <div><div class="page-title">VISION <span>PRO</span></div><div class="mini">Terminal de análise em tempo real</div><button class="calc-top-btn" onclick="abrirView('calculadora',document.querySelector('[data-view=calculadora]'))">🧮 CALCULADORA DE GESTÃO DE BANCA</button></div>
+            <div><div class="page-title">VISION <span>PRO</span></div><div class="mini">Terminal de análise em tempo real</div><button class="calc-top-btn" type="button" onclick="abrirCalculadora()">🧮 CALCULADORA DE GESTÃO DE BANCA</button></div>
             <div class="top-meta"><div class="status-pill"><span class="live-dot"></span><span id="top-status">ONLINE</span></div><a class="logout" href="/logout">SAIR</a></div>
         </div>
 
@@ -574,8 +580,12 @@ HTML_INDEX = """
                 <div id="backtest-results" class="backtest-results" style="margin-top:12px"><div class="card"><div class="card-pad empty">Escolha os parâmetros e execute o backtest.</div></div></div>
             </section>
 
-            <section id="view-calculadora" class="view">
-                <div class="section-head"><div><h2>🧮 Calculadora de Gestão de Banca</h2><p>Simule uma trajetória de banca com mão fixa ou Soros usando parâmetros explícitos.</p></div><div class="warmup-badge">⚠️ Simulação, não garantia de resultado</div></div>
+            <section id="view-calculadora" class="view calc-modal" aria-hidden="true">
+                <div class="calc-modal-inner">
+                    <div class="calc-modal-head">
+                        <div class="section-head" style="margin:0"><div><h2>🧮 Calculadora de Gestão de Banca</h2><p>Simule uma trajetória de banca com mão fixa ou Soros usando parâmetros explícitos.</p></div><div class="warmup-badge">⚠️ Simulação, não garantia de resultado</div></div>
+                        <button type="button" class="calc-close" onclick="fecharCalculadora()">✕ FECHAR</button>
+                    </div>
                 <div class="calc-grid">
                     <div class="card">
                         <div class="card-head"><div><div class="eyebrow">Planejamento</div><div class="card-title">Defina a meta da banca</div></div></div>
@@ -608,6 +618,7 @@ HTML_INDEX = """
                         <div class="card-pad"><div class="empty">Preencha os parâmetros e clique em “Calcular plano”.</div></div>
                     </div>
                 </div>
+                </div>
             </section>
 
             <section id="view-config" class="view">
@@ -634,7 +645,6 @@ HTML_INDEX = """
     <button data-view="protecao" onclick="abrirView('protecao',this)"><span>🛡️</span>Proteção</button>
     <button data-view="historico" onclick="abrirView('historico',this)"><span>📈</span>Histórico</button>
     <button data-view="backtest" onclick="abrirView('backtest',this)"><span>🧪</span>Backtest</button>
-    <button data-view="calculadora" onclick="abrirView('calculadora',this)"><span>🧮</span>Banca</button>
     <button data-view="config" onclick="abrirView('config',this)"><span>⚙️</span>Config</button>
 </div>
 <div id="toast" class="toast"></div>
@@ -644,6 +654,22 @@ let lastNotifId=null;
 let latestData=null;
 const NATIVE_NOTIFICATION_COOLDOWN_MS=0;
 
+function abrirCalculadora(){
+    const modal=document.getElementById('view-calculadora');
+    if(!modal)return;
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden','false');
+    document.body.style.overflow='hidden';
+    atualizarPerfilCalc();
+}
+function fecharCalculadora(){
+    const modal=document.getElementById('view-calculadora');
+    if(!modal)return;
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden','true');
+    document.body.style.overflow='';
+}
+window.addEventListener('keydown',e=>{if(e.key==='Escape')fecharCalculadora()});
 function abrirView(name,btn){
     document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
     const el=document.getElementById('view-'+name); if(el) el.classList.add('active');
@@ -652,7 +678,6 @@ function abrirView(name,btn){
     if(name==='analise' && latestData) renderAnalysis(latestData);
     if(name==='historico' && latestData) renderHistory(latestData.historico||[]);
     if(name==='backtest' && latestData) { const m=document.getElementById('bt-market'); if(m) renderAssetPicker('bt-assets',m.value,[]); }
-    if(name==='calculadora') atualizarPerfilCalc();
 }
 function toggleBox(id){const e=document.getElementById(id); if(e)e.classList.toggle('open')}
 function toast(msg){const e=document.getElementById('toast');if(!e)return;e.innerText=msg;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2200)}
