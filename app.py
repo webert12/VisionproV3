@@ -559,7 +559,7 @@ HTML_INDEX = """
 <script>
 let lastNotifId=null;
 let latestData=null;
-const NATIVE_NOTIFICATION_COOLDOWN_MS=60000;
+const NATIVE_NOTIFICATION_COOLDOWN_MS=0;
 
 function abrirView(name,btn){
     document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
@@ -576,7 +576,7 @@ function registrarResultado(res){fetch('/resultado/'+res,{cache:'no-store'}).the
 function toggleTelegram(){fetch('/command/telegram_toggle',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d.ok){const b=document.getElementById('btn-telegram-toggle');if(b)b.innerText=d.telegram_ativo?'🟢 ENVIO TELEGRAM ATIVADO':'🔴 ENVIO TELEGRAM DESATIVADO';}})}
 function solicitarPermissaoNotificacao(){if(!('Notification'in window)){alert('Este navegador não suporta notificações.');return}Notification.requestPermission().then(p=>{const b=document.getElementById('btn-enable-notify');if(p==='granted'){if(b)b.innerText='✅ NOTIFICAÇÕES NATIVAS ATIVADAS';toast('Notificações ativadas')}else alert('Permissão de notificação recusada.')})}
 if('serviceWorker'in navigator&&'Notification'in window){navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'}).catch(()=>{})}
-async function dispararNotificacaoNativa(titulo,corpo,id){if(!('Notification'in window)||Notification.permission!=='granted')return;const nid=String(id||''),now=Date.now(),last=localStorage.getItem('vision_last_notif_id')||'',lastAt=Number(localStorage.getItem('vision_last_notif_at')||0);if(nid&&nid===last)return;if(lastAt&&now-lastAt<NATIVE_NOTIFICATION_COOLDOWN_MS)return;try{if('serviceWorker'in navigator){const reg=await navigator.serviceWorker.ready;await reg.showNotification(titulo,{body:corpo,tag:'vision-signal',renotify:false,requireInteraction:false})}else new Notification(titulo,{body:corpo});if(nid)localStorage.setItem('vision_last_notif_id',nid);localStorage.setItem('vision_last_notif_at',String(now))}catch(e){}}
+async function dispararNotificacaoNativa(titulo,corpo,id){if(!('Notification'in window)||Notification.permission!=='granted')return;const nid=String(id||''),now=Date.now(),last=localStorage.getItem('vision_last_notif_id')||'',lastAt=Number(localStorage.getItem('vision_last_notif_at')||0);if(nid&&nid===last)return;if(lastAt&&NATIVE_NOTIFICATION_COOLDOWN_MS>0&&now-lastAt<NATIVE_NOTIFICATION_COOLDOWN_MS)return;try{const opcoes={body:corpo,tag:nid?'vision-signal-'+nid:'vision-signal-'+now,renotify:true,requireInteraction:true,silent:false,vibrate:[250,120,250,120,400],timestamp:now};if('serviceWorker'in navigator){const reg=await navigator.serviceWorker.ready;await reg.showNotification(titulo,opcoes)}else new Notification(titulo,opcoes);if(nid)localStorage.setItem('vision_last_notif_id',nid);localStorage.setItem('vision_last_notif_at',String(now))}catch(e){console.warn('Notificação nativa indisponível:',e)}}
 function toggleAtivosBloqueados(){const p=document.getElementById('news-locked-panel');const b=document.getElementById('news-locked-toggle');if(!p||!b)return;p.classList.toggle('open');const n=(latestData&&latestData.news_blocked_assets||[]).length;b.innerText=(p.classList.contains('open')?'🔽 OCULTAR':'🔒 VER')+' ATIVOS BLOQUEADOS ('+n+')'}
 function atualizarAtivosBloqueados(lista){const itens=Array.isArray(lista)?lista:[];const b=document.getElementById('news-locked-toggle'),p=document.getElementById('news-locked-panel'),box=document.getElementById('news-locked-list');if(!b||!p||!box)return;b.innerText=(p.classList.contains('open')?'🔽 OCULTAR':'🔒 VER')+' ATIVOS BLOQUEADOS ('+itens.length+')';box.innerHTML=itens.length?itens.map(x=>{const imp=Math.max(1,Math.min(3,parseInt(x.impact||2,10)));return `<div class="locked-item"><b>🚫 ${x.ativo||'ATIVO'}</b><br>${'🐂'.repeat(imp)} ${x.currency||''} — ${x.event||'Evento econômico'}<br><span style="color:#6f8095">Notícia: ${x.horario||'--:--'} | Liberação: ${x.liberacao||'--:--'}</span></div>`}).join(''):'<div class="empty">Nenhum ativo bloqueado por notícia no momento.</div>';
     const b2=document.getElementById('news-locked-list-2');if(b2)b2.innerHTML=itens.length?itens.map(x=>{const imp=Math.max(1,Math.min(3,parseInt(x.impact||2,10)));return `<div class="locked-item"><b>🚫 ${x.ativo||'ATIVO'}</b><br>${'🐂'.repeat(imp)} ${x.currency||''} — ${x.event||'Evento econômico'}<br><span style="color:#6f8095">Notícia: ${x.horario||'--:--'} | Liberação: ${x.liberacao||'--:--'}</span></div>`}).join(''):'<div class="empty">Nenhum ativo bloqueado por notícia no momento.</div>';
@@ -591,7 +591,7 @@ function renderSignal(d){
     renderProbability(prob);renderProbability(prob,'prob-value-3','prob-fill-3');setText('prob-value-2',prob?prob+'%':'--%');setText('confluence-overall',a.confluencia!=null?'Confluência técnica: '+Number(a.confluencia).toFixed(0)+'/100':'Confluência técnica: --/100');setText('confluence-overall-2',a.confluencia!=null?'Confluência '+Number(a.confluencia).toFixed(0)+'/100':'Confluência --/100');
     const est=(active&&active.estrategia_fmt)||a.estrategia_fmt||'Motor aguardando análise';setText('signal-strategy',est);setText('signal-strategy-2',est);setText('analysis-direction',dir?dir:'Sem sinal');
     setText('signal-entry',d.entry_time||'--:--:--');setText('signal-entry-2',d.entry_time||'--:--:--');setText('signal-expiry',(active&&active.str_saida)||a.str_saida||'--:--');setText('signal-expiry-2',(active&&active.str_saida)||a.str_saida||'--:--');
-    setText('signal-status',d.aguardando?'CONFIRMADO':d.rodando?'ANALISANDO':'PARADO');setText('robot-status',d.rodando?'ONLINE':'PARADO');setText('top-status',d.rodando?'ANALISANDO':'ONLINE');
+    setText('signal-status',d.aguardando?(dir?('CONFIRMADO • '+ativo):'CONFIRMADO'):d.rodando?'ANALISANDO':'PARADO');setText('robot-status',d.rodando?'ONLINE':'PARADO');setText('top-status',d.rodando?'ANALISANDO':'ONLINE');
     renderConfluence(a,'confluence-list');renderReasons(a,'analysis-reasons');renderConfluence(a,'confluence-list-2');renderReasons(a,'analysis-reasons-2');drawChart(a.grafico||[],'market-chart');drawChart(a.grafico||[],'market-chart-2');
 }
 function renderConfluence(a,id){const box=document.getElementById(id);if(!box)return;const items=Array.isArray(a.confluencias)?a.confluencias:[];box.innerHTML=items.length?items.map(x=>`<div class="conf-row"><div class="conf-name">${x.nome||'Indicador'}</div><div class="conf-bar"><div class="conf-fill" style="width:${Math.max(0,Math.min(100,Number(x.pontos)||0))*5}%"></div></div><div class="conf-points">${x.pontos||0}/20</div></div>`).join(''):'<div class="empty">Aguardando dados do mercado...</div>'}
@@ -2364,7 +2364,11 @@ def bot_loop():
                             diag["motivos"] = diag.get("confluencias", [])
                             melhor_analise = diag
 
-                        st["analise_atual"] = melhor_analise
+                                        # Quando existe um pré-alerta/sinal confirmado, não deixamos a varredura
+                        # dos demais ativos substituir a análise do sinal que está em operação.
+                        # Isso garante que o painel continue mostrando o MESMO ativo confirmado.
+                        if not bloquear_novos_alertas or not st.get("analise_atual"):
+                            st["analise_atual"] = melhor_analise
 
                         # Sinais só avançam quando existe uma probabilidade estimada mínima.
                         if sinal_encontrado and maior_prob >= 80 and not bloquear_novos_alertas:
