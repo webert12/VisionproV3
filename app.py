@@ -83,7 +83,11 @@ def get_user_state(email):
             "news_guard_updated": 0.0,
             "analise_atual": None,
             "sessao_resultados": [],
-            "sinais_sessao_total": 0
+            "sinais_sessao_total": 0,
+            "warmup_concluido": False,
+            "warmup_ativos_analisados": set(),
+            "warmup_inicio": 0.0,
+            "warmup_status": "AGUARDANDO 30 VELAS"
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -381,7 +385,7 @@ HTML_INDEX = """
         .card{background:linear-gradient(145deg,rgba(15,23,36,.98),rgba(9,15,24,.98));border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}.card-pad{padding:16px}.card-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}.eyebrow{font-size:9px;color:#718096;font-weight:900;letter-spacing:1.1px;text-transform:uppercase}.card-title{font-size:13px;font-weight:900;margin-top:4px}.mini{font-size:10px;color:var(--muted)}
         .hero{min-height:300px;position:relative;background:radial-gradient(circle at 50% 0%,rgba(0,217,255,.07),transparent 50%),linear-gradient(145deg,#0d1724,#090e17);border-color:rgba(0,217,255,.18)}
         .hero-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.asset-tag{font-family:'JetBrains Mono';font-size:12px;color:#d8f9ff;background:rgba(0,217,255,.08);border:1px solid rgba(0,217,255,.18);padding:7px 9px;border-radius:9px}.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px rgba(34,197,94,.8);margin-right:5px}
-        .signal-center{text-align:center;padding:18px 8px 12px}.signal-direction{font-size:40px;font-weight:900;letter-spacing:1px}.signal-call{color:#34d399;text-shadow:0 0 24px rgba(34,197,94,.18)}.signal-put{color:#fb7185;text-shadow:0 0 24px rgba(239,68,68,.18)}.signal-wait{color:#7f8da0;font-size:25px}.prob-label{font-size:10px;color:#7d8ba0;font-weight:800;text-transform:uppercase;letter-spacing:1px}.prob-value{font-family:'JetBrains Mono';font-size:31px;font-weight:900;margin-top:2px}.prob-bar{height:8px;background:#182231;border-radius:99px;overflow:hidden;margin:10px auto 12px;max-width:330px}.prob-fill{height:100%;width:0%;background:linear-gradient(90deg,#0ea5e9,#22c55e);border-radius:99px;transition:width .4s}
+        .signal-center{text-align:center;padding:18px 8px 12px}.signal-direction{font-size:40px;font-weight:900;letter-spacing:1px}.signal-call{color:#34d399;text-shadow:0 0 24px rgba(34,197,94,.18)}.signal-put{color:#fb7185;text-shadow:0 0 24px rgba(239,68,68,.18)}.signal-wait{color:#7f8da0;font-size:25px}.prob-label{font-size:10px;color:#7d8ba0;font-weight:800;text-transform:uppercase;letter-spacing:1px}.prob-value{font-family:'JetBrains Mono';font-size:31px;font-weight:900;margin-top:2px}.prob-bar{height:8px;background:#182231;border-radius:99px;overflow:hidden;margin:10px auto 12px;max-width:330px}.prob-fill{height:100%;width:0%;background:linear-gradient(90deg,#0ea5e9,#22c55e);border-radius:99px;transition:width .4s}.candle-timer{margin-top:12px;background:#070d15;border:1px solid #1a2a3b;border-radius:12px;padding:12px}.timer-head{display:flex;justify-content:space-between;align-items:center;gap:8px}.timer-title{font-size:9px;color:#7d8ba0;font-weight:900;text-transform:uppercase;letter-spacing:1px}.timer-value{font-family:'JetBrains Mono';font-size:18px;font-weight:900;color:#e8f7ff}.timer-track{height:8px;background:#172231;border-radius:99px;overflow:hidden;margin-top:8px}.timer-fill{height:100%;width:0%;background:linear-gradient(90deg,#00d9ff,#22c55e);border-radius:99px;transition:width .25s linear}.timer-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:9px}.timer-box{background:#0b121d;border:1px solid #182536;border-radius:9px;padding:8px;text-align:center}.timer-k{font-size:7px;color:#66758a;text-transform:uppercase;font-weight:900}.timer-v{font-family:'JetBrains Mono';font-size:11px;font-weight:900;color:#dce6f2;margin-top:3px}.timer-note{font-size:8px;color:#718096;text-align:center;margin-top:8px;line-height:1.4}.timer-alert{color:#fbbf24!important}.timer-confirm{color:#4ade80!important}
         .signal-meta{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.metric{background:#0b121d;border:1px solid #182536;border-radius:10px;padding:9px;text-align:center}.metric .k{font-size:8px;color:#66758a;text-transform:uppercase;font-weight:900}.metric .v{font-size:11px;font-weight:900;margin-top:4px;color:#dce6f2}
         .console{margin-top:12px;background:#070c13;border:1px solid #182333;border-radius:10px;padding:10px;font-family:'JetBrains Mono';font-size:10px;color:#7de3f5;min-height:34px;line-height:1.5}
         .chart-wrap{padding:10px 12px 12px}.chart{width:100%;height:150px;display:block;background:#080e16;border:1px solid #172333;border-radius:10px}.chart-grid{stroke:#172333;stroke-width:1}.chart-line{fill:none;stroke:#00d9ff;stroke-width:2.2;vector-effect:non-scaling-stroke}.chart-area{fill:url(#areaGrad);opacity:.25}.chart-empty{fill:#657489;font-size:11px}
@@ -391,7 +395,7 @@ HTML_INDEX = """
         .session-bar{height:7px;background:#182231;border-radius:99px;overflow:hidden;margin-top:10px}.session-fill{height:100%;background:linear-gradient(90deg,#16a34a,#4ade80);width:0%;transition:.4s}
         .protection{display:grid;gap:8px}.protection-main{display:flex;justify-content:space-between;gap:8px;align-items:center}.guard-badge{padding:6px 8px;border-radius:8px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.18);font-size:9px;font-weight:900;color:#86efac}.locked-btn{width:100%;padding:10px;border:1px solid rgba(239,68,68,.25);background:rgba(239,68,68,.06);color:#fca5a5;border-radius:9px;font-size:9px;font-weight:900;text-transform:uppercase}.locked-panel{display:none;border:1px solid rgba(239,68,68,.2);background:#080e15;border-radius:10px;padding:8px}.locked-panel.open{display:block}.locked-item{padding:8px;border-left:3px solid #ef4444;background:rgba(239,68,68,.05);border-radius:7px;margin-top:5px;font-size:9px;line-height:1.5}.locked-item:first-child{margin-top:0}.empty{font-size:9px;color:#66758a;text-align:center;padding:8px}
         .controls{display:grid;gap:12px}.action-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.action{border:0;border-radius:10px;padding:11px 5px;color:white;font-size:10px;font-weight:900}.start{background:linear-gradient(135deg,#16a34a,#059669)}.pause{background:linear-gradient(135deg,#f59e0b,#d97706)}.stop{background:linear-gradient(135deg,#ef4444,#dc2626)}.action:active{transform:scale(.98)}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.field label{display:block;color:#728197;font-size:8px;font-weight:900;text-transform:uppercase;margin-bottom:4px}.select{width:100%;background:#0a111b;border:1px solid #1b2a3b;color:#dce6f2;padding:10px;border-radius:9px;font-size:10px;outline:none}.select:focus{border-color:rgba(0,217,255,.55)}
-        .tool-btn,.history-btn,.admin-btn{width:100%;padding:10px;border-radius:9px;background:#0b131f;border:1px solid #1c2b3d;color:#8edff0;font-size:9px;font-weight:900;text-transform:uppercase}.tool-btn:hover,.history-btn:hover{border-color:rgba(0,217,255,.35)}.admin-btn{color:#8ab4ff;border-color:rgba(96,165,250,.25)}.tools-content,.history{display:none;margin-top:8px}.tools-content.open,.history.open{display:grid;gap:7px}.tg-btn,.notify-btn{width:100%;padding:9px;border-radius:8px;background:#0a111a;border:1px solid #1d2b3c;color:#94a3b8;font-size:9px;font-weight:900}.history-list{max-height:220px;overflow:auto}.history-item{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);font-family:'JetBrains Mono';font-size:9px}.history-item:last-child{border-bottom:0}
+        .tool-btn,.history-btn,.admin-btn{width:100%;padding:10px;border-radius:9px;background:#0b131f;border:1px solid #1c2b3d;color:#8edff0;font-size:9px;font-weight:900;text-transform:uppercase}.tool-btn:hover,.history-btn:hover{border-color:rgba(0,217,255,.35)}.admin-btn{color:#8ab4ff;border-color:rgba(96,165,250,.25)}.tools-content,.history{display:none;margin-top:8px}.tools-content.open,.history.open{display:grid;gap:7px}.tg-btn,.notify-btn{width:100%;padding:9px;border-radius:8px;background:#0a111a;border:1px solid #1d2b3c;color:#94a3b8;font-size:9px;font-weight:900}.history-list{max-height:220px;overflow:auto}.history-item{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);font-family:'JetBrains Mono';font-size:9px}.history-item:last-child{border-bottom:0}.history-result{font-weight:900;padding:4px 7px;border-radius:7px;border:1px solid transparent}.history-win,.history-g1{color:#4ade80;background:rgba(34,197,94,.08);border-color:rgba(34,197,94,.22)}.history-red{color:#fb7185;background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.22)}
         .section{display:none}.section.active{display:block}.section-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.section-head h2{font-size:15px}.section-head p{font-size:9px;color:#69798d}.table-card{overflow:auto}.data-table{width:100%;border-collapse:collapse;min-width:620px}.data-table th{font-size:8px;color:#66758a;text-transform:uppercase;text-align:left;padding:10px;border-bottom:1px solid var(--line)}.data-table td{font-size:9px;padding:10px;border-bottom:1px solid rgba(255,255,255,.045)}
         .mobile-nav{display:none}.mobile-only{display:none}.desktop-only{display:block}
         .toast{position:fixed;right:20px;bottom:20px;background:#101a28;border:1px solid #24354a;border-radius:10px;padding:10px 13px;font-size:10px;color:#dbe8f5;opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s;z-index:100}.toast.show{opacity:1;transform:none}
@@ -399,7 +403,7 @@ HTML_INDEX = """
         @media(max-width:760px){
             body{padding:0;background:#070b12}.app-shell{display:block}.sidebar{display:none}.main{width:100%;margin:0;padding:12px 10px 86px}.topbar{margin-bottom:11px}.page-title{font-size:16px}.status-pill{font-size:8px;padding:6px 8px}.logout{font-size:8px;padding:6px 8px}.mobile-only{display:block}.desktop-only{display:none}
             .grid-main{display:flex;flex-direction:column;gap:10px}.card{border-radius:13px}.card-pad{padding:12px}.hero{min-height:280px}.signal-direction{font-size:35px}.prob-value{font-size:28px}.signal-meta{grid-template-columns:repeat(2,1fr)}.analysis-reasons{grid-template-columns:1fr}.conf-row{grid-template-columns:92px 1fr 36px}.chart{height:135px}.stat-grid{grid-template-columns:repeat(2,1fr)}.field-grid{grid-template-columns:1fr}.action-grid{position:sticky;bottom:72px;z-index:20;background:rgba(7,11,18,.92);padding:7px;border:1px solid #182333;border-radius:12px;backdrop-filter:blur(12px)}
-            .mobile-nav{position:fixed;display:grid;grid-template-columns:repeat(5,1fr);left:8px;right:8px;bottom:8px;height:58px;background:rgba(8,14,22,.96);border:1px solid #203044;border-radius:16px;z-index:60;box-shadow:0 10px 35px rgba(0,0,0,.45);padding:4px}.mobile-nav button{border:0;background:transparent;color:#65758a;font-size:8px;font-weight:900;border-radius:11px}.mobile-nav button.active{background:rgba(0,217,255,.08);color:#dffbff}.mobile-nav span{display:block;font-size:17px;margin-bottom:2px}
+            .mobile-nav{position:fixed;display:grid;grid-template-columns:repeat(6,1fr);left:8px;right:8px;bottom:8px;height:60px;background:rgba(8,14,22,.96);border:1px solid #203044;border-radius:16px;z-index:60;box-shadow:0 10px 35px rgba(0,0,0,.45);padding:4px}.mobile-nav button{border:0;background:transparent;color:#65758a;font-size:7px;font-weight:900;border-radius:11px;min-width:0}.mobile-nav button.active{background:rgba(0,217,255,.08);color:#dffbff}.mobile-nav span{display:block;font-size:15px;margin-bottom:2px}
             .topbar .top-meta{gap:5px}.topbar{gap:6px}.hero-top .mini{max-width:160px}.locked-btn{padding:11px}.section-head{margin-top:2px}.table-card{border-radius:12px}
         }
         @media(min-width:1400px){.main{padding-left:32px;padding-right:32px}.grid-main{grid-template-columns:minmax(0,1.65fr) minmax(350px,.8fr)}}
@@ -451,6 +455,15 @@ HTML_INDEX = """
                                     <div class="metric"><div class="k">Expiração</div><div class="v" id="signal-expiry">--:--</div></div>
                                     <div class="metric"><div class="k">Status</div><div class="v" id="signal-status">AGUARDANDO</div></div>
                                 </div>
+                                <div class="candle-timer">
+                                    <div class="timer-head"><div class="timer-title">⏱ TEMPO EXATO DO CANDLE</div><div class="timer-value" id="candle-countdown">--:--</div></div>
+                                    <div class="timer-track"><div class="timer-fill" id="candle-fill"></div></div>
+                                    <div class="timer-grid">
+                                        <div class="timer-box"><div class="timer-k">Candle atual</div><div class="timer-v" id="candle-window">--:--:-- → --:--:--</div></div>
+                                        <div class="timer-box"><div class="timer-k">Entrada prevista</div><div class="timer-v" id="entry-countdown">--:--:--</div></div>
+                                    </div>
+                                    <div class="timer-note" id="timer-note">Aguardando sincronização do candle.</div>
+                                </div>
                                 <div class="console" id="panel-text">Aguardando Comando...</div>
                             </div>
                             <div class="chart-wrap"><canvas id="market-chart" class="chart"></canvas></div>
@@ -476,15 +489,6 @@ HTML_INDEX = """
                                     <div class="stat-box"><div class="stat-k">G1</div><div class="stat-v" id="g1-count">0</div></div>
                                 </div>
                                 <div class="session-bar"><div class="session-fill" id="wr-fill"></div></div>
-                            </div>
-                        </div>
-
-                        <div class="card" style="margin-top:12px">
-                            <div class="card-head"><div><div class="eyebrow">Proteção</div><div class="card-title">Calendário macro</div></div><div class="guard-badge" id="guard-badge">● ATIVO</div></div>
-                            <div class="card-pad protection">
-                                <div class="protection-main"><span class="mini">Status da trava</span><b id="news-guard-status" style="font-size:9px;color:#fbbf24">AGUARDANDO CALENDÁRIO</b></div>
-                                <button class="locked-btn" id="news-locked-toggle" onclick="toggleAtivosBloqueados()">🔒 VER ATIVOS BLOQUEADOS (0)</button>
-                                <div id="news-locked-panel" class="locked-panel"><div id="news-locked-list"><div class="empty">Nenhum ativo bloqueado por notícia no momento.</div></div></div>
                             </div>
                         </div>
 
@@ -524,7 +528,11 @@ HTML_INDEX = """
 
             <section id="view-protecao" class="view">
                 <div class="section-head"><div><h2>🛡️ Proteção macro</h2><p>Eventos de impacto moderado/alto retiram somente os ativos afetados da análise.</p></div></div>
-                <div class="card"><div class="card-pad"><div class="protection-main"><div><div class="eyebrow">Calendário econômico</div><div class="card-title" id="guard-detail-status">Aguardando atualização</div></div><div class="guard-badge" id="guard-badge-2">● ATIVO</div></div><div style="margin-top:12px" id="news-locked-list-2"><div class="empty">Nenhum ativo bloqueado por notícia no momento.</div></div></div></div>
+                <div class="grid-main">
+                    <div class="card"><div class="card-head"><div><div class="eyebrow">Calendário econômico</div><div class="card-title" id="guard-detail-status">Aguardando atualização</div></div><div class="guard-badge" id="guard-badge-2">● ATIVO</div></div><div class="card-pad protection"><div class="protection-main"><span class="mini">Status da trava</span><b id="news-guard-status" style="font-size:9px;color:#fbbf24">AGUARDANDO CALENDÁRIO</b></div><button class="locked-btn" id="news-locked-toggle" onclick="toggleAtivosBloqueados()">🔒 VER ATIVOS BLOQUEADOS (0)</button><div id="news-locked-panel" class="locked-panel"><div id="news-locked-list"><div class="empty">Nenhum ativo bloqueado por notícia no momento.</div></div></div></div></div>
+                    <div class="card"><div class="card-head"><div><div class="eyebrow">Regra de segurança</div><div class="card-title">Proteção operacional</div></div></div><div class="card-pad"><div class="metric"><div class="k">Impacto</div><div class="v">🐂🐂 / 🐂🐂🐂</div></div><div class="metric" style="margin-top:8px"><div class="k">Janela</div><div class="v">30 min antes + 30 min depois</div></div><div class="metric" style="margin-top:8px"><div class="k">Comportamento</div><div class="v">Somente o ativo afetado é retirado</div></div><div class="metric" style="margin-top:8px"><div class="k">Fonte</div><div class="v">Investing.com Economic Calendar</div></div></div></div>
+                </div>
+                <div class="card" style="margin-top:12px"><div class="card-head"><div><div class="eyebrow">Proteção ativa</div><div class="card-title">Detalhes dos bloqueios</div></div></div><div class="card-pad" id="news-locked-list-2"><div class="empty">Nenhum ativo bloqueado por notícia no momento.</div></div></div>
             </section>
 
             <section id="view-historico" class="view">
@@ -553,6 +561,7 @@ HTML_INDEX = """
     <button data-view="analise" onclick="abrirView('analise',this)"><span>📊</span>Análise</button>
     <button data-view="sinais" onclick="abrirView('sinais',this)"><span>🎯</span>Sinais</button>
     <button data-view="protecao" onclick="abrirView('protecao',this)"><span>🛡️</span>Proteção</button>
+    <button data-view="historico" onclick="abrirView('historico',this)"><span>📈</span>Histórico</button>
     <button data-view="config" onclick="abrirView('config',this)"><span>⚙️</span>Config</button>
 </div>
 <div id="toast" class="toast"></div>
@@ -601,6 +610,21 @@ function renderSignal(d){
     const conf=fonte.confluencia!=null?fonte.confluencia:a.confluencia;
     const analise=fonte.analise||a;
 
+    const panel=document.getElementById('panel-text');
+    if(panel){
+        if(confirmado){
+            const corConfirmada=dir==='CALL'?'#34d399':dir==='PUT'?'#fb7185':'#67e8f9';
+            panel.innerHTML=`<div style=\"text-align:center;line-height:1.6\"><b style=\"color:#67e8f9\">🎯 SINAL CONFIRMADO — ENTRADA AGORA!</b><br><b style=\"font-size:15px;color:${corConfirmada}\">${ativo} • ${dir||'--'}</b><br><span style=\"color:#cbd5e1\">Probabilidade: ${prob||'--'}% • M${tf}</span><br><span style=\"color:#94a3b8\">Entrada: ${entrada} • Expiração: ${expiracao}</span></div>`;
+        }else if(alerta){
+            const corAlerta=dir==='CALL'?'#34d399':dir==='PUT'?'#fb7185':'#fbbf24';
+            panel.innerHTML=`<div style=\"text-align:center;line-height:1.6\"><b style=\"color:#fbbf24\">⚠️ PRÉ-ALERTA</b><br><b style=\"font-size:15px;color:${corAlerta}\">${ativo} • ${dir||'--'}</b><br><span style=\"color:#cbd5e1\">Probabilidade: ${prob||'--'}% • M${tf}</span><br><span style=\"color:#94a3b8\">Entrada prevista: ${entrada} • Expiração: ${expiracao}</span></div>`;
+        }else if(!d.warmup_concluido && d.rodando){
+            panel.innerHTML=`<div style=\"text-align:center;color:#f59e0b;line-height:1.6\">🛡️ <b>TRAVA DE SEGURANÇA</b><br>ANALISANDO AS ÚLTIMAS 30 VELAS<br><span style=\"color:#00d9ff\">${d.warmup_ativos_analisados||0} ATIVOS VALIDADOS</span></div>`;
+        }else{
+            panel.innerHTML=d.html||'Aguardando Comando...';
+        }
+    }
+
     setText('asset-tag',ativo);
     setText('analysis-asset',ativo);
     setText('signal-asset-2',ativo);
@@ -648,12 +672,16 @@ function renderSignal(d){
 function renderConfluence(a,id){const box=document.getElementById(id);if(!box)return;const items=Array.isArray(a.confluencias)?a.confluencias:[];box.innerHTML=items.length?items.map(x=>`<div class="conf-row"><div class="conf-name">${x.nome||'Indicador'}</div><div class="conf-bar"><div class="conf-fill" style="width:${Math.max(0,Math.min(100,Number(x.pontos)||0))*5}%"></div></div><div class="conf-points">${x.pontos||0}/20</div></div>`).join(''):'<div class="empty">Aguardando dados do mercado...</div>'}
 function renderReasons(a,id){const box=document.getElementById(id);if(!box)return;const items=Array.isArray(a.motivos)?a.motivos:[];box.innerHTML=items.length?items.map(x=>`<div class="reason"><b class="${x.status==='ok'?'ok':x.status==='warn'?'warn':'bad'}">${x.status==='ok'?'✓':x.status==='warn'?'•':'×'} ${x.nome||'Indicador'}</b><div>${x.detalhe||''}</div></div>`).join(''):'<div class="empty">Sem diagnóstico disponível.</div>'}
 function drawChart(vals,id){const c=document.getElementById(id);if(!c)return;const ctx=c.getContext('2d');const rect=c.getBoundingClientRect();const w=Math.max(300,Math.floor(rect.width)),h=Math.max(120,Math.floor(rect.height));const dpr=window.devicePixelRatio||1;c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.strokeStyle='#172333';ctx.lineWidth=1;for(let i=1;i<4;i++){const y=i*h/4;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}if(!Array.isArray(vals)||vals.length<2){ctx.fillStyle='#64748b';ctx.font='11px Inter';ctx.fillText('Aguardando candles válidos...',12,20);return}const min=Math.min(...vals),max=Math.max(...vals),range=max-min||1;const pts=vals.map((v,i)=>[i*(w-18)/(vals.length-1)+9,h-10-((v-min)/range)*(h-24)]);ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.strokeStyle='#00d9ff';ctx.lineWidth=2.2;ctx.stroke();ctx.lineTo(pts[pts.length-1][0],h-10);ctx.lineTo(pts[0][0],h-10);ctx.closePath();ctx.fillStyle='rgba(0,217,255,.07)';ctx.fill();const last=pts[pts.length-1];ctx.beginPath();ctx.arc(last[0],last[1],3.5,0,Math.PI*2);ctx.fillStyle='#22c55e';ctx.fill()}
-function renderHistory(hist){const body=document.getElementById('history-table-body');if(!body)return;if(!hist.length){body.innerHTML='<tr><td colspan="3" class="empty">Nenhum histórico.</td></tr>';return}body.innerHTML=hist.map(x=>`<tr><td>#${x.id||'--'}</td><td>${x.sinal||'--'}</td><td>${x.res||'--'}</td></tr>`).join('')}
+function renderHistory(hist){const body=document.getElementById('history-table-body');if(!body)return;if(!hist.length){body.innerHTML='<tr><td colspan="3" class="empty">Nenhum histórico.</td></tr>';return}body.innerHTML=hist.map(x=>{const raw=String(x.res||'--');const r=raw.toLowerCase();const cls=r.includes('red')?'history-red':(r.includes('win')?'history-win':'');const label=raw.replace('WinG1','WIN G1').replace('winG1','WIN G1');return `<tr><td>#${x.id||'--'}</td><td>${x.sinal||'--'}</td><td><span class="history-result ${cls}">${label}</span></td></tr>`}).join('')}
 function renderResumoHistorico(r){const make=(arr)=>arr&&arr.length?arr.map(x=>`<div class="history-item"><span>${x.nome}</span><b>${x.assertividade}% <span style="color:#66758a">(${x.wins}W/${x.reds}R)</span></b></div>`).join(''):'<div class="empty">Sem dados suficientes.</div>';const a=document.getElementById('strategy-summary'),b=document.getElementById('asset-summary');if(a)a.innerHTML=make((r||{}).estrategias||[]);if(b)b.innerHTML=make((r||{}).ativos||[])}
 function atualizarSessao(d){setText('win-count',d.wins||0);setText('loss-count',d.reds||0);setText('wr-text',(d.winrate||0)+'%');setText('g1-count',d.g1_sessao||0);setText('session-count',(d.sinais_sessao_total||0)+' operações');const f=document.getElementById('wr-fill');if(f)f.style.width=Math.max(0,Math.min(100,Number(d.winrate)||0))+'%'}
-async function atualizarPainel(){try{const r=await fetch('/status',{cache:'no-store'});const d=await r.json();if(d.redirect){location.href=d.redirect;return}latestData=d;renderSignal(d);atualizarSessao(d);atualizarAtivosBloqueados(d.news_blocked_assets||[]);const ng=d.news_guard_status||'AGUARDANDO CALENDÁRIO';setText('news-guard-status',ng);setText('guard-detail-status',ng);const blocked=(d.news_blocked_assets||[]).length;const color=blocked?'#fb7185':ng.includes('INDISPONÍVEL')?'#fbbf24':'#86efac';['news-guard-status','guard-detail-status'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.color=color});const b=document.getElementById('guard-badge');if(b)b.innerText=blocked?'● PROTEGENDO':'● ATIVO';const b2=document.getElementById('guard-badge-2');if(b2)b2.innerText=blocked?'● PROTEGENDO':'● ATIVO';const result=document.getElementById('result-area');if(result)result.style.display=d.aguardando?'grid':'none';renderHistory(d.historico||[]);renderResumoHistorico(d.historico_resumo||{});if(d.notificacao&&d.notificacao.id!==lastNotifId){lastNotifId=d.notificacao.id;dispararNotificacaoNativa(d.notificacao.titulo,d.notificacao.corpo,d.notificacao.id)}}catch(e){setText('top-status','REDE');}finally{setTimeout(atualizarPainel,1000)}}
+function formatarTempo(seg){seg=Math.max(0,Math.floor(Number(seg)||0));const h=Math.floor(seg/3600),m=Math.floor((seg%3600)/60),s=seg%60;return h>0?String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'):String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')}
+function formatarHora(ts){if(!ts)return'--:--:--';return new Date(Number(ts)*1000).toLocaleTimeString('pt-BR',{hour12:false})}
+function atualizarTimerMercado(d){const end=Number(d.candle_end_ts||0),start=Number(d.candle_start_ts||0),server=Number(d.server_now||Date.now()/1000),now=server+((Date.now()/1000)-server);const remaining=Math.max(0,end-now);const elapsed=Math.max(0,Math.min(end-start,now-start));const total=Math.max(1,Number(d.candle_total||((d.timeframe||5)*60)));const pct=Math.max(0,Math.min(100,(elapsed/total)*100));setText('candle-countdown',formatarTempo(remaining));const fill=document.getElementById('candle-fill');if(fill)fill.style.width=pct+'%';setText('candle-window',formatarHora(start)+' → '+formatarHora(end));const entryTs=Number(d.entry_end_ts||0);const entryRemaining=entryTs?Math.max(0,entryTs-now):0;const entrada=d.entry_time||'--:--:--';setText('entry-countdown',entryTs?(entrada+' • '+formatarTempo(entryRemaining)):(entrada==='--:--:--'?'--:--:--':entrada));const note=document.getElementById('timer-note');if(note){if(d.sinal_confirmado){note.innerText='🎯 Entrada confirmada • expiração: '+((d.sinal_confirmado||{}).str_saida||'--:--');note.className='timer-note timer-confirm'}else if(d.alerta){note.innerText=entryRemaining<=5&&entryRemaining>0?'⚡ CONFIRMAÇÃO EM '+Math.ceil(entryRemaining)+'s':'⚠️ Confirmação programada 5s antes da virada do candle';note.className='timer-note '+(entryRemaining<=5&&entryRemaining>0?'timer-alert':'')}else{note.innerText='Aguardando uma confluência válida para programar a entrada.';note.className='timer-note'}}}
+async function atualizarPainel(){try{const r=await fetch('/status',{cache:'no-store'});const d=await r.json();if(d.redirect){location.href=d.redirect;return}latestData=d;renderSignal(d);atualizarSessao(d);atualizarTimerMercado(d);atualizarAtivosBloqueados(d.news_blocked_assets||[]);const ng=d.news_guard_status||'AGUARDANDO CALENDÁRIO';setText('news-guard-status',ng);setText('guard-detail-status',ng);const blocked=(d.news_blocked_assets||[]).length;const color=blocked?'#fb7185':ng.includes('INDISPONÍVEL')?'#fbbf24':'#86efac';['news-guard-status','guard-detail-status'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.color=color});const b=document.getElementById('guard-badge');if(b)b.innerText=blocked?'● PROTEGENDO':'● ATIVO';const b2=document.getElementById('guard-badge-2');if(b2)b2.innerText=blocked?'● PROTEGENDO':'● ATIVO';const result=document.getElementById('result-area');if(result)result.style.display=d.aguardando?'grid':'none';renderHistory(d.historico||[]);renderResumoHistorico(d.historico_resumo||{});if(d.notificacao&&d.notificacao.id!==lastNotifId){lastNotifId=d.notificacao.id;dispararNotificacaoNativa(d.notificacao.titulo,d.notificacao.corpo,d.notificacao.id)}}catch(e){setText('top-status','REDE');}finally{setTimeout(atualizarPainel,1000)}}
 window.addEventListener('resize',()=>{if(latestData){const f=latestData.sinal_confirmado||latestData.alerta||latestData.analise_atual||{};drawChart((f.analise||f).grafico||[],'market-chart');drawChart((f.analise||f).grafico||[],'market-chart-2')}});
 atualizarPainel();
+setInterval(()=>{if(latestData)atualizarTimerMercado(latestData)},1000);
 </script>
 </body>
 </html>
@@ -1815,8 +1843,14 @@ def status():
         "notificacao": st["notificacao"],
         "timeframe": st["timeframe"],
         "server_now": time.time(),
+        "candle_start_ts": math.floor(time.time() / (st["timeframe"] * 60)) * (st["timeframe"] * 60),
         "candle_end_ts": (math.floor(time.time() / (st["timeframe"] * 60)) + 1) * (st["timeframe"] * 60),
+        "candle_total": st["timeframe"] * 60,
+        "candle_elapsed": time.time() - (math.floor(time.time() / (st["timeframe"] * 60)) * (st["timeframe"] * 60)),
         "candle_remaining": max(0.0, ((math.floor(time.time() / (st["timeframe"] * 60)) + 1) * (st["timeframe"] * 60)) - time.time()),
+        "warmup_concluido": bool(st.get("warmup_concluido")),
+        "warmup_status": st.get("warmup_status", "AGUARDANDO 30 VELAS"),
+        "warmup_ativos_analisados": len(st.get("warmup_ativos_analisados", set())),
         "entry_end_ts": (((st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else None),
         "entry_remaining": max(0.0, (st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp() - time.time()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else 0,
         "entry_time": (
@@ -1883,6 +1917,10 @@ def command(cmd):
         st["news_guard_updated"] = 0.0
         st["analise_atual"] = None
         st["sinais_sessao_total"] = 0
+        st["warmup_concluido"] = False
+        st["warmup_ativos_analisados"] = set()
+        st["warmup_inicio"] = time.time()
+        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS"
         st["inicio_varredura"] = time.time() + 2 
         st["sinais_enviados"].clear() 
         
@@ -1930,6 +1968,9 @@ def command(cmd):
         st["news_guard_status"] = "DESATIVADA"
         st["news_guard_event"] = None
         st["news_blocked_assets"] = []
+        st["warmup_concluido"] = False
+        st["warmup_ativos_analisados"] = set()
+        st["warmup_status"] = "AGUARDANDO 30 VELAS"
         st["ultimo_sinal"] = "Aguardando Comando..."
         
         # Mantém o comportamento anterior de zerar o placar geral no encerramento.
@@ -1941,8 +1982,16 @@ def command(cmd):
 
     elif cmd.startswith("tf_"): 
         st["timeframe"] = int(cmd.split('_')[1])
+        st["warmup_concluido"] = False
+        st["warmup_ativos_analisados"] = set()
+        st["warmup_inicio"] = time.time()
+        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS"
     elif cmd.startswith("mkt_"): 
         st["tipo_mercado"] = cmd.split('_', 1)[1] 
+        st["warmup_concluido"] = False
+        st["warmup_ativos_analisados"] = set()
+        st["warmup_inicio"] = time.time()
+        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS"
     elif cmd.startswith("set_est_"): 
         st["estrategia"] = cmd.replace("set_est_", "")
     
@@ -1975,30 +2024,68 @@ def formatar_resultados_sessao(st):
     return "\n".join(linhas)
 
 def mensagem_resultado_telegram(st, resultado):
+    """Monta o fechamento do sinal confirmado sem apagar a confirmação anterior.
+
+    A mensagem de confirmação continua no Telegram. Esta é uma nova mensagem
+    apenas para registrar o resultado da operação e o placar da sessão.
+    """
     wins, reds, _ = placar_sessao(st)
     placar = f"{wins} / {reds}"
+    sinal = st.get("sinal_confirmado") or {}
+    ativo = sinal.get("ativo") or "ATIVO"
+    direcao = sinal.get("sinal") or sinal.get("direcao") or "--"
+    prob = sinal.get("probabilidade")
+    tf = sinal.get("tf")
+    entrada = sinal.get("str_entrada") or sinal.get("entrada") or "--:--:--"
+    expiracao = sinal.get("str_saida") or sinal.get("expiracao") or "--:--"
+    estrategia = sinal.get("estrategia_fmt") or sinal.get("estrategia") or "Análise Vision Pro"
+
+    prob_txt = f"{prob}%" if prob is not None else "--%"
+    tf_txt = f"M{tf}" if tf else "--"
+
+    cabecalho = (
+        "Vision Trade FREE 📈\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"💱 <b>Paridade:</b> {ativo}\n"
+        f"↕️ <b>Direção:</b> {direcao}\n"
+        f"⏱ <b>Timeframe:</b> {tf_txt}\n"
+        f"🧠 <b>Estratégia:</b> {estrategia}\n"
+        f"🔥 <b>Probabilidade Estimada:</b> {prob_txt}\n"
+        f"🕐 <b>Entrada:</b> {entrada}\n"
+        f"⌛ <b>Expiração:</b> {expiracao}\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+    )
+
     if resultado == "win":
         return (
-            "Vision Trade FREE 📈:\n"
-            "💎 <b>TA NA CONTA! WIN DIRETO!</b> 💎\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "📊 Resultado registrado no Vision Pro.\n"
-            "⚠️ O resultado de uma operação não garante resultados futuros.\n\n"
-            f"📊 Placar Geral: {placar}"
+            cabecalho +
+            "💎 <b>WIN DIRETO — OPERAÇÃO ENCERRADA</b> 💎\n"
+            "📊 Resultado registrado com sucesso no Vision Pro.\n"
+            "🚀 O sinal foi encerrado no primeiro nível de operação.\n\n"
+            f"📊 <b>Placar Geral:</b> {placar}\n"
+            "⚠️ Gerencie seu capital com responsabilidade.\n"
+            "⚠️ Resultados passados não garantem resultados futuros."
         )
+
     if resultado == "g1":
         return (
-            "🔄 <b>VITÓRIA CONFIRMADA NO GALE 1!</b> 🔄\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "📊 Resultado registrado como G1.\n"
-            "⚠️ Gerencie o risco e não trate o resultado como garantia.\n\n"
-            f"Placar Geral: {placar}"
+            cabecalho +
+            "🔄 <b>WIN NO G1 — OPERAÇÃO ENCERRADA</b> 🔄\n"
+            "📊 Resultado registrado como Gale 1 no Vision Pro.\n"
+            "🧠 O resultado foi obtido no segundo nível da operação.\n\n"
+            f"📊 <b>Placar Geral:</b> {placar}\n"
+            "⚠️ Gerencie seu capital com responsabilidade.\n"
+            "⚠️ Resultados passados não garantem resultados futuros."
         )
+
     return (
-        "🛑 <b>ANÁLISE ENCERRADA - STOP LOSS</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "⚠️ O mercado apresentou volatilidade atípica.\n\n"
-        f"📊 Placar Geral: {placar}"
+        cabecalho +
+        "🛑 <b>RED — OPERAÇÃO ENCERRADA</b>\n"
+        "📉 Resultado negativo registrado no Vision Pro.\n"
+        "🔎 O resultado será considerado nas estatísticas da sessão.\n\n"
+        f"📊 <b>Placar Geral:</b> {placar}\n"
+        "⚠️ Gerencie seu capital com responsabilidade.\n"
+        "⚠️ Resultados passados não garantem resultados futuros."
     )
 
 def mensagem_encerramento_sessao(st):
@@ -2023,7 +2110,8 @@ def resultado(res):
         confirmacao_msg_id = st.get("ultima_confirmacao_msg_id")
 
         if res in ("win", "g1", "red", "pular"):
-            # Qualquer resultado encerra o ciclo do alerta atual.
+            # Somente o PRÉ-ALERTA deve ser removido do Telegram.
+            # A mensagem "SINAL CONFIRMADO" permanece no histórico do canal.
             cancelar_alerta_telegram(st, alerta_atual)
 
         if res == 'win':
@@ -2045,11 +2133,9 @@ def resultado(res):
             st["sinais_sessao_total"] = st.get("sinais_sessao_total", 0) + 1
             enviar_telegram(mensagem_resultado_telegram(st, "red"), user_solicitante=user)
         elif res == 'pular':
-            # Se o sinal já foi confirmado, apagar a confirmação anterior.
-            if confirmacao_msg_id:
-                deletar_mensagem_telegram(confirmacao_msg_id)
-                st["ultima_confirmacao_msg_id"] = None
-                st["ultima_confirmacao_alert_id"] = None
+            # PULAR não apaga a confirmação já publicada. A confirmação
+            # continua no Telegram como registro da entrada; somente o
+            # pré-alerta ativo é removido pelo cancelar_alerta_telegram().
 
             # O aviso de PULADO permanece somente por 5 segundos.
             enviar_telegram(
@@ -2306,6 +2392,37 @@ def bot_loop():
                     else:
                         ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
 
+                    # Trava de segurança: antes de qualquer alerta, o motor valida
+                    # as últimas 30 velas de todos os ativos selecionados.
+                    ativos = list(dict.fromkeys(ativos))
+                    if not st.get("warmup_concluido"):
+                        warmup_set = st.setdefault("warmup_ativos_analisados", set())
+                        st["warmup_status"] = f"ANALISANDO 30 VELAS • {len(warmup_set)}/{len(ativos)} ATIVOS"
+                        for ativo_w in ativos:
+                            if ativo_w in warmup_set:
+                                continue
+                            ticker_w = MAPA_TICKERS.get(ativo_w, ativo_w)
+                            cache_key_w = f"{ticker_w}_{tf}"
+                            data_w = ohlc_cache.get(cache_key_w, {}).get("data") if cache_key_w in ohlc_cache else None
+                            if data_w is None:
+                                data_w = get_data_v2(ticker_w, tf, velas_minimas=30)
+                                if data_w:
+                                    ohlc_cache[cache_key_w] = {"data": data_w, "time": time.time()}
+                            closes_w = data_w.get("close", []) if data_w else []
+                            if len(closes_w) >= 30:
+                                warmup_set.add(ativo_w)
+                        if len(warmup_set) >= len(ativos):
+                            st["warmup_concluido"] = True
+                            st["warmup_status"] = "30 VELAS VALIDADAS • ANÁLISE LIBERADA"
+                        else:
+                            st["ativo_atual"] = "AQUECENDO MOTOR — 30 VELAS"
+                            st["ultimo_sinal"] = (
+                                f"<div class='system-console' style='color:#f59e0b;'>🛡️ <b>TRAVA DE SEGURANÇA ATIVA</b><br>"
+                                f"Analisando as últimas <b>30 velas</b> antes de liberar sinais.<br>"
+                                f"<span style='color:#00f2fe;'>{len(warmup_set)}/{len(ativos)} ativos validados.</span></div>"
+                            )
+                            continue
+
                     # 🛡️ CONSULTA DO CALENDÁRIO ANTES DA VARREDURA
                     # A consulta é feita uma vez por ciclo, e não uma vez por ativo.
                     # Assim, os ativos realmente bloqueados são retirados da lista de
@@ -2473,9 +2590,10 @@ def bot_loop():
 
                             nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
 
-                            # Substituição se houver um sinal com probabilidade superior no mesmo ciclo
+                            # Se o motor mudar o ativo, o alerta anterior deixa de ser válido.
+                            # Também substituímos quando a mesma oportunidade recebe probabilidade maior.
                             if alerta:
-                                if maior_prob > alerta.get("probabilidade", 0):
+                                if ativo != alerta.get("ativo") or maior_prob > alerta.get("probabilidade", 0):
                                     msg_antigo_id = alerta.get("msg_id")
                                     novo_alert_id = str(time.time_ns())
 
@@ -2539,6 +2657,12 @@ def bot_loop():
                                         st=st
                                     )
 
+                                    st["sinais_enviados"][ativo] = str_entrada
+                                    st["notificacao"] = {
+                                        "id": str(time.time_ns()),
+                                        "titulo": f"⚠️ NOVO ALERTA: {ativo} — {sinal_encontrado}",
+                                        "corpo": f"Alerta anterior substituído. {ativo} | {sinal_encontrado} | Entrada {str_entrada} | {maior_prob}%"
+                                    }
                                     st["ultimo_sinal"] = (
                                         f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
                                         f"⚡ <b>ALERTA SUBSTITUÍDO (MAIOR PROBABILIDADE: {maior_prob}%)</b> ⚡<br>"
