@@ -91,7 +91,11 @@ def get_user_state(email):
             "startup_lock_until": 0.0,
             "startup_lock_seconds": 300,
             "warmup_status": "AGUARDANDO 30 VELAS",
-            "selected_assets": []
+            "selected_assets": [],
+            # Controle de diversificação: evita repetir o mesmo ativo na mesma vela
+            # quando existem outras oportunidades válidas. Não força um ativo sem sinal.
+            "ultimo_sinal_ativo": None,
+            "ultimo_sinal_candle_ts": 0.0
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -2061,6 +2065,13 @@ def command(cmd):
     elif cmd == "start_bot":
         st["bot_iniciado"] = True
         st["bot_pausado"] = False
+        # Guarda o ativo da última operação e a vela em que ela foi encerrada.
+        # Isso impede que o mesmo ativo seja escolhido repetidamente na mesma vela
+        # quando houver outro candidato válido. Não cria sinais artificiais.
+        ultimo_confirmado = st.get("sinal_confirmado") or alerta_atual or {}
+        st["ultimo_sinal_ativo"] = ultimo_confirmado.get("ativo")
+        st["ultimo_sinal_candle_ts"] = math.floor(time.time() / (max(1, int(st.get("timeframe", 5))) * 60)) * (max(1, int(st.get("timeframe", 5))) * 60)
+
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
         st["sinal_confirmado"] = None
@@ -2752,7 +2763,34 @@ def bot_loop():
                     # realmente melhor: probabilidade maior; em empate, confluência maior;
                     # em novo empate, mais estratégias concordando. Nunca por troca aleatória de ativo.
                     if candidatos_globais and not st.get("aguardando_confirmacao"):
-                        melhor_candidato = max(candidatos_globais, key=lambda x:(x["probabilidade"],x["confluencia"],x["concordantes"]))
+                        # Ordena todas as oportunidades pela mesma regra usada pelo Vision Pro.
+                        candidatos_ordenados = sorted(
+                            candidatos_globais,
+                            key=lambda x: (x["probabilidade"], x["confluencia"], x["concordantes"]),
+                            reverse=True
+                        )
+
+                        melhor_candidato = candidatos_ordenados[0]
+
+                        # Proteção contra repetição do mesmo ativo dentro da mesma vela.
+                        # Se existir outra oportunidade forte, ela pode assumir a próxima
+                        # entrada. Se não existir, o ativo anterior continua elegível no
+                        # próximo candle — nunca fabricamos um sinal só para alternar ativos.
+                        tf_seg = max(1, int(tf)) * 60
+                        candle_atual_ts = math.floor(time.time() / tf_seg) * tf_seg
+                        ultimo_ativo = st.get("ultimo_sinal_ativo")
+                        ultimo_candle = float(st.get("ultimo_sinal_candle_ts") or 0.0)
+                        if ultimo_ativo and ultimo_candle == candle_atual_ts and melhor_candidato.get("ativo") == ultimo_ativo:
+                            alternativas = [
+                                c for c in candidatos_ordenados
+                                if c.get("ativo") != ultimo_ativo and int(c.get("probabilidade", 0)) >= 80
+                            ]
+                            if alternativas:
+                                melhor_candidato = alternativas[0]
+                            else:
+                                # Nenhuma alternativa forte nesta vela: aguarda o próximo
+                                # candle em vez de gerar novamente o mesmo sinal.
+                                melhor_candidato = None
                     else:
                         melhor_candidato = None
 
