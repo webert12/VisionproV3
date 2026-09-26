@@ -708,23 +708,144 @@ function atualizarPerfilCalc(){
 function moedaBR(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
 function pctBR(v){return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1})+'%';}
 function calcularGestaoBanca(){
-    const payload={
-        bankroll:Number(document.getElementById('calc-bankroll').value),
-        target_profit:Number(document.getElementById('calc-target').value),
-        days:Number(document.getElementById('calc-days').value),
-        payout:Number(document.getElementById('calc-payout').value)/100,
-        winrate:Number(document.getElementById('calc-winrate').value)/100,
-        profile:document.querySelector('input[name="calc-profile"]:checked')?.value||'conservador',
-        mode:document.querySelector('input[name="calc-mode"]:checked')?.value||'fixa',
-        soros_levels:Number(document.getElementById('calc-soros-levels').value)
+    // A calculadora roda localmente no navegador. Assim ela não depende de
+    // uma rota Flask, sessão ou chamada de rede para apresentar o resultado.
+    const getNum = id => {
+        const el=document.getElementById(id);
+        if(!el) return NaN;
+        const raw=String(el.value ?? '').trim().replace(',','.');
+        return Number(raw);
     };
+
+    const banca=getNum('calc-bankroll');
+    const meta=getNum('calc-target');
+    const dias=Math.floor(getNum('calc-days'));
+    const payoutRaw=getNum('calc-payout');
+    const winrateRaw=getNum('calc-winrate');
+    const perfil=document.querySelector('input[name="calc-profile"]:checked')?.value||'conservador';
+    const modo=document.querySelector('input[name="calc-mode"]:checked')?.value||'fixa';
+    const niveis=Math.max(1,Math.min(4,Math.floor(getNum('calc-soros-levels'))||1));
     const box=document.getElementById('calc-results');
-    box.innerHTML='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Calculando...</div></div></div><div class="card-pad"><div class="empty">⏳ Calculando plano matemático...</div></div>';
-    fetch('/calculadora',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
-      .then(async r=>{const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'Não foi possível calcular');return d})
-      .then(renderCalculadora)
-      .catch(e=>{box.innerHTML='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Erro no cálculo</div></div></div><div class="card-pad"><div class="calc-warning">❌ '+e.message+'</div></div></div>'});
+    if(!box)return;
+
+    if(!Number.isFinite(banca)||banca<=0){
+        mostrarErroCalc('Informe uma banca inicial maior que R$ 0,00.'); return;
+    }
+    if(!Number.isFinite(meta)||meta<=0){
+        mostrarErroCalc('Informe um lucro desejado maior que R$ 0,00.'); return;
+    }
+    if(!Number.isFinite(dias)||dias<1||dias>365){
+        mostrarErroCalc('O prazo deve estar entre 1 e 365 dias.'); return;
+    }
+    if(!Number.isFinite(payoutRaw)||payoutRaw<=0||payoutRaw>=100){
+        mostrarErroCalc('O payout deve ficar entre 1% e 99,99%.'); return;
+    }
+    if(!Number.isFinite(winrateRaw)||winrateRaw<50||winrateRaw>=100){
+        mostrarErroCalc('A taxa de acerto estimada deve ficar entre 50% e 99,99%.'); return;
+    }
+
+    const payout=payoutRaw/100;
+    const winrate=winrateRaw/100;
+    const riscoMap={conservador:0.01,moderado:0.02,agressivo:0.04};
+    const risco=riscoMap[perfil]||0.01;
+    const entradaBase=Math.max(0.01,Math.round(banca*risco*100)/100);
+    const evFator=winrate*payout-(1-winrate);
+    const lucroWinBase=entradaBase*payout;
+
+    let entradasEstimadas=null;
+    let entradasDia=null;
+    let lucroEsperadoPorEntrada=0;
+    let valorEsperadoEntrada=0;
+    let exposicaoMaxima=entradaBase;
+    let plan=[];
+    let ciclosEstimados=null;
+
+    if(modo==='fixa'){
+        valorEsperadoEntrada=entradaBase*evFator;
+        lucroEsperadoPorEntrada=valorEsperadoEntrada;
+        if(valorEsperadoEntrada>0){
+            entradasEstimadas=Math.ceil(meta/valorEsperadoEntrada);
+            entradasDia=Math.ceil(entradasEstimadas/dias);
+        }
+    }else{
+        // Soros: cada nível só é atingido se o nível anterior terminar em WIN.
+        // O lucro de cada ciclo é calculado por probabilidade, sem inventar
+        // uma sequência futura de resultados.
+        let stake=entradaBase;
+        let evCiclo=0;
+        let entradasEsperadasCiclo=0;
+        for(let nivel=1;nivel<=niveis;nivel++){
+            const probAlcance=Math.pow(winrate,nivel-1);
+            entradasEsperadasCiclo+=probAlcance;
+            // Se chegar a este nível, o resultado líquido esperado desta entrada.
+            evCiclo += probAlcance*stake*evFator;
+            exposicaoMaxima=Math.max(exposicaoMaxima,stake);
+            stake*=1+payout;
+        }
+        if(evCiclo>0){
+            ciclosEstimados=Math.ceil(meta/evCiclo);
+            entradasEstimadas=Math.ceil(ciclosEstimados*entradasEsperadasCiclo);
+            entradasDia=Math.ceil(entradasEstimadas/dias);
+            valorEsperadoEntrada=evCiclo/entradasEsperadasCiclo;
+            lucroEsperadoPorEntrada=valorEsperadoEntrada;
+        }
+    }
+
+    const winsSemLoss=lucroWinBase>0?Math.ceil(meta/lucroWinBase):null;
+    if(entradasEstimadas){
+        let restante=entradasEstimadas;
+        for(let dia=1;dia<=dias;dia++){
+            const restantesDias=dias-dia+1;
+            const hoje=Math.ceil(restante/restantesDias);
+            plan.push({dia:dia,entradas:hoje,entrada_base:entradaBase,nivel_maximo:modo==='soros'?exposicaoMaxima:null});
+            restante-=hoje;
+        }
+    }
+
+    const viavel=Number.isFinite(entradasEstimadas)&&entradasEstimadas>0&&valorEsperadoEntrada>0;
+    let mensagem='';
+    if(!viavel){
+        mensagem='Com os parâmetros informados, o valor esperado por entrada não é positivo. Para tornar a simulação matematicamente positiva, altere o payout ou a taxa de acerto estimada.';
+    }else if(entradasDia>50){
+        mensagem='A simulação é matematicamente positiva, mas exige um volume elevado de entradas por dia para a meta e o prazo informados.';
+    }else if(modo==='soros'&&exposicaoMaxima>banca*0.15){
+        mensagem='A simulação do Soros concentra mais de 15% da banca em uma única entrada nos níveis altos. Avalie essa exposição antes de utilizar o plano.';
+    }else{
+        mensagem='Simulação matemática baseada exclusivamente na banca, payout, taxa de acerto e perfil informados. Isso não é garantia de resultado futuro.';
+    }
+
+    const nota=(
+        'Perfil '+perfil+': '+(risco*100).toFixed(0)+'% da banca por entrada-base ('+moedaBR(entradaBase)+'). '+
+        'Payout: '+pctBR(payoutRaw)+' • Taxa de acerto usada: '+pctBR(winrateRaw)+'. '+
+        (modo==='soros'
+            ? 'Soros com '+niveis+' nível(is): após WIN o lucro é incorporado à próxima entrada; após LOSS retorna ao valor-base.'
+            : 'Mão fixa: cada entrada mantém o mesmo valor-base.')
+    );
+
+    renderCalculadora({
+        ok:true,
+        parameters:{bankroll:banca,target_profit:meta,days:dias,payout:payout,winrate:winrate,profile:perfil,mode:modo,soros_levels:niveis},
+        summary:{
+            entrada_base:entradaBase,
+            entradas_estimadas:entradasEstimadas,
+            entradas_por_dia:entradasDia,
+            lucro_esperado_por_entrada:lucroEsperadoPorEntrada,
+            valor_esperado_entrada:valorEsperadoEntrada,
+            exposicao_maxima:exposicaoMaxima,
+            wins_sem_loss:winsSemLoss,
+            viavel:viavel
+        },
+        plan:plan,
+        message:mensagem,
+        note:nota
+    });
 }
+function mostrarErroCalc(msg){
+    const box=document.getElementById('calc-results');
+    if(!box)return;
+    box.innerHTML='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Verifique os parâmetros</div></div></div><div class="card-pad"><div class="calc-warning">❌ '+String(msg)+'</div></div>';
+}
+
 function renderCalculadora(d){
     const box=document.getElementById('calc-results');
     if(!box)return;
