@@ -64,6 +64,7 @@ def get_user_state(email):
             "bot_pausado": True,
             "aguardando_confirmacao": False,
             "sinal_permanente": None,
+            "sinal_confirmado": None,  # Estado fixo do último sinal confirmado até registrar o resultado
             "ultimo_sinal": "Aguardando Comando...",
             "ativo_atual": "AGUARDANDO...",
             "inicio_varredura": 0,
@@ -584,16 +585,66 @@ function atualizarAtivosBloqueados(lista){const itens=Array.isArray(lista)?lista
 function setText(id,v){const e=document.getElementById(id);if(e)e.innerText=v}
 function renderProbability(prob,id='prob-value',fill='prob-fill'){const p=Math.max(0,Math.min(100,Number(prob)||0));setText(id,p?p+'%':'--%');const e=document.getElementById(fill);if(e)e.style.width=p+'%'}
 function renderSignal(d){
-    const a=d.analise_atual||{};const alerta=d.alerta||{};const active=d.aguardando&&d.analise_atual?d.analise_atual:null;const dir=(active&&active.direcao)||a.direcao||null;const prob=(active&&active.probabilidade)||a.probabilidade||0;
-    const ativo=(active&&active.ativo)||a.ativo||d.ativo_atual||'AGUARDANDO';
-    setText('asset-tag',ativo);setText('analysis-asset',ativo);setText('signal-asset-2',ativo);setText('signal-tf', 'M'+(d.timeframe||5));setText('signal-tf-2','M'+(d.timeframe||5));
-    const dirs=['signal-direction','signal-direction-2'];dirs.forEach(id=>{const e=document.getElementById(id);if(!e)return;e.className='signal-direction '+(dir==='CALL'?'signal-call':dir==='PUT'?'signal-put':'signal-wait');e.innerText=dir||'AGUARDANDO'});
-    renderProbability(prob);renderProbability(prob,'prob-value-3','prob-fill-3');setText('prob-value-2',prob?prob+'%':'--%');setText('confluence-overall',a.confluencia!=null?'Confluência técnica: '+Number(a.confluencia).toFixed(0)+'/100':'Confluência técnica: --/100');setText('confluence-overall-2',a.confluencia!=null?'Confluência '+Number(a.confluencia).toFixed(0)+'/100':'Confluência --/100');
-    const est=(active&&active.estrategia_fmt)||a.estrategia_fmt||'Motor aguardando análise';setText('signal-strategy',est);setText('signal-strategy-2',est);setText('analysis-direction',dir?dir:'Sem sinal');
-    setText('signal-entry',d.entry_time||'--:--:--');setText('signal-entry-2',d.entry_time||'--:--:--');setText('signal-expiry',(active&&active.str_saida)||a.str_saida||'--:--');setText('signal-expiry-2',(active&&active.str_saida)||a.str_saida||'--:--');
-    setText('signal-status',d.aguardando?(dir?('CONFIRMADO • '+ativo):'CONFIRMADO'):d.rodando?'ANALISANDO':'PARADO');setText('robot-status',d.rodando?'ONLINE':'PARADO');setText('top-status',d.rodando?'ANALISANDO':'ONLINE');
-    renderConfluence(a,'confluence-list');renderReasons(a,'analysis-reasons');renderConfluence(a,'confluence-list-2');renderReasons(a,'analysis-reasons-2');drawChart(a.grafico||[],'market-chart');drawChart(a.grafico||[],'market-chart-2');
+    const a=d.analise_atual||{};
+    const alerta=d.alerta||null;
+    const confirmado=d.sinal_confirmado||null;
+    // Prioridade: confirmado > alerta > análise corrente. Assim outro ativo analisado
+    // pelo bot nunca substitui o ativo da entrada confirmada.
+    const fonte=confirmado||alerta||a;
+    const dir=(fonte.direcao||fonte.sinal||null);
+    const prob=Number(fonte.probabilidade||0);
+    const ativo=fonte.ativo||d.ativo_atual||'AGUARDANDO';
+    const tf=Number(fonte.tf||d.timeframe||5);
+    const entrada=fonte.str_entrada||fonte.entrada||d.entry_time||'--:--:--';
+    const expiracao=fonte.str_saida||fonte.expiracao||'--:--';
+    const est=fonte.estrategia_fmt||a.estrategia_fmt||'Motor aguardando análise';
+    const conf=fonte.confluencia!=null?fonte.confluencia:a.confluencia;
+    const analise=fonte.analise||a;
+
+    setText('asset-tag',ativo);
+    setText('analysis-asset',ativo);
+    setText('signal-asset-2',ativo);
+    setText('signal-tf','M'+tf);
+    setText('signal-tf-2','M'+tf);
+
+    ['signal-direction','signal-direction-2'].forEach(id=>{
+        const e=document.getElementById(id);
+        if(!e)return;
+        e.className='signal-direction '+(dir==='CALL'?'signal-call':dir==='PUT'?'signal-put':'signal-wait');
+        e.innerText=dir||'AGUARDANDO';
+    });
+
+    renderProbability(prob);
+    renderProbability(prob,'prob-value-3','prob-fill-3');
+    setText('prob-value-2',prob?prob+'%':'--%');
+    setText('confluence-overall',conf!=null?'Confluência técnica: '+Number(conf).toFixed(0)+'/100':'Confluência técnica: --/100');
+    setText('confluence-overall-2',conf!=null?'Confluência '+Number(conf).toFixed(0)+'/100':'Confluência --/100');
+    setText('signal-strategy',est);
+    setText('signal-strategy-2',est);
+    setText('analysis-direction',dir||'Sem sinal');
+    setText('signal-entry',entrada);
+    setText('signal-entry-2',entrada);
+    setText('signal-expiry',expiracao);
+    setText('signal-expiry-2',expiracao);
+
+    if(confirmado){
+        setText('signal-status','CONFIRMADO • '+ativo);
+    }else if(alerta){
+        setText('signal-status','⚠️ ALERTA • '+ativo);
+    }else{
+        setText('signal-status',d.rodando?'ANALISANDO':'PARADO');
+    }
+    setText('robot-status',d.rodando?'ONLINE':'PARADO');
+    setText('top-status',d.rodando?'ANALISANDO':'ONLINE');
+
+    renderConfluence(analise,'confluence-list');
+    renderReasons(analise,'analysis-reasons');
+    renderConfluence(analise,'confluence-list-2');
+    renderReasons(analise,'analysis-reasons-2');
+    drawChart(analise.grafico||[],'market-chart');
+    drawChart(analise.grafico||[],'market-chart-2');
 }
+
 function renderConfluence(a,id){const box=document.getElementById(id);if(!box)return;const items=Array.isArray(a.confluencias)?a.confluencias:[];box.innerHTML=items.length?items.map(x=>`<div class="conf-row"><div class="conf-name">${x.nome||'Indicador'}</div><div class="conf-bar"><div class="conf-fill" style="width:${Math.max(0,Math.min(100,Number(x.pontos)||0))*5}%"></div></div><div class="conf-points">${x.pontos||0}/20</div></div>`).join(''):'<div class="empty">Aguardando dados do mercado...</div>'}
 function renderReasons(a,id){const box=document.getElementById(id);if(!box)return;const items=Array.isArray(a.motivos)?a.motivos:[];box.innerHTML=items.length?items.map(x=>`<div class="reason"><b class="${x.status==='ok'?'ok':x.status==='warn'?'warn':'bad'}">${x.status==='ok'?'✓':x.status==='warn'?'•':'×'} ${x.nome||'Indicador'}</b><div>${x.detalhe||''}</div></div>`).join(''):'<div class="empty">Sem diagnóstico disponível.</div>'}
 function drawChart(vals,id){const c=document.getElementById(id);if(!c)return;const ctx=c.getContext('2d');const rect=c.getBoundingClientRect();const w=Math.max(300,Math.floor(rect.width)),h=Math.max(120,Math.floor(rect.height));const dpr=window.devicePixelRatio||1;c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.strokeStyle='#172333';ctx.lineWidth=1;for(let i=1;i<4;i++){const y=i*h/4;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}if(!Array.isArray(vals)||vals.length<2){ctx.fillStyle='#64748b';ctx.font='11px Inter';ctx.fillText('Aguardando candles válidos...',12,20);return}const min=Math.min(...vals),max=Math.max(...vals),range=max-min||1;const pts=vals.map((v,i)=>[i*(w-18)/(vals.length-1)+9,h-10-((v-min)/range)*(h-24)]);ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.strokeStyle='#00d9ff';ctx.lineWidth=2.2;ctx.stroke();ctx.lineTo(pts[pts.length-1][0],h-10);ctx.lineTo(pts[0][0],h-10);ctx.closePath();ctx.fillStyle='rgba(0,217,255,.07)';ctx.fill();const last=pts[pts.length-1];ctx.beginPath();ctx.arc(last[0],last[1],3.5,0,Math.PI*2);ctx.fillStyle='#22c55e';ctx.fill()}
@@ -601,7 +652,7 @@ function renderHistory(hist){const body=document.getElementById('history-table-b
 function renderResumoHistorico(r){const make=(arr)=>arr&&arr.length?arr.map(x=>`<div class="history-item"><span>${x.nome}</span><b>${x.assertividade}% <span style="color:#66758a">(${x.wins}W/${x.reds}R)</span></b></div>`).join(''):'<div class="empty">Sem dados suficientes.</div>';const a=document.getElementById('strategy-summary'),b=document.getElementById('asset-summary');if(a)a.innerHTML=make((r||{}).estrategias||[]);if(b)b.innerHTML=make((r||{}).ativos||[])}
 function atualizarSessao(d){setText('win-count',d.wins||0);setText('loss-count',d.reds||0);setText('wr-text',(d.winrate||0)+'%');setText('g1-count',d.g1_sessao||0);setText('session-count',(d.sinais_sessao_total||0)+' operações');const f=document.getElementById('wr-fill');if(f)f.style.width=Math.max(0,Math.min(100,Number(d.winrate)||0))+'%'}
 async function atualizarPainel(){try{const r=await fetch('/status',{cache:'no-store'});const d=await r.json();if(d.redirect){location.href=d.redirect;return}latestData=d;renderSignal(d);atualizarSessao(d);atualizarAtivosBloqueados(d.news_blocked_assets||[]);const ng=d.news_guard_status||'AGUARDANDO CALENDÁRIO';setText('news-guard-status',ng);setText('guard-detail-status',ng);const blocked=(d.news_blocked_assets||[]).length;const color=blocked?'#fb7185':ng.includes('INDISPONÍVEL')?'#fbbf24':'#86efac';['news-guard-status','guard-detail-status'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.color=color});const b=document.getElementById('guard-badge');if(b)b.innerText=blocked?'● PROTEGENDO':'● ATIVO';const b2=document.getElementById('guard-badge-2');if(b2)b2.innerText=blocked?'● PROTEGENDO':'● ATIVO';const result=document.getElementById('result-area');if(result)result.style.display=d.aguardando?'grid':'none';renderHistory(d.historico||[]);renderResumoHistorico(d.historico_resumo||{});if(d.notificacao&&d.notificacao.id!==lastNotifId){lastNotifId=d.notificacao.id;dispararNotificacaoNativa(d.notificacao.titulo,d.notificacao.corpo,d.notificacao.id)}}catch(e){setText('top-status','REDE');}finally{setTimeout(atualizarPainel,1000)}}
-window.addEventListener('resize',()=>{if(latestData&&latestData.analise_atual){drawChart(latestData.analise_atual.grafico||[],'market-chart');drawChart(latestData.analise_atual.grafico||[],'market-chart-2')}});
+window.addEventListener('resize',()=>{if(latestData){const f=latestData.sinal_confirmado||latestData.alerta||latestData.analise_atual||{};drawChart((f.analise||f).grafico||[],'market-chart');drawChart((f.analise||f).grafico||[],'market-chart-2')}});
 atualizarPainel();
 </script>
 </body>
@@ -1738,6 +1789,8 @@ def status():
     u_info = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
     historico = buscar_historico_bd(user)
     
+    # O painel deve distinguir claramente três estados: pré-alerta, confirmado e varredura.
+    # O sinal confirmado é persistente e não pode ser substituído pela análise de outro ativo.
     display_texto = st["sinal_permanente"] if (st["aguardando_confirmacao"] and st["sinal_permanente"]) else st["ultimo_sinal"]
 
     response = jsonify({
@@ -1754,6 +1807,7 @@ def status():
         "news_blocked_assets": st.get("news_blocked_assets", []),
         "analise_atual": st.get("analise_atual"),
         "alerta": st.get("alerta_ativo"),
+        "sinal_confirmado": st.get("sinal_confirmado"),
         "sinais_sessao_total": st.get("sinais_sessao_total", 0),
         "g1_sessao": sum(1 for r in st.get("sessao_resultados", []) if r == "g1"),
         "mercado": st["tipo_mercado"],
@@ -1765,7 +1819,11 @@ def status():
         "candle_remaining": max(0.0, ((math.floor(time.time() / (st["timeframe"] * 60)) + 1) * (st["timeframe"] * 60)) - time.time()),
         "entry_end_ts": (((st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else None),
         "entry_remaining": max(0.0, (st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp() - time.time()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else 0,
-        "entry_time": ((st.get("alerta_ativo") or {}).get("str_entrada") if st.get("alerta_ativo") else (re.search(r"ENTRADA:</b> ([0-9:]+)", st.get("sinal_permanente") or "") or [None, None])[1])
+        "entry_time": (
+            (st.get("sinal_confirmado") or {}).get("str_entrada")
+            or (st.get("alerta_ativo") or {}).get("str_entrada")
+            or (re.search(r"ENTRADA:</b> ([0-9:]+)", st.get("sinal_permanente") or "") or [None, None])[1]
+        )
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -1807,6 +1865,7 @@ def command(cmd):
         st["bot_pausado"] = False
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
+        st["sinal_confirmado"] = None
         if st.get("timer_confirmacao"):
             try:
                 st["timer_confirmacao"].cancel()
@@ -1855,6 +1914,7 @@ def command(cmd):
         st["bot_pausado"] = True
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
+        st["sinal_confirmado"] = None
         if st.get("timer_confirmacao"):
             try:
                 st["timer_confirmacao"].cancel()
@@ -2000,6 +2060,7 @@ def resultado(res):
 
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
+        st["sinal_confirmado"] = None
         if st.get("timer_confirmacao"):
             try:
                 st["timer_confirmacao"].cancel()
@@ -2110,7 +2171,26 @@ def confirmar_alerta_agendado(user_email, alert_id):
             f"<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>{est_fmt} • Entrada {str_entrada} • Expiração {str_saida}</div>"
             f"</div>"
         )
+        # Congela o sinal confirmado. O bot pode continuar varrendo outros ativos,
+        # mas a interface continuará mostrando este ativo até WIN/G1/RED/PULAR.
+        st["sinal_confirmado"] = {
+            "ativo": ativo,
+            "sinal": sinal,
+            "direcao": sinal,
+            "estrategia": alerta.get("estrategia"),
+            "estrategia_fmt": est_fmt,
+            "probabilidade": prob,
+            "tf": tf,
+            "str_entrada": str_entrada,
+            "str_saida": str_saida,
+            "entrada": str_entrada,
+            "expiracao": str_saida,
+            "confluencia": analise_info.get("confluencia", 0),
+            "analise": analise_info,
+            "confirmado_em": agora_brasilia().isoformat(),
+        }
         st["aguardando_confirmacao"] = True
+        # O pré-alerta é apagado; o estado confirmado acima passa a ser a referência da UI.
         st["alerta_ativo"] = None
         st["timer_confirmacao"] = None
 
