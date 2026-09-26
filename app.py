@@ -408,7 +408,7 @@ HTML_INDEX = """
         .asset-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;max-height:290px;overflow:auto;padding:8px;background:#080e16;border:1px solid #182536;border-radius:10px}.asset-check{display:flex;align-items:center;gap:6px;padding:7px 8px;background:#0b121d;border:1px solid #182536;border-radius:8px;color:#aebdcd;font-size:8px;font-weight:800}.asset-check input{accent-color:#00d9ff}.asset-check.selected{border-color:rgba(0,217,255,.35);color:#dffbff;background:rgba(0,217,255,.05)}.picker-actions{display:flex;gap:7px}.picker-actions button{flex:1;padding:9px;border-radius:8px;background:#0b131f;border:1px solid #1c2b3d;color:#9fe7f5;font-size:8px;font-weight:900}.backtest-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.backtest-results{display:grid;gap:10px}.bt-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}.bt-table{width:100%;border-collapse:collapse;min-width:760px}.bt-table th,.bt-table td{padding:9px;border-bottom:1px solid rgba(255,255,255,.05);font-size:8px;text-align:left}.bt-table th{color:#66758a;text-transform:uppercase}.bt-win{color:#4ade80;font-weight:900}.bt-loss{color:#fb7185;font-weight:900}.bt-g1{color:#fbbf24;font-weight:900}.bt-note{font-size:8px;color:#718096;line-height:1.5}.warmup-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 8px;border-radius:8px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:8px;font-weight:900}
         .calc-top-btn{margin-top:7px;display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:9px;background:rgba(0,217,255,.06);border:1px solid rgba(0,217,255,.2);color:#9fe7f5;font-size:9px;font-weight:900;text-transform:uppercase}
         .calc-top-btn:hover{border-color:rgba(0,217,255,.45);background:rgba(0,217,255,.1)}
-        .calc-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr);gap:12px}.calc-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.calc-result-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.calc-stat{background:#0b121d;border:1px solid #182536;border-radius:12px;padding:11px;text-align:center}.calc-stat .k{font-size:8px;color:#66758a;font-weight:900;text-transform:uppercase}.calc-stat .v{font-family:'JetBrains Mono';font-size:17px;font-weight:900;margin-top:4px;color:#dce6f2}.calc-profile{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.calc-profile label{cursor:pointer}.calc-profile input{display:none}.calc-profile span{display:block;text-align:center;padding:10px 7px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-profile input:checked+span{border-color:rgba(0,217,255,.45);background:rgba(0,217,255,.08);color:#dffbff}.calc-mode{display:grid;grid-template-columns:1fr 1fr;gap:7px}.calc-mode label{cursor:pointer}.calc-mode input{display:none}.calc-mode span{display:block;text-align:center;padding:10px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-mode input:checked+span{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.07);color:#bbf7d0}.calc-plan{display:grid;gap:7px}.calc-plan-row{display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border-radius:9px;background:#0b121d;border:1px solid #182536;font-size:9px}.calc-plan-row b{color:#dce6f2}.calc-plan-row span{color:#7f8da0;text-align:right}.calc-warning{padding:10px;border-radius:10px;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:9px;line-height:1.5}.calc-ok{padding:10px;border-radius:10px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.18);color:#86efac;font-size:9px;line-height:1.5}.calc-note{font-size:8px;color:#718096;line-height:1.55}
+        .calc-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr);gap:12px}.calc-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.calc-result-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.calc-stat{background:#0b121d;border:1px solid #182536;border-radius:12px;padding:11px;text-align:center}.calc-stat .k{font-size:8px;color:#66758a;font-weight:900;text-transform:uppercase}.calc-stat .v{font-family:'JetBrains Mono';font-size:17px;font-weight:900;margin-top:4px;color:#dce6f2}.calc-profile{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.calc-profile label{cursor:pointer}.calc-profile input{display:none}.calc-profile span{display:block;text-align:center;padding:10px 7px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-profile input:checked+span{border-color:rgba(0,217,255,.45);background:rgba(0,217,255,.08);color:#dffbff}.calc-mode{display:grid;grid-template-columns:1fr 1fr;gap:7px}.calc-mode label{cursor:pointer}.calc-mode input{display:none}.calc-mode span{display:block;text-align:center;padding:10px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-mode input:checked+span{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.07);color:#bbf7d0}.calc-plan{display:grid;gap:7px}.calc-plan-row{display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border-radius:9px;background:#0b121d;border:1px solid #182536;font-size:9px}.calc-plan-row b{color:#dce6f2}.calc-plan-row span{color:#7f8da0;text-align:right}.calc-entry-table{width:100%;border-collapse:separate;border-spacing:0 5px;font-size:9px}.calc-entry-table th{color:#66758a;text-transform:uppercase;font-size:7px;text-align:left;padding:5px 7px}.calc-entry-table td{padding:8px 7px;background:#0b121d;border-top:1px solid #182536;border-bottom:1px solid #182536;color:#b8c4d3}.calc-entry-table td:first-child{border-left:1px solid #182536;border-radius:8px 0 0 8px;color:#dce6f2;font-weight:900}.calc-entry-table td:last-child{border-right:1px solid #182536;border-radius:0 8px 8px 0}.calc-entry-table .entry-value{color:#dffbff;font-family:'JetBrains Mono';font-weight:900}.calc-entry-table .win-next{color:#86efac}.calc-entry-table .loss-next{color:#fca5a5}.calc-entry-note{margin-top:8px;padding:9px;border-radius:9px;background:rgba(0,217,255,.04);border:1px solid rgba(0,217,255,.12);color:#8da0b5;font-size:8px;line-height:1.5}.calc-warning{padding:10px;border-radius:10px;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:9px;line-height:1.5}.calc-ok{padding:10px;border-radius:10px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.18);color:#86efac;font-size:9px;line-height:1.5}.calc-note{font-size:8px;color:#718096;line-height:1.55}
         .calc-modal{position:fixed!important;inset:0;z-index:200;display:none!important;padding:22px;overflow:auto;background:rgba(2,6,12,.82);backdrop-filter:blur(8px)}
         .calc-modal.active{display:block!important}
         .calc-modal-inner{max-width:1180px;margin:0 auto;padding-bottom:40px}
@@ -600,9 +600,9 @@ HTML_INDEX = """
                             </div>
                             <div class="calc-section-title" style="margin-top:12px">Perfil de risco</div>
                             <div class="calc-profile">
-                                <label><input type="radio" name="calc-profile" value="conservador" checked onchange="atualizarPerfilCalc()"><span>🟢 CONSERVADOR<br><small>1% por entrada</small></span></label>
-                                <label><input type="radio" name="calc-profile" value="moderado" onchange="atualizarPerfilCalc()"><span>🟡 MODERADO<br><small>2% por entrada</small></span></label>
-                                <label><input type="radio" name="calc-profile" value="agressivo" onchange="atualizarPerfilCalc()"><span>🔴 AGRESSIVO<br><small>4% por entrada</small></span></label>
+                                <label><input type="radio" name="calc-profile" value="conservador" checked onchange="atualizarPerfilCalc()"><span>🟢 CONSERVADOR<br><small>2% por entrada</small></span></label>
+                                <label><input type="radio" name="calc-profile" value="moderado" onchange="atualizarPerfilCalc()"><span>🟡 MODERADO<br><small>5% por entrada</small></span></label>
+                                <label><input type="radio" name="calc-profile" value="agressivo" onchange="atualizarPerfilCalc()"><span>🔴 AGRESSIVO<br><small>9% por entrada</small></span></label>
                             </div>
                             <div class="calc-section-title" style="margin-top:12px">Método de entrada</div>
                             <div class="calc-mode">
@@ -746,7 +746,7 @@ function calcularGestaoBanca(){
 
     const payout=payoutRaw/100;
     const winrate=winrateRaw/100;
-    const riscoMap={conservador:0.01,moderado:0.02,agressivo:0.04};
+    const riscoMap={conservador:0.02,moderado:0.05,agressivo:0.09};
     const risco=riscoMap[perfil]||0.01;
     const entradaBase=Math.max(0.01,Math.round(banca*risco*100)/100);
     const evFator=winrate*payout-(1-winrate);
@@ -822,6 +822,49 @@ function calcularGestaoBanca(){
             : 'Mão fixa: cada entrada mantém o mesmo valor-base.')
     );
 
+    // Roteiro condicional de entradas: mostra exatamente quanto usar e para onde
+    // ir depois de WIN/LOSS. Isso evita inventar uma sequência futura de resultados.
+    const entrySteps=[];
+    let roteiroStake=entradaBase;
+    let roteiroNivel=1;
+    const totalRoteiro=modo==='soros' ? Math.max(12, Math.min(30, niveis*6)) : Math.min(30, Math.max(12, entradasEstimadas||12));
+    for(let i=1;i<=totalRoteiro;i++){
+        let winNext=entradaBase, lossNext=entradaBase, levelLabel='Mão fixa';
+        if(modo==='soros'){
+            levelLabel='Nível '+roteiroNivel;
+            if(roteiroNivel<niveis){
+                winNext=Math.round(roteiroStake*(1+payout)*100)/100;
+            }else{
+                winNext=entradaBase;
+            }
+            lossNext=entradaBase;
+        }else{
+            winNext=entradaBase;
+            lossNext=entradaBase;
+        }
+        entrySteps.push({numero:i,valor:Math.round(roteiroStake*100)/100,nivel:levelLabel,win_proxima:Math.round(winNext*100)/100,loss_proxima:Math.round(lossNext*100)/100});
+        if(modo==='soros'){
+            if(roteiroNivel<niveis){
+                roteiroStake=winNext;
+                roteiroNivel++;
+            }else{
+                roteiroStake=entradaBase;
+                roteiroNivel=1;
+            }
+        }else roteiroStake=entradaBase;
+    }
+
+    const sorosLevels=[];
+    if(modo==='soros'){
+        let st=entradaBase;
+        for(let n=1;n<=niveis;n++){
+            const lucro=st*payout;
+            const prox=n<niveis?st+lucro:entradaBase;
+            sorosLevels.push({nivel:n,valor:Math.round(st*100)/100,lucro_win:Math.round(lucro*100)/100,proxima_win:Math.round(prox*100)/100,proxima_loss:entradaBase});
+            st=prox;
+        }
+    }
+
     renderCalculadora({
         ok:true,
         parameters:{bankroll:banca,target_profit:meta,days:dias,payout:payout,winrate:winrate,profile:perfil,mode:modo,soros_levels:niveis},
@@ -836,6 +879,8 @@ function calcularGestaoBanca(){
             viavel:viavel
         },
         plan:plan,
+        entry_steps:entrySteps,
+        soros_levels_detail:sorosLevels,
         message:mensagem,
         note:nota
     });
@@ -849,7 +894,7 @@ function mostrarErroCalc(msg){
 function renderCalculadora(d){
     const box=document.getElementById('calc-results');
     if(!box)return;
-    const s=d.summary||{}, p=d.parameters||{}, plan=Array.isArray(d.plan)?d.plan:[];
+    const s=d.summary||{}, p=d.parameters||{}, plan=Array.isArray(d.plan)?d.plan:[], steps=Array.isArray(d.entry_steps)?d.entry_steps:[], levels=Array.isArray(d.soros_levels_detail)?d.soros_levels_detail:[];
     const cards=[
         ['Entrada base',moedaBR(s.entrada_base)],
         ['Entradas estimadas',s.entradas_estimadas||'--'],
@@ -866,11 +911,27 @@ function renderCalculadora(d){
     html+='<div class="calc-result-grid">';
     cards.forEach(function(c){html+='<div class="calc-stat"><div class="k">'+c[0]+'</div><div class="v">'+c[1]+'</div></div>';});
     html+='</div>';
-    html+='<div style="margin-top:12px" class="calc-section-title">Plano sugerido por dia</div><div class="calc-plan">';
+
+    html+='<div style="margin-top:14px" class="calc-section-title">📋 Roteiro das entradas</div>';
+    html+='<div class="calc-entry-note">'+(p.mode==='soros'
+        ? 'Use a linha correspondente ao resultado da entrada anterior: <b>WIN</b> leva para o próximo nível; <b>LOSS</b> reinicia no valor-base. O roteiro é condicional e não presume que você terá WINs consecutivos.'
+        : 'Na mão fixa, cada entrada mantém o mesmo valor. Se der WIN ou LOSS, a próxima entrada continua no valor-base definido pelo perfil.')+'</div>';
+    html+='<div style="overflow-x:auto;margin-top:7px"><table class="calc-entry-table"><thead><tr><th>Entrada</th><th>Valor</th><th>Nível</th><th>Se WIN → próxima</th><th>Se LOSS → próxima</th></tr></thead><tbody>';
+    if(steps.length){
+        steps.forEach(function(x){html+='<tr><td>#'+x.numero+'</td><td class="entry-value">'+moedaBR(x.valor)+'</td><td>'+x.nivel+'</td><td class="win-next">'+moedaBR(x.win_proxima)+'</td><td class="loss-next">'+moedaBR(x.loss_proxima)+'</td></tr>';});
+    }else html+='<tr><td colspan="5" class="empty">Nenhuma entrada calculada.</td></tr>';
+    html+='</tbody></table></div>';
+
+    if(p.mode==='soros'&&levels.length){
+        html+='<div style="margin-top:14px" class="calc-section-title">📈 Ciclo Soros por nível</div>';
+        html+='<div style="overflow-x:auto;margin-top:7px"><table class="calc-entry-table"><thead><tr><th>Nível</th><th>Entrada</th><th>Lucro se WIN</th><th>Próxima se WIN</th><th>Próxima se LOSS</th></tr></thead><tbody>';
+        levels.forEach(function(x){html+='<tr><td>Nível '+x.nivel+'</td><td class="entry-value">'+moedaBR(x.valor)+'</td><td class="win-next">+'+moedaBR(x.lucro_win)+'</td><td class="win-next">'+moedaBR(x.proxima_win)+'</td><td class="loss-next">'+moedaBR(x.proxima_loss)+'</td></tr>';});
+        html+='</tbody></table></div>';
+    }
+
+    html+='<div style="margin-top:14px" class="calc-section-title">📅 Distribuição por dia</div><div class="calc-plan">';
     if(plan.length){
-        plan.forEach(function(x){
-            html+='<div class="calc-plan-row"><b>Dia '+(x.dia||'--')+'</b><span>'+(x.entradas||0)+' entrada(s) • base '+moedaBR(x.entrada_base)+(x.nivel_maximo?' • até '+moedaBR(x.nivel_maximo):'')+'</span></div>';
-        });
+        plan.forEach(function(x){html+='<div class="calc-plan-row"><b>Dia '+(x.dia||'--')+'</b><span>'+(x.entradas||0)+' entrada(s) • base '+moedaBR(x.entrada_base)+(x.nivel_maximo?' • exposição máx. '+moedaBR(x.nivel_maximo):'')+'</span></div>';});
     }else{
         html+='<div class="empty">Nenhum plano diário calculado.</div>';
     }
@@ -2327,7 +2388,7 @@ def calculadora_gestao():
             modo = 'fixa'
         niveis = max(1, min(niveis, 4))
 
-        risco = {'conservador': 0.01, 'moderado': 0.02, 'agressivo': 0.04}[perfil]
+        risco = {'conservador': 0.02, 'moderado': 0.05, 'agressivo': 0.09}[perfil]
         entrada_base = round(banca * risco, 2)
         if entrada_base < 0.01:
             entrada_base = 0.01
