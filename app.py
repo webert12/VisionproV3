@@ -2178,6 +2178,16 @@ def calculadora_gestao():
         dias = int(payload.get('days', 0))
         payout = float(payload.get('payout', 0))
         winrate = float(payload.get('winrate', 0))
+
+        # Compatibilidade: a interface trabalha com porcentagens (80 = 80%),
+        # enquanto o motor matemático usa frações (0.80). Aceitamos os dois
+        # formatos para evitar erro caso o navegador esteja com uma versão
+        # anterior do JavaScript em cache.
+        if payout > 1:
+            payout /= 100.0
+        if winrate > 1:
+            winrate /= 100.0
+
         perfil = str(payload.get('profile', 'conservador')).lower()
         modo = str(payload.get('mode', 'fixa')).lower()
         niveis = int(payload.get('soros_levels', 1))
