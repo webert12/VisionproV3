@@ -684,7 +684,7 @@ async function ativarNotificacoesEmSegundoPlano(){
             return erro(cfg.error || 'O servidor não está pronto para Web Push. Confira pywebpush e as 3 variáveis VAPID no Render.');
         }
         let applicationServerKey;
-        try{applicationServerKey=urlBase64ToUint8Array(cfg.public_key);}catch(e){return erro('A VAPID_PUBLIC_KEY do Render é inválida. Gere novamente o par VAPID e mantenha a pública correspondente à privada.');}
+        try{applicationServerKey=urlBase64ToUint8Array(cfg.public_key);}catch(e){return erro('O servidor não retornou uma VAPID pública P-256 válida. Verifique a VAPID_PRIVATE_KEY no Render e faça novo deploy.');}
         if(applicationServerKey.length!==65 || applicationServerKey[0]!==4){
             return erro('A VAPID_PUBLIC_KEY não tem o formato P-256 esperado pelo Chrome (65 bytes).');
         }
@@ -2186,6 +2186,37 @@ def _selecionar_candidato_diversificado(candidatos, st):
     ))
 
 # ================= WEB PUSH / NOTIFICAÇÕES EM SEGUNDO PLANO =================
+def _vapid_public_key_canonical():
+    """Retorna a VAPID public key no formato Web Push P-256 uncompressed (65 bytes).
+    Se a private key estiver em raw base64url, deriva a pública correspondente.
+    Isso evita erro quando a chave pública do Render foi copiada com formato incorreto.
+    """
+    raw = (VAPID_PRIVATE_KEY or '').strip()
+    if not raw:
+        return ''
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_pem_private_key
+        import base64 as _b64
+        if 'BEGIN' in raw:
+            key = load_pem_private_key(raw.encode('utf-8'), password=None)
+        else:
+            padded = raw + '=' * ((4 - len(raw) % 4) % 4)
+            private_bytes = _b64.urlsafe_b64decode(padded)
+            if len(private_bytes) != 32:
+                raise ValueError('A VAPID_PRIVATE_KEY raw deve ter 32 bytes.')
+            private_value = int.from_bytes(private_bytes, 'big')
+            if not 1 <= private_value < 2**256:
+                raise ValueError('VAPID_PRIVATE_KEY inválida.')
+            key = ec.derive_private_key(private_value, ec.SECP256R1())
+        public = key.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+        if len(public) != 65 or public[0] != 4:
+            raise ValueError('A chave pública derivada não é P-256 uncompressed.')
+        return _b64.urlsafe_b64encode(public).rstrip(b'=').decode('ascii')
+    except Exception as exc:
+        print(f'⚠️ VAPID: não foi possível derivar a chave pública da privada: {exc}')
+        return ''
+
 def _push_configurado():
     return bool(WEBPUSH_DISPONIVEL and VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
 
@@ -2256,9 +2287,14 @@ def push_config():
     if not user: return jsonify({"ok":False,"error":"Sessão expirada"}),401
     if not WEBPUSH_DISPONIVEL:
         return jsonify({"ok":False,"error":"pywebpush não está instalado no servidor. Confira o requirements.txt e faça um novo deploy no Render."}),503
-    if not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
-        return jsonify({"ok":False,"error":"VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY não estão configuradas no Render."}),503
-    return jsonify({"ok":True,"public_key":VAPID_PUBLIC_KEY})
+    if not VAPID_PRIVATE_KEY:
+        return jsonify({"ok":False,"error":"VAPID_PRIVATE_KEY não está configurada no Render."}),503
+    public_key = _vapid_public_key_canonical()
+    if not public_key:
+        return jsonify({"ok":False,"error":"VAPID_PRIVATE_KEY inválida. Use uma chave P-256 válida de 32 bytes em Base64URL ou PEM."}),503
+    # A pública retornada ao Chrome é sempre derivada da privada, garantindo
+    # formato P-256 uncompressed de 65 bytes e correspondência entre as chaves.
+    return jsonify({"ok":True,"public_key":public_key})
 
 @app.route('/push/test', methods=['POST'])
 def push_test():
