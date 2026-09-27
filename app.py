@@ -18,6 +18,17 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+# Web Push: permite notificações mesmo fora da página/tela bloqueada.
+# A biblioteca é opcional no boot para não quebrar instalações antigas;
+# quando instalada, o recurso fica disponível via VAPID_* do ambiente.
+try:
+    from pywebpush import webpush as _webpush, WebPushException as _WebPushException
+    WEBPUSH_DISPONIVEL = True
+except Exception:
+    _webpush = None
+    _WebPushException = Exception
+    WEBPUSH_DISPONIVEL = False
+
 # ================= AJUSTE DE FUSO HORÁRIO (SÃO PAULO / BRASÍLIA) =================
 FUSO_SP = pytz.timezone('America/Sao_Paulo')
 
@@ -42,6 +53,10 @@ TOKEN_TELEGRAM = _required_env("TOKEN_TELEGRAM")
 CHAT_ID_TELEGRAM = _required_env("CHAT_ID_TELEGRAM")
 ADMIN_EMAIL = _required_env("ADMIN_EMAIL").lower()
 DB_URL = _required_env("DB_URL", aliases=("DATABASE_URL",))
+# Chaves VAPID ficam no Render. Não coloque chaves privadas no código.
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "").strip()
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "").strip()
+VAPID_CLAIMS_EMAIL = os.getenv("VAPID_CLAIMS_EMAIL", "mailto:admin@visionpro.local").strip()
 
 def get_db_connection():
     if not DB_URL:
@@ -77,6 +92,7 @@ def get_user_state(email):
             "ultima_confirmacao_alert_id": None,
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
+            "push_ativado": False,
             "candle_remaining": 0,
             "news_guard_status": "AGUARDANDO CALENDÁRIO",
             "news_guard_event": None,
@@ -523,7 +539,7 @@ HTML_INDEX = """
                                 <div class="action-grid"><button class="action start" onclick="sendCommand('start_bot')">▶ START</button><button class="action pause" onclick="sendCommand('pause_bot')">⏸ PAUSE</button><button class="action stop" onclick="sendCommand('stop_bot')">⏹ STOP</button></div>
                                 <button class="tool-btn" onclick="toggleBox('tools-content')">⚙️ FERRAMENTAS E NOTIFICAÇÕES</button>
                                 <div id="tools-content" class="tools-content">
-                                    <button class="notify-btn" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
+                                    <button class="notify-btn" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR ALERTAS EM SEGUNDO PLANO</button>
                                     {% if user == admin %}
                                     <button class="tg-btn" onclick="sendCommand('test_telegram')">🧪 TESTAR TELEGRAM</button>
                                     <button class="tg-btn" id="btn-telegram-toggle" onclick="toggleTelegram()">{{ '🟢 ENVIO TELEGRAM ATIVADO' if telegram_ativo else '🔴 ENVIO TELEGRAM DESATIVADO' }}</button>
@@ -648,6 +664,27 @@ function toggleTelegram(){fetch('/command/telegram_toggle',{cache:'no-store'}).t
 function solicitarPermissaoNotificacao(){if(!('Notification'in window)){alert('Este navegador não suporta notificações.');return}Notification.requestPermission().then(p=>{const b=document.getElementById('btn-enable-notify');if(p==='granted'){if(b)b.innerText='✅ NOTIFICAÇÕES NATIVAS ATIVADAS';toast('Notificações ativadas')}else alert('Permissão de notificação recusada.')})}
 if('serviceWorker'in navigator&&'Notification'in window){navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'}).catch(()=>{})}
 async function dispararNotificacaoNativa(titulo,corpo,id){if(!('Notification'in window)||Notification.permission!=='granted')return;const nid=String(id||''),now=Date.now(),last=localStorage.getItem('vision_last_notif_id')||'',lastAt=Number(localStorage.getItem('vision_last_notif_at')||0);if(nid&&nid===last)return;if(lastAt&&NATIVE_NOTIFICATION_COOLDOWN_MS>0&&now-lastAt<NATIVE_NOTIFICATION_COOLDOWN_MS)return;try{const opcoes={body:corpo,tag:nid?'vision-signal-'+nid:'vision-signal-'+now,renotify:true,requireInteraction:true,silent:false,vibrate:[250,120,250,120,400],timestamp:now};if('serviceWorker'in navigator){const reg=await navigator.serviceWorker.ready;await reg.showNotification(titulo,opcoes)}else new Notification(titulo,opcoes);if(nid)localStorage.setItem('vision_last_notif_id',nid);localStorage.setItem('vision_last_notif_at',String(now))}catch(e){console.warn('Notificação nativa indisponível:',e)}}
+
+function urlBase64ToUint8Array(base64String){const padding='='.repeat((4-base64String.length%4)%4);const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(base64);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
+async function ativarNotificacoesEmSegundoPlano(){
+    try{
+        if(!('Notification'in window)||!('serviceWorker'in navigator)||!('PushManager'in window)){alert('Este navegador não oferece Web Push neste dispositivo.');return}
+        const permissao=await Notification.requestPermission();
+        if(permissao!=='granted'){alert('Permissão de notificações não concedida.');return}
+        const cfg=await fetch('/push/config',{cache:'no-store'}).then(r=>r.json());
+        if(!cfg.ok||!cfg.public_key){alert('Notificações em segundo plano ainda não estão configuradas no servidor.');return}
+        const reg=await navigator.serviceWorker.ready;
+        let sub=await reg.pushManager.getSubscription();
+        if(!sub){sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(cfg.public_key)});}
+        const body=sub.toJSON();
+        const r=await fetch('/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscription:body})});
+        const d=await r.json();
+        const b=document.getElementById('btn-enable-notify');
+        if(d.ok){if(b)b.innerText='✅ ALERTAS EM SEGUNDO PLANO ATIVOS';toast('Notificações ativas mesmo fora da página');}
+        else alert(d.error||'Não foi possível ativar as notificações.');
+    }catch(e){console.error(e);alert('Não foi possível ativar as notificações em segundo plano. Verifique a permissão do navegador.');}
+}
+function solicitarPermissaoNotificacao(){ativarNotificacoesEmSegundoPlano();}
 function toggleAtivosBloqueados(){const p=document.getElementById('news-locked-panel');const b=document.getElementById('news-locked-toggle');if(!p||!b)return;p.classList.toggle('open');const n=(latestData&&latestData.news_blocked_assets||[]).length;b.innerText=(p.classList.contains('open')?'🔽 OCULTAR':'🔒 VER')+' ATIVOS BLOQUEADOS ('+n+')'}
 function atualizarAtivosBloqueados(lista){const itens=Array.isArray(lista)?lista:[];const b=document.getElementById('news-locked-toggle'),p=document.getElementById('news-locked-panel'),box=document.getElementById('news-locked-list');if(!b||!p||!box)return;b.innerText=(p.classList.contains('open')?'🔽 OCULTAR':'🔒 VER')+' ATIVOS BLOQUEADOS ('+itens.length+')';box.innerHTML=itens.length?itens.map(x=>{const imp=Math.max(1,Math.min(3,parseInt(x.impact||2,10)));return `<div class="locked-item"><b>🚫 ${x.ativo||'ATIVO'}</b><br>${'🐂'.repeat(imp)} ${x.currency||''} — ${x.event||'Evento econômico'}<br><span style="color:#6f8095">Notícia: ${x.horario||'--:--'} | Liberação: ${x.liberacao||'--:--'}</span></div>`}).join(''):'<div class="empty">Nenhum ativo bloqueado por notícia no momento.</div>';
     const b2=document.getElementById('news-locked-list-2');if(b2)b2.innerHTML=itens.length?itens.map(x=>{const imp=Math.max(1,Math.min(3,parseInt(x.impact||2,10)));return `<div class="locked-item"><b>🚫 ${x.ativo||'ATIVO'}</b><br>${'🐂'.repeat(imp)} ${x.currency||''} — ${x.event||'Evento econômico'}<br><span style="color:#6f8095">Notícia: ${x.horario||'--:--'} | Liberação: ${x.liberacao||'--:--'}</span></div>`}).join(''):'<div class="empty">Nenhum ativo bloqueado por notícia no momento.</div>';
@@ -747,7 +784,7 @@ function atualizarSessao(d){setText('win-count',d.wins||0);setText('loss-count',
 function formatarTempo(seg){seg=Math.max(0,Math.floor(Number(seg)||0));const h=Math.floor(seg/3600),m=Math.floor((seg%3600)/60),s=seg%60;return h>0?String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'):String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')}
 function formatarHora(ts){if(!ts)return'--:--:--';return new Date(Number(ts)*1000).toLocaleTimeString('pt-BR',{hour12:false})}
 function atualizarTimerMercado(d){const end=Number(d.candle_end_ts||0),start=Number(d.candle_start_ts||0),server=Number(d.server_now||Date.now()/1000),now=server+((Date.now()/1000)-server);const remaining=Math.max(0,end-now);const elapsed=Math.max(0,Math.min(end-start,now-start));const total=Math.max(1,Number(d.candle_total||((d.timeframe||5)*60)));const pct=Math.max(0,Math.min(100,(elapsed/total)*100));setText('candle-countdown',formatarTempo(remaining));const fill=document.getElementById('candle-fill');if(fill)fill.style.width=pct+'%';setText('candle-window',formatarHora(start)+' → '+formatarHora(end));const entryTs=Number(d.entry_end_ts||0);const entryRemaining=entryTs?Math.max(0,entryTs-now):0;const confirmTs=Number(d.confirmation_ts||0);const confirmRemaining=confirmTs?Math.max(0,confirmTs-now):0;const entrada=d.entry_time||'--:--:--';setText('entry-countdown',entryTs?(entrada+' • '+formatarTempo(entryRemaining)):(entrada==='--:--:--'?'--:--:--':entrada));const note=document.getElementById('timer-note');if(note){if(d.sinal_confirmado){note.innerText='🎯 Entrada confirmada • expiração: '+((d.sinal_confirmado||{}).str_saida||'--:--:--');note.className='timer-note timer-confirm'}else if(d.alerta){note.innerText=confirmRemaining<=5&&confirmRemaining>0?'⚡ CONFIRMAÇÃO EM '+Math.ceil(confirmRemaining)+'s':'⚠️ Confirmação programada 5s antes da virada • entrada '+entrada;note.className='timer-note '+(confirmRemaining<=5&&confirmRemaining>0?'timer-alert':'')}else{note.innerText='Aguardando uma confluência válida para programar a entrada.';note.className='timer-note'}}}
-async function atualizarPainel(){try{const r=await fetch('/status',{cache:'no-store'});const d=await r.json();if(d.redirect){location.href=d.redirect;return}latestData=d;atualizarAssetPickers(d);renderSignal(d);atualizarSessao(d);atualizarTimerMercado(d);atualizarAtivosBloqueados(d.news_blocked_assets||[]);const ng=d.news_guard_status||'AGUARDANDO CALENDÁRIO';setText('news-guard-status',ng);setText('guard-detail-status',ng);const blocked=(d.news_blocked_assets||[]).length;const color=blocked?'#fb7185':ng.includes('INDISPONÍVEL')?'#fbbf24':'#86efac';['news-guard-status','guard-detail-status'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.color=color});const b=document.getElementById('guard-badge');if(b)b.innerText=blocked?'● PROTEGENDO':'● ATIVO';const b2=document.getElementById('guard-badge-2');if(b2)b2.innerText=blocked?'● PROTEGENDO':'● ATIVO';const result=document.getElementById('result-area');if(result)result.style.display=d.aguardando?'grid':'none';renderHistory(d.historico||[]);renderResumoHistorico(d.historico_resumo||{});if(d.notificacao&&d.notificacao.id!==lastNotifId){lastNotifId=d.notificacao.id;dispararNotificacaoNativa(d.notificacao.titulo,d.notificacao.corpo,d.notificacao.id)}}catch(e){setText('top-status','REDE');}finally{setTimeout(atualizarPainel,1000)}}
+async function atualizarPainel(){try{const r=await fetch('/status',{cache:'no-store'});const d=await r.json();if(d.redirect){location.href=d.redirect;return}latestData=d;atualizarAssetPickers(d);renderSignal(d);const nb=document.getElementById('btn-enable-notify');if(nb){nb.innerText=d.push_ativado?'✅ ALERTAS EM SEGUNDO PLANO ATIVOS':(d.push_configurado?'🔔 ATIVAR ALERTAS EM SEGUNDO PLANO':'⚙️ CONFIGURE WEB PUSH NO SERVIDOR')}atualizarSessao(d);atualizarTimerMercado(d);atualizarAtivosBloqueados(d.news_blocked_assets||[]);const ng=d.news_guard_status||'AGUARDANDO CALENDÁRIO';setText('news-guard-status',ng);setText('guard-detail-status',ng);const blocked=(d.news_blocked_assets||[]).length;const color=blocked?'#fb7185':ng.includes('INDISPONÍVEL')?'#fbbf24':'#86efac';['news-guard-status','guard-detail-status'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.color=color});const b=document.getElementById('guard-badge');if(b)b.innerText=blocked?'● PROTEGENDO':'● ATIVO';const b2=document.getElementById('guard-badge-2');if(b2)b2.innerText=blocked?'● PROTEGENDO':'● ATIVO';const result=document.getElementById('result-area');if(result)result.style.display=d.aguardando?'grid':'none';renderHistory(d.historico||[]);renderResumoHistorico(d.historico_resumo||{});if(d.notificacao&&d.notificacao.id!==lastNotifId){lastNotifId=d.notificacao.id;dispararNotificacaoNativa(d.notificacao.titulo,d.notificacao.corpo,d.notificacao.id)}}catch(e){setText('top-status','REDE');}finally{setTimeout(atualizarPainel,1000)}}
 window.addEventListener('resize',()=>{if(latestData){const f=latestData.sinal_confirmado||latestData.alerta||latestData.analise_atual||{};const fa=f.analise||f;drawChart((fa.grafico&&fa.grafico.length?fa.grafico:(latestData.grafico_atual||[])),'market-chart');drawChart((fa.grafico&&fa.grafico.length?fa.grafico:(latestData.grafico_atual||[])),'market-chart-2')}});
 document.getElementById('bt-market')?.addEventListener('change',e=>renderAssetPicker('bt-assets',e.target.value,[]));
 const opPicker=document.getElementById('operating-assets'); if(opPicker) opPicker.addEventListener('change',()=>saveOperatingAssets());
@@ -792,6 +829,17 @@ def init_db():
                 sinal VARCHAR(255) NOT NULL,
                 resultado VARCHAR(50) NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+                endpoint TEXT PRIMARY KEY,
+                user_email VARCHAR(255) NOT NULL,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                content_encoding VARCHAR(50) DEFAULT 'aes128gcm',
+                criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_web_push_user ON web_push_subscriptions(user_email);
         """)
         conn.commit()
         cur.close()
@@ -2076,6 +2124,91 @@ def _selecionar_candidato_diversificado(candidatos, st):
         int(c.get("concordantes",0)),
     ))
 
+# ================= WEB PUSH / NOTIFICAÇÕES EM SEGUNDO PLANO =================
+def _push_configurado():
+    return bool(WEBPUSH_DISPONIVEL and VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
+
+def salvar_push_subscription(user_email, subscription):
+    if not user_email or not isinstance(subscription, dict):
+        return False
+    endpoint = str(subscription.get('endpoint') or '').strip()
+    keys = subscription.get('keys') or {}
+    p256dh = str(keys.get('p256dh') or '').strip()
+    auth = str(keys.get('auth') or '').strip()
+    content_encoding = str((subscription.get('contentEncoding') or 'aes128gcm')).strip()
+    if not endpoint or not p256dh or not auth:
+        return False
+    conn = get_db_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO web_push_subscriptions(endpoint,user_email,p256dh,auth,content_encoding,atualizado_em)
+            VALUES(%s,%s,%s,%s,%s,CURRENT_TIMESTAMP)
+            ON CONFLICT(endpoint) DO UPDATE SET
+                user_email=EXCLUDED.user_email, p256dh=EXCLUDED.p256dh, auth=EXCLUDED.auth,
+                content_encoding=EXCLUDED.content_encoding, atualizado_em=CURRENT_TIMESTAMP
+        """, (endpoint,user_email.lower(),p256dh,auth,content_encoding))
+        conn.commit()
+        return True
+    finally:
+        cur.close(); conn.close()
+
+def enviar_web_push(user_email, titulo, corpo, tag=None, url='/'):
+    """Envia Web Push real pelo servidor; funciona com a página fechada/tela bloqueada
+    quando o navegador/Android permite notificações e a inscrição continua válida."""
+    if not user_email or not _push_configurado():
+        return 0
+    try:
+        conn=get_db_connection(); cur=conn.cursor()
+        cur.execute("SELECT endpoint,p256dh,auth,content_encoding FROM web_push_subscriptions WHERE user_email=%s",(user_email.lower(),))
+        rows=cur.fetchall()
+        cur.close(); conn.close()
+    except Exception as e:
+        print(f"⚠️ Web Push: erro ao ler inscrições: {e}")
+        return 0
+    enviados=0
+    payload=json.dumps({"title":titulo,"body":corpo,"tag":tag or ('vision-'+str(time.time_ns())),"url":url})
+    for endpoint,p256dh,auth,encoding in rows:
+        sub={"endpoint":endpoint,"keys":{"p256dh":p256dh,"auth":auth}}
+        try:
+            _webpush(
+                subscription_info=sub,
+                data=payload,
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims={"sub":VAPID_CLAIMS_EMAIL},
+                ttl=120,
+                content_encoding=encoding or 'aes128gcm'
+            )
+            enviados+=1
+        except Exception as e:
+            status=getattr(getattr(e,'response',None),'status_code',None)
+            if status in (404,410):
+                try:
+                    conn=get_db_connection(); cur=conn.cursor(); cur.execute("DELETE FROM web_push_subscriptions WHERE endpoint=%s",(endpoint,)); conn.commit(); cur.close(); conn.close()
+                except Exception: pass
+            else:
+                print(f"⚠️ Web Push falhou para {user_email}: {e}")
+    return enviados
+
+@app.route('/push/config')
+def push_config():
+    user=session.get('user')
+    if not user: return jsonify({"ok":False,"error":"Sessão expirada"}),401
+    return jsonify({"ok":_push_configurado(),"public_key":VAPID_PUBLIC_KEY if _push_configurado() else ""})
+
+@app.route('/push/subscribe', methods=['POST'])
+def push_subscribe():
+    user=session.get('user')
+    if not user: return jsonify({"ok":False,"error":"Sessão expirada"}),401
+    if not _push_configurado(): return jsonify({"ok":False,"error":"Web Push não configurado no servidor."}),503
+    try:
+        sub=(request.get_json(silent=True) or {}).get('subscription') or {}
+        ok=salvar_push_subscription(user,sub)
+        if not ok: return jsonify({"ok":False,"error":"Inscrição de notificações inválida."}),400
+        st=get_user_state(user); st['push_ativado']=True
+        return jsonify({"ok":True})
+    except Exception as e:
+        return jsonify({"ok":False,"error":str(e)}),500
+
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
 @app.route('/sw.js')
 def service_worker():
@@ -2088,6 +2221,22 @@ def service_worker():
         event.waitUntil(self.clients.claim());
     });
 
+    self.addEventListener('push', function(event) {
+        var data = {};
+        try { data = event.data ? event.data.json() : {}; } catch (e) { data = {title:'Vision Pro', body:'Novo alerta'}; }
+        var title = data.title || 'Vision Pro';
+        var options = {
+            body: data.body || 'Novo alerta de trading.',
+            tag: data.tag || ('vision-push-' + Date.now()),
+            renotify: true,
+            requireInteraction: true,
+            silent: false,
+            vibrate: [250,120,250,120,500],
+            data: { url: data.url || '/' }
+        };
+        event.waitUntil(self.registration.showNotification(title, options));
+    });
+
     self.addEventListener('notificationclick', function(event) {
         event.notification.close();
 
@@ -2097,7 +2246,7 @@ def service_worker():
                     var client = clientList[i];
                     if ('focus' in client) return client.focus();
                 }
-                if (clients.openWindow) return clients.openWindow('/');
+                if (clients.openWindow) return clients.openWindow((event.notification.data && event.notification.data.url) || '/');
             })
         );
     });
@@ -2301,6 +2450,8 @@ def status():
         "mercado": st["tipo_mercado"],
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
         "notificacao": st["notificacao"],
+        "push_configurado": _push_configurado(),
+        "push_ativado": bool(st.get("push_ativado")),
         "timeframe": st["timeframe"],
         "selected_assets": st.get("selected_assets", []),
         "assets_catalog": ATIVOS_BASE,
@@ -2897,6 +3048,13 @@ def confirmar_alerta_agendado(user_email, alert_id):
             "corpo": f"Direção: {sinal} | M{tf} | {est_fmt} | Entrada: {str_entrada}"
         }
 
+        # Web Push é disparado no servidor, sem depender do /status ou da página aberta.
+        threading.Thread(
+            target=enviar_web_push,
+            args=(user_email, f"🎯 ENTRADA: {ativo} — {sinal}", f"{ativo} | {sinal} | M{tf} | Entrada {str_entrada}", f"vision-confirm-{alerta_id_atual}"),
+            daemon=True
+        ).start()
+
         msg_sinal = (
             f"🎯 <b>SINAL CONFIRMADO — ENTRADA AGORA!</b> 🎯\n\n"
             f"💱 <b>Paridade:</b> {ativo}\n"
@@ -3385,6 +3543,11 @@ def bot_loop():
                             st["proximo_sinal_candidato"] = None
                             st["proximo_sinal_atualizado"] = time.time()
                             st["notificacao"]={"id":str(time.time_ns()),"titulo":f"⚠️ NOVO ALERTA: {ativo} — {sinal_encontrado}","corpo":f"{ativo} | {sinal_encontrado} | Entrada {str_entrada} | {maior_prob}% | Confluência {melhor_analise.get('confluencia',0):.0f}/100"}
+                            threading.Thread(
+                                target=enviar_web_push,
+                                args=(user_email, f"⚠️ NOVO ALERTA: {ativo} — {sinal_encontrado}", f"{ativo} | {sinal_encontrado} | Entrada {str_entrada} | {maior_prob}% | Confluência {melhor_analise.get('confluencia',0):.0f}/100", f"vision-alert-{novo_alert_id}"),
+                                daemon=True
+                            ).start()
                             cor="#10b981" if sinal_encontrado=="CALL" else "#ef4444"
                             st["ultimo_sinal"]=f"<div style='text-align:center;line-height:1.6;color:#f59e0b'>⚠️ <b>PRÉ-ALERTA</b><br><b style='font-size:18px;color:{cor}'>{ativo} • {sinal_encontrado}</b><br><span>{maior_prob}% • M{tf} • Entrada {str_entrada}</span><br><span style='color:#00d9ff'>{nome_est_formatado}</span></div>"
 
