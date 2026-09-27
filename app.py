@@ -86,7 +86,6 @@ def get_user_state(email):
             "sinais_sessao_total": 0,
             "warmup_concluido": False,
             "warmup_ativos_analisados": set(),
-            "warmup_ativos_indisponiveis": set(),
             "warmup_analysis": {},
             "warmup_inicio": 0.0,
             "startup_lock_until": 0.0,
@@ -612,17 +611,7 @@ function abrirView(name,btn){
 }
 function toggleBox(id){const e=document.getElementById(id); if(e)e.classList.toggle('open')}
 function toast(msg){const e=document.getElementById('toast');if(!e)return;e.innerText=msg;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2200)}
-async function sendCommand(cmd){
-    try{
-        const r=await fetch('/command/'+encodeURIComponent(cmd),{cache:'no-store',headers:{'Accept':'application/json'}});
-        const ct=r.headers.get('content-type')||'';
-        const d=ct.includes('application/json')?await r.json():{error:'Servidor retornou uma resposta inválida ('+r.status+').'};
-        if(!r.ok){toast(d.error||('Falha no comando ('+r.status+')'));return;}
-        if(d.redirect)location.href=d.redirect;
-        else if(d.error)toast(d.error);
-        else toast('Comando atualizado');
-    }catch(e){toast('Falha de comunicação com o servidor. Tente novamente.');}
-}
+function sendCommand(cmd){fetch('/command/'+cmd,{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d.redirect)location.href=d.redirect;else if(d.error)toast(d.error);else toast('Comando atualizado');}).catch(()=>toast('Falha de comunicação com o servidor'))}
 
 let assetsCatalog=[];
 function assetsForMarket(mkt){
@@ -1082,7 +1071,7 @@ LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
 
 NOME_ESTRATEGIAS_DISPLAY = {
     "LOGICA_DO_PRECO": "Lógica do Preço",
-    "RSI_MACD_MA": "RSI + MACD + MA 9/21/50/100",
+    "RSI_MACD_MA": "RSI + Cruzamento MACD + MA",
     "MHI1": "MHI 1 (+ Filtro Tendência)",
     "REVERSAO": "Reversão de Bandas",
     "TODAS": "Análise Dinâmica Múltipla"
@@ -1579,365 +1568,125 @@ def _macd_atual(c):
     sinal = calcular_ema(linha, 9)
     return float(linha[-1]), float(sinal[-1]), float(linha[-1] - sinal[-1])
 
-def _sma(c, periodo):
-    c = np.asarray(c, dtype=float)
-    if len(c) == 0:
-        return 0.0
-    n = min(int(periodo), len(c))
-    return float(np.mean(c[-n:]))
-
-
-def _adx_detalhado(h, l, c, periodo=14):
-    """ADX/+DI/-DI simplificado, sem dependência externa."""
-    if len(c) < periodo + 2:
-        return 0.0, 0.0, 0.0
-    h = np.asarray(h, dtype=float)
-    l = np.asarray(l, dtype=float)
-    c = np.asarray(c, dtype=float)
-    up = h[1:] - h[:-1]
-    down = l[:-1] - l[1:]
-    plus_dm = np.where((up > down) & (up > 0), up, 0.0)
-    minus_dm = np.where((down > up) & (down > 0), down, 0.0)
-    tr = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
-    tr_n = np.convolve(tr, np.ones(periodo) / periodo, mode='valid')
-    plus_n = np.convolve(plus_dm, np.ones(periodo) / periodo, mode='valid')
-    minus_n = np.convolve(minus_dm, np.ones(periodo) / periodo, mode='valid')
-    tr_n = np.maximum(tr_n, 1e-12)
-    plus_di = 100.0 * plus_n / tr_n
-    minus_di = 100.0 * minus_n / tr_n
-    dx = 100.0 * np.abs(plus_di - minus_di) / np.maximum(plus_di + minus_di, 1e-12)
-    adx = float(np.mean(dx[-periodo:])) if len(dx) else 0.0
-    return adx, float(plus_di[-1]), float(minus_di[-1])
-
-
-def _estocastico_detalhado(h, l, c, periodo=14):
-    if len(c) < periodo:
-        return 50.0, 50.0
-    hh = float(np.max(h[-periodo:]))
-    ll = float(np.min(l[-periodo:]))
-    k = 50.0 if hh <= ll else float((c[-1] - ll) / (hh - ll) * 100.0)
-    # D simples com os últimos valores de K.
-    ks = []
-    inicio = max(periodo - 1, len(c) - 5)
-    for i in range(inicio, len(c)):
-        janela_h = h[max(0, i-periodo+1):i+1]
-        janela_l = l[max(0, i-periodo+1):i+1]
-        den = float(np.max(janela_h) - np.min(janela_l))
-        ks.append(50.0 if den <= 0 else float((c[i] - np.min(janela_l)) / den * 100.0))
-    d = float(np.mean(ks[-3:])) if ks else k
-    return k, d
-
-
 def _indicadores_confluencia(data, direcao=None):
-    """Motor central de confluência.
-
-    A leitura não depende da estratégia que encontrou o primeiro padrão.
-    Todas as estratégias usam este mesmo painel técnico para confirmar:
-    tendência, EMA9/21/50/100, MA20/50/100, RSI, MACD, ADX/DI,
-    Estocástico, price action, Bollinger, suporte/resistência e momentum.
-    """
-    c = np.asarray(data["close"], dtype=float)
-    o = np.asarray(data["open"], dtype=float)
-    h = np.asarray(data["high"], dtype=float)
-    l = np.asarray(data["low"], dtype=float)
-    if len(c) < 30:
-        return {
-            "confluencia": 0.0, "confluencias": [], "confirmacoes": 0,
-            "conflitos": 99, "tendencia": "SEM DADOS", "regime": "SEM DADOS",
-            "forca_direcional": 0.0
-        }
-
+    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
     ema9 = calcular_ema(c, 9)
     ema21 = calcular_ema(c, 21)
-    ema50 = calcular_ema(c, 50)
-    ema100 = calcular_ema(c, 100)
-    ma20 = _sma(c, 20)
-    ma50 = _sma(c, 50)
-    ma100 = _sma(c, 100)
     rsi = _rsi_atual(c, 14)
     macd, macd_signal, macd_hist = _macd_atual(c)
-    adx, plus_di, minus_di = _adx_detalhado(h, l, c, 14)
-    stoch_k, stoch_d = _estocastico_detalhado(h, l, c, 14)
-
-    std20 = float(np.std(c[-20:]))
-    bb_sup = ma20 + 2.0 * std20
-    bb_inf = ma20 - 2.0 * std20
-    preco = float(c[-1])
-    corpo = abs(float(c[-1] - o[-1]))
-    amplitude = max(float(h[-1] - l[-1]), 1e-12)
-    pavio_sup = float(h[-1] - max(o[-1], c[-1]))
-    pavio_inf = float(min(o[-1], c[-1]) - l[-1])
-
-    suporte = float(np.min(l[-20:-1]))
-    resistencia = float(np.max(h[-20:-1]))
+    ma20 = np.mean(c[-20:])
+    std20 = np.std(c[-20:])
+    bb_sup, bb_inf = ma20 + 2 * std20, ma20 - 2 * std20
     tr = np.maximum(h[-20:] - l[-20:], np.maximum(np.abs(h[-20:] - c[-21:-1]), np.abs(l[-20:] - c[-21:-1]))) if len(c) >= 21 else h[-20:] - l[-20:]
     atr = float(np.mean(tr)) if len(tr) else 0.0
-    atr_pct = (atr / preco * 100.0) if preco else 0.0
+    preco = float(c[-1])
+    atr_pct = (atr / preco * 100) if preco else 0.0
+    corpo = abs(c[-1] - o[-1])
+    amplitude = max(h[-1] - l[-1], 1e-12)
+    pavio_sup = h[-1] - max(o[-1], c[-1])
+    pavio_inf = min(o[-1], c[-1]) - l[-1]
+    suporte = float(np.min(l[-20:-1]))
+    resistencia = float(np.max(h[-20:-1]))
+    tendencia = 'ALTA' if ema9[-1] > ema21[-1] and ema21[-1] >= ema21[-4] else ('BAIXA' if ema9[-1] < ema21[-1] and ema21[-1] <= ema21[-4] else 'LATERAL')
 
-    # Tendência exige alinhamento das quatro EMAs, não apenas EMA9/21.
-    subida = ema21[-1] > ema21[-4] and ema50[-1] >= ema50[-4]
-    descida = ema21[-1] < ema21[-4] and ema50[-1] <= ema50[-4]
-    stack_alta = ema9[-1] > ema21[-1] > ema50[-1] > ema100[-1]
-    stack_baixa = ema9[-1] < ema21[-1] < ema50[-1] < ema100[-1]
-    if stack_alta and subida and preco >= ema50[-1]:
-        tendencia = "ALTA"
-    elif stack_baixa and descida and preco <= ema50[-1]:
-        tendencia = "BAIXA"
+    itens=[]
+    def add(nome,pontos,detalhe,status): itens.append({"nome":nome,"pontos":int(max(0,min(20,pontos))),"detalhe":detalhe,"status":status})
+
+    # Tendência
+    if direcao == 'CALL':
+        ok=tendencia=='ALTA'; pts=20 if ok else (10 if tendencia=='LATERAL' else 3)
+        add('Tendência',pts,f"EMA9 {('acima' if ema9[-1]>ema21[-1] else 'abaixo')} da EMA21 • {tendencia}",'ok' if ok else 'warn' if tendencia=='LATERAL' else 'bad')
+    elif direcao == 'PUT':
+        ok=tendencia=='BAIXA'; pts=20 if ok else (10 if tendencia=='LATERAL' else 3)
+        add('Tendência',pts,f"EMA9 {('abaixo' if ema9[-1]<ema21[-1] else 'acima')} da EMA21 • {tendencia}",'ok' if ok else 'warn' if tendencia=='LATERAL' else 'bad')
     else:
-        tendencia = "LATERAL"
+        add('Tendência',20 if tendencia!='LATERAL' else 10,f"Mercado em {tendencia}",'ok' if tendencia!='LATERAL' else 'warn')
 
-    if adx >= 25:
-        regime = "TENDÊNCIA_FORTE"
-    elif adx >= 18:
-        regime = "TENDÊNCIA_MODERADA"
-    elif atr_pct > 1.8:
-        regime = "VOLATILIDADE_ALTA"
-    else:
-        regime = "LATERAL"
+    # RSI
+    if direcao=='CALL':
+        ok=45 <= rsi <= 68; pts=18 if ok else (11 if 35<=rsi<45 or 68<rsi<=75 else 5)
+    elif direcao=='PUT':
+        ok=32 <= rsi <= 55; pts=18 if ok else (11 if 25<=rsi<32 or 55<rsi<=65 else 5)
+    else: ok=False; pts=10
+    add('RSI',pts,f"RSI {rsi:.1f}",'ok' if ok else 'warn')
 
-    itens = []
-    def add(nome, pontos, detalhe, status, peso=10):
-        itens.append({
-            "nome": nome,
-            "pontos": int(max(0, min(peso, pontos))),
-            "detalhe": detalhe,
-            "status": status,
-            "peso": peso
-        })
+    # MACD
+    macd_ok=(macd_hist>0) if direcao=='CALL' else ((macd_hist<0) if direcao=='PUT' else False)
+    add('MACD',18 if macd_ok else 7,f"Histograma {'positivo' if macd_hist>0 else 'negativo'}",'ok' if macd_ok else 'warn')
 
-    # 1) Direção macro — bloqueia contra-tendência.
-    if direcao == "CALL":
-        ok = tendencia == "ALTA"
-        pontos = 15 if ok else 0
-    elif direcao == "PUT":
-        ok = tendencia == "BAIXA"
-        pontos = 15 if ok else 0
-    else:
-        ok = tendencia in ("ALTA", "BAIXA")
-        pontos = 15 if ok else 6
-    add("Tendência", pontos, f"Estrutura EMA9/21/50/100 • {tendencia}", "ok" if ok else "bad", 15)
-
-    # 2) Alinhamento das quatro médias + preço.
-    if direcao == "CALL":
-        ok = stack_alta and preco >= ema21[-1]
-        detalhe = f"EMA9 {ema9[-1]:.5g} > EMA21 {ema21[-1]:.5g} > EMA50 {ema50[-1]:.5g} > EMA100 {ema100[-1]:.5g}"
-    elif direcao == "PUT":
-        ok = stack_baixa and preco <= ema21[-1]
-        detalhe = f"EMA9 {ema9[-1]:.5g} < EMA21 {ema21[-1]:.5g} < EMA50 {ema50[-1]:.5g} < EMA100 {ema100[-1]:.5g}"
-    else:
-        ok = stack_alta or stack_baixa
-        detalhe = "EMA9/21/50/100 alinhadas" if ok else "Médias sem alinhamento"
-    add("MA/EMA 9•21•50•100", 15 if ok else 0, detalhe, "ok" if ok else "bad", 15)
-
-    # 3) MA20/50/100 como segunda confirmação independente da EMA.
-    if direcao == "CALL":
-        ok = ma20 > ma50 > ma100 and preco >= ma20
-    elif direcao == "PUT":
-        ok = ma20 < ma50 < ma100 and preco <= ma20
-    else:
-        ok = (ma20 > ma50 > ma100) or (ma20 < ma50 < ma100)
-    add("MA 20•50•100", 10 if ok else 0, f"MA20 {ma20:.5g} • MA50 {ma50:.5g} • MA100 {ma100:.5g}", "ok" if ok else "bad", 10)
-
-    # 4) RSI: confirma momentum sem exigir extremo artificial.
-    if direcao == "CALL":
-        ok = 50 <= rsi <= 68
-    elif direcao == "PUT":
-        ok = 32 <= rsi <= 50
-    else:
-        ok = False
-    add("RSI 14", 10 if ok else 0, f"RSI {rsi:.1f}", "ok" if ok else "warn", 10)
-
-    # 5) MACD.
-    if direcao == "CALL":
-        ok = macd_hist > 0 and macd >= macd_signal
-    elif direcao == "PUT":
-        ok = macd_hist < 0 and macd <= macd_signal
-    else:
-        ok = False
-    add("MACD", 12 if ok else 0, f"Hist. {'positivo' if macd_hist > 0 else 'negativo'}", "ok" if ok else "warn", 12)
-
-    # 6) ADX + DI: mede força e direção, não apenas volatilidade.
-    if direcao == "CALL":
-        ok = adx >= 18 and plus_di > minus_di
-    elif direcao == "PUT":
-        ok = adx >= 18 and minus_di > plus_di
-    else:
-        ok = adx >= 18
-    add("ADX / +DI / -DI", 10 if ok else 0, f"ADX {adx:.1f} • +DI {plus_di:.1f} • -DI {minus_di:.1f}", "ok" if ok else "warn", 10)
-
-    # 7) Estocástico.
-    if direcao == "CALL":
-        ok = stoch_k >= stoch_d and stoch_k >= 35 and stoch_k <= 85
-    elif direcao == "PUT":
-        ok = stoch_k <= stoch_d and stoch_k >= 15 and stoch_k <= 65
-    else:
-        ok = False
-    add("Estocástico", 8 if ok else 0, f"K {stoch_k:.1f} • D {stoch_d:.1f}", "ok" if ok else "warn", 8)
-
-    # 8) Price action.
+    # Price action
     bullish = c[-1] > o[-1]
     bearish = c[-1] < o[-1]
-    rejeicao_call = pavio_inf / amplitude >= .35
-    rejeicao_put = pavio_sup / amplitude >= .35
-    if direcao == "CALL":
-        ok = bullish or rejeicao_call
-    elif direcao == "PUT":
-        ok = bearish or rejeicao_put
-    else:
-        ok = False
-    add("Price Action", 10 if ok else 0, f"Corpo {corpo/amplitude*100:.0f}% • {'rejeição' if (rejeicao_call or rejeicao_put) else 'candle'}", "ok" if ok else "warn", 10)
+    rejection = (pavio_inf/amplitude >= .35) if direcao=='CALL' else ((pavio_sup/amplitude >= .35) if direcao=='PUT' else False)
+    pa_ok = (bullish if direcao=='CALL' else bearish if direcao=='PUT' else False) or rejection
+    pa_pts=18 if pa_ok else 7
+    add('Price Action',pa_pts,f"Corpo {corpo/amplitude*100:.0f}% • {'rejeição detectada' if rejection else 'candle direcional'}",'ok' if pa_ok else 'warn')
 
-    # 9) Bollinger: usada como localização, não como sinal isolado.
-    if direcao == "CALL":
-        ok = preco <= bb_sup and preco >= bb_inf * 0.995
-    elif direcao == "PUT":
-        ok = preco >= bb_inf and preco <= bb_sup * 1.005
-    else:
-        ok = False
-    add("Bollinger", 8 if ok else 0, f"Preço {preco:.5g} • faixa [{bb_inf:.5g}, {bb_sup:.5g}]", "ok" if ok else "warn", 8)
+    # Suporte / resistência
+    dist_sup=abs(preco-suporte)/(preco or 1)*100
+    dist_res=abs(resistencia-preco)/(preco or 1)*100
+    sr_ok=(dist_sup <= max(0.15, atr_pct*1.4)) if direcao=='CALL' else ((dist_res <= max(0.15, atr_pct*1.4)) if direcao=='PUT' else False)
+    add('Suporte/Resist.',15 if sr_ok else 7,f"Sup {dist_sup:.2f}% • Res {dist_res:.2f}%",'ok' if sr_ok else 'warn')
 
-    # 10) Suporte/resistência.
-    dist_sup = abs(preco - suporte) / max(abs(preco), 1e-12) * 100
-    dist_res = abs(resistencia - preco) / max(abs(preco), 1e-12) * 100
-    if direcao == "CALL":
-        ok = dist_sup <= max(0.15, atr_pct * 1.6)
-        detalhe = f"Suporte {dist_sup:.3f}% • Resistência {dist_res:.3f}%"
-    elif direcao == "PUT":
-        ok = dist_res <= max(0.15, atr_pct * 1.6)
-        detalhe = f"Suporte {dist_sup:.3f}% • Resistência {dist_res:.3f}%"
-    else:
-        ok = False
-        detalhe = f"Suporte {dist_sup:.3f}% • Resistência {dist_res:.3f}%"
-    add("Suporte/Resist.", 7 if ok else 0, detalhe, "ok" if ok else "warn", 7)
+    # Volatilidade
+    vol_ok = 0.02 <= atr_pct <= 1.8
+    add('Volatilidade',11 if vol_ok else 5,f"ATR {atr_pct:.3f}% do preço",'ok' if vol_ok else 'warn')
 
-    # 11) Momentum curto.
-    roc = ((preco / c[-6]) - 1.0) * 100.0 if len(c) >= 7 and c[-6] else 0.0
-    if direcao == "CALL":
-        ok = roc > 0
-    elif direcao == "PUT":
-        ok = roc < 0
-    else:
-        ok = False
-    add("Momentum 6", 5 if ok else 0, f"ROC {roc:.3f}%", "ok" if ok else "warn", 5)
+    # Banda de Bollinger
+    bb_ok=(preco<=bb_inf*1.003) if direcao=='CALL' else ((preco>=bb_sup*.997) if direcao=='PUT' else False)
+    add('Bollinger',12 if bb_ok else 7,f"Preço {'próximo da banda inferior' if preco<=bb_inf else 'próximo da banda superior' if preco>=bb_sup else 'dentro das bandas'}",'ok' if bb_ok else 'warn')
 
-    peso_total = sum(x["peso"] for x in itens)
-    pontos_total = sum(x["pontos"] for x in itens)
-    confluencia = round((pontos_total / peso_total) * 100, 1) if peso_total else 0.0
-    confirmacoes = sum(1 for x in itens if x["status"] == "ok")
-
-    # Conflitos explícitos: tendência/médias/DI contra a direção escolhida.
-    conflitos = 0
-    if direcao == "CALL":
-        conflitos += int(tendencia == "BAIXA") + int(stack_baixa) + int(minus_di > plus_di and adx >= 18)
-    elif direcao == "PUT":
-        conflitos += int(tendencia == "ALTA") + int(stack_alta) + int(plus_di > minus_di and adx >= 18)
-
-    forca_direcional = min(10.0, max(0.0, (adx / 4.0) + (abs(plus_di - minus_di) / 8.0)))
-    if direcao == "CALL" and plus_di <= minus_di:
-        forca_direcional *= 0.55
-    if direcao == "PUT" and minus_di <= plus_di:
-        forca_direcional *= 0.55
-
+    # Probabilidade heuristicamente calibrada sobre a estratégia existente.
+    soma=sum(x['pontos'] for x in itens); maximo=len(itens)*20
+    confluencia=round((soma/maximo)*100,1) if maximo else 0.0
     return {
-        "rsi": float(rsi),
-        "ema9": float(ema9[-1]), "ema21": float(ema21[-1]),
-        "ema50": float(ema50[-1]), "ema100": float(ema100[-1]),
-        "ma20": float(ma20), "ma50": float(ma50), "ma100": float(ma100),
-        "macd": float(macd), "macd_signal": float(macd_signal), "macd_hist": float(macd_hist),
-        "adx": float(adx), "plus_di": float(plus_di), "minus_di": float(minus_di),
-        "stoch_k": float(stoch_k), "stoch_d": float(stoch_d),
-        "atr_pct": float(atr_pct), "tendencia": tendencia, "regime": regime,
-        "suporte": suporte, "resistencia": resistencia,
-        "confluencia": float(confluencia), "confirmacoes": int(confirmacoes),
-        "conflitos": int(conflitos), "forca_direcional": float(forca_direcional),
-        "confluencias": itens
+        'rsi':rsi,'ema9':float(ema9[-1]),'ema21':float(ema21[-1]),'macd':macd,'macd_signal':macd_signal,'macd_hist':macd_hist,
+        'atr_pct':atr_pct,'tendencia':tendencia,'suporte':suporte,'resistencia':resistencia,
+        'confluencia':confluencia,'confluencias':itens
     }
 
-
 def analisar_estrategia(data, estrategia, i=-1):
-    """Gera a leitura própria de cada estratégia; a confirmação final é feita pelo motor central."""
+    """Motor legado preservado para compatibilidade; retorna sinal e probabilidade em %."""
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
     if len(c) < 30:
         return None, 0
-    sinal = None
-    base_prob = 0
-
+    sinal=None; probabilidade=0
     if estrategia == "LOGICA_DO_PRECO":
-        tamanho = abs(c[i] - o[i]); amplitude = h[i] - l[i]
-        if amplitude > 0 and tamanho > 0:
-            cor = 'G' if c[i] > o[i] else 'R'
-            p_sup = h[i] - max(o[i], c[i]); p_inf = min(o[i], c[i]) - l[i]
-            if cor == 'G' and p_inf >= amplitude*.45 and p_sup <= amplitude*.20:
-                sinal = 'CALL'; base_prob = 82
-            elif cor == 'R' and p_sup >= amplitude*.45 and p_inf <= amplitude*.20:
-                sinal = 'PUT'; base_prob = 82
-            elif cor == 'G' and p_sup >= amplitude*.50 and tamanho <= amplitude*.35:
-                sinal = 'PUT'; base_prob = 80
-            elif cor == 'R' and p_inf >= amplitude*.50 and tamanho <= amplitude*.35:
-                sinal = 'CALL'; base_prob = 80
-
+        tamanho=abs(c[i]-o[i]); amplitude=h[i]-l[i]
+        if amplitude>0 and tamanho>0:
+            cor='G' if c[i]>o[i] else 'R'; p_sup=h[i]-max(o[i],c[i]); p_inf=min(o[i],c[i])-l[i]
+            if cor=='G' and p_inf>=amplitude*.45 and p_sup<=amplitude*.20: sinal='CALL'; probabilidade=int(82+(p_inf/amplitude)*15)
+            elif cor=='R' and p_sup>=amplitude*.45 and p_inf<=amplitude*.20: sinal='PUT'; probabilidade=int(82+(p_sup/amplitude)*15)
+            elif cor=='G' and p_sup>=amplitude*.50 and tamanho<=amplitude*.35: sinal='PUT'; probabilidade=int(80+(p_sup/amplitude)*15)
+            elif cor=='R' and p_inf>=amplitude*.50 and tamanho<=amplitude*.35: sinal='CALL'; probabilidade=int(80+(p_inf/amplitude)*15)
     elif estrategia == "RSI_MACD_MA":
-        rsi = _rsi_atual(c, 14)
-        macd_line, signal_line, hist = _macd_atual(c)
-        ema9 = calcular_ema(c, 9); ema21 = calcular_ema(c, 21); ema50 = calcular_ema(c, 50); ema100 = calcular_ema(c, 100)
-        if rsi >= 50 and rsi <= 68 and macd_line > signal_line and hist > 0 and ema9[-1] > ema21[-1] > ema50[-1] > ema100[-1]:
-            sinal = 'CALL'; base_prob = 84
-        elif rsi <= 50 and rsi >= 32 and macd_line < signal_line and hist < 0 and ema9[-1] < ema21[-1] < ema50[-1] < ema100[-1]:
-            sinal = 'PUT'; base_prob = 84
-
+        rsi=_rsi_atual(c,14); macd_line,signal_line,_=_macd_atual(c)
+        if rsi<=35 and macd_line>signal_line: sinal='CALL'; probabilidade=int(83+(35-rsi)*.5)
+        elif rsi>=65 and macd_line<signal_line: sinal='PUT'; probabilidade=int(83+(rsi-65)*.5)
     elif estrategia == "MHI1":
-        cores = []
-        for j in range(i-2, i+1):
-            cores.append('G' if c[j] > o[j] else 'R' if c[j] < o[j] else 'D')
-        ema21 = calcular_ema(c, 21); ema50 = calcular_ema(c, 50); ema100 = calcular_ema(c, 100)
+        cores=[]
+        for j in range(i-2,i+1): cores.append('G' if c[j]>o[j] else 'R' if c[j]<o[j] else 'D')
         if 'D' not in cores:
-            qtd_g = cores.count('G'); qtd_r = cores.count('R')
-            if qtd_r >= 2 and c[i] >= ema21[-1] and ema21[-1] > ema50[-1] > ema100[-1]:
-                sinal = 'CALL'; base_prob = 83
-            elif qtd_g >= 2 and c[i] <= ema21[-1] and ema21[-1] < ema50[-1] < ema100[-1]:
-                sinal = 'PUT'; base_prob = 83
-
-    elif estrategia in ['REVERSAO', 'RETRACAO']:
-        std = np.std(c[-20:]); ma = np.mean(c[-20:]); bs = ma + 2*std; bi = ma - 2*std
-        ema21 = calcular_ema(c, 21); ema50 = calcular_ema(c, 50); ema100 = calcular_ema(c, 100)
-        # Reversão contra tendência é bloqueada: só aceitamos pullback/rejeição
-        # na direção da tendência maior.
-        if c[i] <= bi and c[i] >= ema21[-1] and ema21[-1] > ema50[-1] > ema100[-1]:
-            sinal = 'CALL'; base_prob = 84
-        elif c[i] >= bs and c[i] <= ema21[-1] and ema21[-1] < ema50[-1] < ema100[-1]:
-            sinal = 'PUT'; base_prob = 84
-
-    return sinal, base_prob
-
+            qtd_g=cores.count('G');qtd_r=cores.count('R');ema20=np.mean(c[-20:])
+            if qtd_g==2 and qtd_r==1 and c[i]<=ema20: sinal='PUT';probabilidade=84
+            elif qtd_r==2 and qtd_g==1 and c[i]>=ema20: sinal='CALL';probabilidade=84
+            elif qtd_g==3: sinal='PUT';probabilidade=88
+            elif qtd_r==3: sinal='CALL';probabilidade=88
+    elif estrategia in ['REVERSAO','RETRACAO']:
+        std=np.std(c[-20:]);ma=np.mean(c[-20:]);bs=ma+2*std;bi=ma-2*std
+        if c[i]<=bi and c[i]<o[i]: sinal='CALL';dist=(bi-c[i])/(std if std>0 else 1);probabilidade=int(81+min(15,dist*10))
+        elif c[i]>=bs and c[i]>o[i]: sinal='PUT';dist=(c[i]-bs)/(std if std>0 else 1);probabilidade=int(81+min(15,dist*10))
+    probabilidade=min(98,max(75,probabilidade)) if sinal else 0
+    return sinal,probabilidade
 
 def analisar_estrategia_detalhada(data, estrategia):
-    """Executa uma estratégia isoladamente e depois exige confirmação do motor técnico."""
     sinal, base_prob = analisar_estrategia(data, estrategia)
-    if not sinal:
-        return None, 0, _indicadores_confluencia(data, None)
-
     indicadores = _indicadores_confluencia(data, sinal)
-    tendencia = indicadores.get("tendencia")
-    confluencia = float(indicadores.get("confluencia", 0))
-    confirmacoes = int(indicadores.get("confirmacoes", 0))
-    conflitos = int(indicadores.get("conflitos", 99))
-    forca = float(indicadores.get("forca_direcional", 0))
-
-    # Regras duras: nunca operar contra a tendência e nunca transformar um
-    # padrão isolado em sinal só porque a estratégia atribuiu 80%+.
-    if tendencia not in ("ALTA", "BAIXA"):
+    if not sinal:
         return None, 0, indicadores
-    if (sinal == "CALL" and tendencia != "ALTA") or (sinal == "PUT" and tendencia != "BAIXA"):
-        return None, 0, indicadores
-    if confluencia < 72 or confirmacoes < 6 or conflitos >= 2 or forca < 5.0:
-        return None, 0, indicadores
-
-    # A probabilidade exibida nasce da confluência técnica; a pontuação da
-    # estratégia é apenas um pequeno componente, não o fator dominante.
-    prob = int(round(68 + confluencia * 0.24 + min(5, max(0, base_prob - 80) * 0.35)))
-    prob = max(74, min(94, prob))
-    indicadores["estrategia_base_prob"] = int(base_prob)
-    indicadores["estrategia"] = estrategia
+    # Ajuste moderado baseado nas confluências, mantendo a faixa histórica do Vision Pro.
+    ajuste = round((indicadores['confluencia'] - 65) * 0.12)
+    prob = int(max(75, min(98, base_prob + ajuste)))
     return sinal, prob, indicadores
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
@@ -2282,18 +2031,6 @@ def backtest():
         print(f"⚠️ Backtest: {e}")
         return jsonify({"ok":False,"error":"Não foi possível concluir o backtest com os dados disponíveis agora."}), 500
 
-@app.errorhandler(500)
-def handle_server_error(error):
-    # Comandos do painel devem sempre receber JSON, mesmo se alguma dependência
-    # externa falhar. Isso evita o toast genérico de comunicação causado por uma
-    # página HTML de erro 500. O erro continua registrado no log do servidor.
-    path = request.path or ""
-    if path.startswith("/command/"):
-        print(f"❌ Erro interno em {path}: {error}")
-        return jsonify({"ok": False, "error": "O servidor encontrou um erro ao processar este comando. Tente novamente."}), 500
-    return "Erro interno do servidor.", 500
-
-
 @app.route('/command/<cmd>')
 def command(cmd):
     user = session.get('user')
@@ -2331,7 +2068,7 @@ def command(cmd):
         # Guarda o ativo da última operação e a vela em que ela foi encerrada.
         # Isso impede que o mesmo ativo seja escolhido repetidamente na mesma vela
         # quando houver outro candidato válido. Não cria sinais artificiais.
-        ultimo_confirmado = st.get("sinal_confirmado") or st.get("alerta_ativo") or {}
+        ultimo_confirmado = st.get("sinal_confirmado") or alerta_atual or {}
         st["ultimo_sinal_ativo"] = ultimo_confirmado.get("ativo")
         st["ultimo_sinal_candle_ts"] = math.floor(time.time() / (max(1, int(st.get("timeframe", 5))) * 60)) * (max(1, int(st.get("timeframe", 5))) * 60)
 
@@ -2357,7 +2094,6 @@ def command(cmd):
         st["sinais_sessao_total"] = 0
         st["warmup_concluido"] = False
         st["warmup_ativos_analisados"] = set()
-        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["warmup_inicio"] = time.time()
         st["startup_lock_until"] = time.time() + 300
@@ -2378,21 +2114,8 @@ def command(cmd):
             f"⚙️ <b>Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(st['estrategia'], st['estrategia'])}\n\n"
             f"<i>Varrendo gráficos em tempo real...</i>"
         )
-        # O comando START não pode ficar esperando a API do Telegram. Em hospedagens
-        # como Render isso pode fazer o fetch do painel atingir timeout mesmo com o
-        # motor já iniciado. O envio fica desacoplado da resposta HTTP.
-        def _start_telegram_background(_msg=msg_inicio_telegram, _user=user):
-            try:
-                msg_id = enviar_telegram(_msg, user_solicitante=_user)
-                if msg_id:
-                    print(f"✅ Telegram: START enviado em background (ID {msg_id}).")
-                else:
-                    print("ℹ️ Telegram: START sem envio (trava desativada ou configuração indisponível).")
-            except Exception as e:
-                print(f"⚠️ Erro no Telegram durante START: {e}")
-
-        threading.Thread(target=_start_telegram_background, daemon=True, name="telegram-start").start()
-        return jsonify({"ok": True, "telegram_enviado_em_background": True})
+        enviar_telegram(msg_inicio_telegram, user_solicitante=user)
+        return jsonify({"ok": True})
 
     elif cmd == "pause_bot":
         st["bot_pausado"] = not st["bot_pausado"]
@@ -2425,7 +2148,6 @@ def command(cmd):
         st["news_blocked_assets"] = []
         st["warmup_concluido"] = False
         st["warmup_ativos_analisados"] = set()
-        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["startup_lock_until"] = 0.0
         st["warmup_status"] = "AGUARDANDO 30 VELAS"
@@ -2442,7 +2164,6 @@ def command(cmd):
         st["timeframe"] = int(cmd.split('_')[1])
         st["warmup_concluido"] = False
         st["warmup_ativos_analisados"] = set()
-        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["warmup_inicio"] = time.time()
         st["startup_lock_until"] = time.time() + 300
@@ -2452,7 +2173,6 @@ def command(cmd):
         st["tipo_mercado"] = cmd.split('_', 1)[1] 
         st["warmup_concluido"] = False
         st["warmup_ativos_analisados"] = set()
-        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["warmup_inicio"] = time.time()
         st["startup_lock_until"] = time.time() + 300
@@ -2858,10 +2578,9 @@ def bot_loop():
                     ativos = list(dict.fromkeys(ativos))
                     if not st.get("warmup_concluido"):
                         warmup_set = st.setdefault("warmup_ativos_analisados", set())
-                        indisponiveis = st.setdefault("warmup_ativos_indisponiveis", set())
                         st["warmup_status"] = f"ANALISANDO 30 VELAS • {len(warmup_set)}/{len(ativos)} ATIVOS"
                         for ativo_w in ativos:
-                            if ativo_w in warmup_set or ativo_w in indisponiveis:
+                            if ativo_w in warmup_set:
                                 continue
                             ticker_w = MAPA_TICKERS.get(ativo_w, ativo_w)
                             cache_key_w = f"{ticker_w}_{tf}"
@@ -2872,6 +2591,9 @@ def bot_loop():
                                     ohlc_cache[cache_key_w] = {"data": data_w, "time": time.time()}
                             closes_w = data_w.get("close", []) if data_w else []
                             if len(closes_w) >= 30:
+                                # A trava não apenas confere a existência das 30 velas:
+                                # executa a leitura técnica sobre o bloco histórico antes
+                                # de liberar o motor para procurar entradas.
                                 try:
                                     diag_w = _indicadores_confluencia(data_w, None)
                                     st.setdefault("warmup_analysis", {})[ativo_w] = {
@@ -2881,37 +2603,19 @@ def bot_loop():
                                         "timestamp": time.time()
                                     }
                                     warmup_set.add(ativo_w)
-                                except Exception as exc_w:
-                                    # Falha de uma leitura não pode travar a sessão inteira.
-                                    # O ativo será tentado novamente no próximo ciclo.
-                                    print(f"⚠️ Warmup {ativo_w}: {exc_w}")
-                            else:
-                                # Fontes públicas podem não fornecer histórico para alguns
-                                # ativos/OTC. Eles não devem impedir os demais de operar.
-                                indisponiveis.add(ativo_w)
-
-                        processados_w = len(warmup_set) + len(indisponiveis)
-                        if processados_w >= len(ativos):
+                                except Exception:
+                                    pass
+                        if len(warmup_set) >= len(ativos):
                             st["warmup_concluido"] = True
-                            st["warmup_status"] = (
-                                f"30 VELAS VALIDADAS • {len(warmup_set)} DISPONÍVEIS • "
-                                f"{len(indisponiveis)} SEM HISTÓRICO PÚBLICO"
-                            )
-                        elif not warmup_set:
+                            st["warmup_status"] = "30 VELAS VALIDADAS • ANÁLISE LIBERADA"
+                        else:
                             st["ativo_atual"] = "AQUECENDO MOTOR — 30 VELAS"
                             st["ultimo_sinal"] = (
                                 f"<div class='system-console' style='color:#f59e0b;'>🛡️ <b>TRAVA DE SEGURANÇA ATIVA</b><br>"
                                 f"Analisando as últimas <b>30 velas</b> antes de liberar sinais.<br>"
-                                f"<span style='color:#00f2fe;'>{processados_w}/{len(ativos)} ativos processados.</span></div>"
+                                f"<span style='color:#00f2fe;'>{len(warmup_set)}/{len(ativos)} ativos validados.</span></div>"
                             )
                             continue
-                        else:
-                            # Já existe pelo menos um ativo com histórico válido. A varredura
-                            # principal continua enquanto os demais são tentados novamente.
-                            st["warmup_status"] = (
-                                f"ANALISANDO 30 VELAS • {len(warmup_set)}/{len(ativos)} VÁLIDOS • "
-                                f"{len(indisponiveis)} SEM DADOS"
-                            )
 
                     # Segurança adicional: mesmo com 30 velas disponíveis, o sistema
                     # aguarda obrigatoriamente 5 minutos após o START. Durante essa janela
@@ -2993,7 +2697,7 @@ def bot_loop():
                     # de alertas aleatórios observada quando o loop encontrava vários sinais.
                     candidatos_globais = []
                     diagnostico_melhor = None
-                    melhor_diag_chave = (-1, -1, -1, -1)
+                    melhor_diag_chave = (-1, -1, -1)
 
                     for ativo in ativos_scan:
                         if not st.get("bot_iniciado") or st.get("bot_pausado"):
@@ -3022,119 +2726,29 @@ def bot_loop():
                         for est_nome in estrategias_para_analisar:
                             sinal_test, prob_test, analise_test = analisar_estrategia_detalhada(data, est_nome)
                             if sinal_test:
-                                candidatos.append({
-                                    "sinal": sinal_test,
-                                    "prob": int(prob_test),
-                                    "estrategia": est_nome,
-                                    "analise": analise_test
-                                })
+                                candidatos.append({"sinal": sinal_test, "prob": int(prob_test), "estrategia": est_nome, "analise": analise_test})
 
-                        # =========================================================
-                        # COMPARAÇÃO REAL ENTRE ESTRATÉGIAS
-                        # =========================================================
-                        # TODAS não significa escolher a estratégia que pontuou mais.
-                        # Todas são executadas separadamente e agrupadas por direção.
-                        # Um sinal só existe quando pelo menos duas estratégias
-                        # independentes concordam na mesma direção.
-                        multi_estrategia = len(estrategias_para_analisar) > 1
-                        grupos = {"CALL": [], "PUT": []}
+                        # Bônus somente quando há concordância real entre estratégias.
                         for cand in candidatos:
-                            grupos.setdefault(cand["sinal"], []).append(cand)
+                            concordantes = sum(1 for x in candidatos if x["sinal"] == cand["sinal"] and x["estrategia"] != cand["estrategia"])
+                            cand["concordantes"] = concordantes
+                            cand["prob_final"] = min(98, int(cand["prob"]) + min(5, concordantes * 2))
 
-                        candidatos_consensuais = []
-                        for direcao, grupo in grupos.items():
-                            if not grupo:
-                                continue
-                            consenso = len(grupo)
-                            if multi_estrategia and consenso < 2:
-                                continue
-
-                            grupo = sorted(
-                                grupo,
-                                key=lambda x: (
-                                    float(x["analise"].get("confluencia", 0)),
-                                    int(x["analise"].get("confirmacoes", 0)),
-                                    int(x["prob"])
-                                ),
-                                reverse=True
-                            )
-                            principal = dict(grupo[0])
-                            ana = dict(principal["analise"])
-                            conf = float(ana.get("confluencia", 0))
-                            confirms = int(ana.get("confirmacoes", 0))
-                            conflicts = int(ana.get("conflitos", 99))
-                            tendencia = ana.get("tendencia")
-
-                            # Dupla trava: consenso entre estratégias + consenso
-                            # entre indicadores. A tendência também precisa bater.
-                            if tendencia != direcao:
-                                continue
-                            if conf < 72 or confirms < 6 or conflicts >= 2:
-                                continue
-
-                            bonus_consenso = min(9, max(0, consenso - 1) * 3)
-                            prob_final = min(96, int(principal["prob"]) + bonus_consenso)
-                            if prob_final < 82:
-                                continue
-
-                            nomes_concordantes = [
-                                NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"])
-                                for x in grupo
-                            ]
-                            principal["concordantes"] = consenso - 1
-                            principal["consenso"] = consenso
-                            principal["prob_final"] = prob_final
-                            principal["analise"] = ana
-                            principal["analise"]["consenso_estrategias"] = consenso
-                            principal["analise"]["estrategias_concordantes"] = nomes_concordantes
-                            principal["analise"]["motivos"] = ana.get("confluencias", [])
-                            candidatos_consensuais.append(principal)
-
-                        if candidatos_consensuais:
-                            melhor_local = max(
-                                candidatos_consensuais,
-                                key=lambda x: (
-                                    int(x["consenso"]),
-                                    float(x["analise"].get("confluencia", 0)),
-                                    int(x["analise"].get("confirmacoes", 0)),
-                                    int(x["prob_final"])
-                                )
-                            )
+                        if candidatos:
+                            melhor_local = max(candidatos, key=lambda x:(x["prob_final"], x["analise"].get("confluencia",0), x["concordantes"]))
                             ana = dict(melhor_local["analise"])
                             ana.update({
-                                "ativo": ativo,
-                                "direcao": melhor_local["sinal"],
-                                "probabilidade": melhor_local["prob_final"],
+                                "ativo": ativo, "direcao": melhor_local["sinal"], "probabilidade": melhor_local["prob_final"],
                                 "estrategia": melhor_local["estrategia"],
-                                "estrategia_fmt": (
-                                    f"{NOME_ESTRATEGIAS_DISPLAY.get(melhor_local['estrategia'], melhor_local['estrategia'])} • "
-                                    f"{melhor_local['consenso']} estratégias em acordo"
-                                ),
+                                "estrategia_fmt": NOME_ESTRATEGIAS_DISPLAY.get(melhor_local["estrategia"], melhor_local["estrategia"]),
                                 "grafico": [float(x) for x in data["close"][-30:]],
                                 "motivos": ana.get("confluencias", []),
-                                "estrategias_concordantes": ana.get("estrategias_concordantes", [])
+                                "estrategias_concordantes": [NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"]) for x in candidatos if x["sinal"] == melhor_local["sinal"]]
                             })
-                            candidatos_globais.append({
-                                "ativo": ativo,
-                                "sinal": melhor_local["sinal"],
-                                "probabilidade": int(melhor_local["prob_final"]),
-                                "confluencia": float(ana.get("confluencia", 0)),
-                                "concordantes": int(melhor_local.get("concordantes", 0)),
-                                "consenso": int(melhor_local.get("consenso", 1)),
-                                "estrategia": melhor_local["estrategia"],
-                                "estrategia_fmt": ana["estrategia_fmt"],
-                                "analise": ana,
-                                "data": data
-                            })
-                            chave_diag = (
-                                int(melhor_local["consenso"]),
-                                float(ana.get("confluencia", 0)),
-                                int(ana.get("confirmacoes", 0)),
-                                int(melhor_local["prob_final"])
-                            )
-                            if chave_diag > melhor_diag_chave:
-                                melhor_diag_chave = chave_diag
-                                diagnostico_melhor = ana
+                            candidatos_globais.append({"ativo":ativo,"sinal":melhor_local["sinal"],"probabilidade":int(melhor_local["prob_final"]),"confluencia":float(ana.get("confluencia",0)),"concordantes":int(melhor_local["concordantes"]),"estrategia":melhor_local["estrategia"],"estrategia_fmt":ana["estrategia_fmt"],"analise":ana,"data":data})
+                            chave_diag=(int(melhor_local["prob_final"]),float(ana.get("confluencia",0)),int(melhor_local["concordantes"]))
+                            if chave_diag>melhor_diag_chave:
+                                melhor_diag_chave=chave_diag; diagnostico_melhor=ana
                         else:
                             diag=_indicadores_confluencia(data,None)
                             diag.update({"ativo":ativo,"direcao":None,"probabilidade":0,"estrategia":None,"estrategia_fmt":"Sem sinal validado","grafico":[float(x) for x in data["close"][-30:]],"motivos":diag.get("confluencias",[])})
@@ -3152,7 +2766,7 @@ def bot_loop():
                         # Ordena todas as oportunidades pela mesma regra usada pelo Vision Pro.
                         candidatos_ordenados = sorted(
                             candidatos_globais,
-                            key=lambda x: (x.get("consenso", 1), x["confluencia"], x["concordantes"], x["probabilidade"]),
+                            key=lambda x: (x["probabilidade"], x["confluencia"], x["concordantes"]),
                             reverse=True
                         )
 
@@ -3184,7 +2798,7 @@ def bot_loop():
                     if startup_remaining > 0:
                         continue
 
-                    if melhor_candidato and melhor_candidato["probabilidade"] >= 82 and int(melhor_candidato.get("consenso", 1)) >= (2 if len(estrategias_para_analisar) > 1 else 1) and float(melhor_candidato.get("confluencia", 0)) >= 72 and not st.get("aguardando_confirmacao"):
+                    if melhor_candidato and melhor_candidato["probabilidade"] >= 80 and not st.get("aguardando_confirmacao"):
                         agora = agora_brasilia()
                         total_seg = tf * 60
                         seg_pass = (agora.minute % tf) * 60 + agora.second
