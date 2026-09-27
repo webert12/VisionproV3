@@ -92,7 +92,7 @@ def get_user_state(email):
             "warmup_inicio": 0.0,
             "startup_lock_until": 0.0,
             "startup_lock_seconds": 0,
-            "warmup_status": "AGUARDANDO 30 VELAS",
+            "warmup_status": "AGUARDANDO START",
             "selected_assets": [],
             # Controle de diversificação: evita repetir o mesmo ativo na mesma vela
             # quando existem outras oportunidades válidas. Não força um ativo sem sinal.
@@ -676,8 +676,6 @@ function renderSignal(d){
         }else if(alerta){
             const corAlerta=dir==='CALL'?'#34d399':dir==='PUT'?'#fb7185':'#fbbf24';
             panel.innerHTML=`<div style=\"text-align:center;line-height:1.6\"><b style=\"color:#fbbf24\">⚠️ PRÉ-ALERTA</b><br><b style=\"font-size:15px;color:${corAlerta}\">${ativo} • ${dir||'--'}</b><br><span style=\"color:#cbd5e1\">Probabilidade: ${prob||'--'}% • M${tf}</span><br><span style=\"color:#94a3b8\">Entrada prevista: ${entrada} • Expiração: ${expiracao}</span></div>`;
-        }else if(!d.warmup_concluido && d.rodando){
-            panel.innerHTML=`<div style=\"text-align:center;color:#f59e0b;line-height:1.6\">⚡ <b>PRÉ-ANÁLISE RÁPIDA</b><br>CARREGANDO AS ÚLTIMAS 30 VELAS EM PARALELO<br><span style=\"color:#00d9ff\">${d.warmup_ativos_analisados||0} ATIVOS VALIDADOS</span></div>`;
         }else{
             panel.innerHTML=d.html||'Aguardando Comando...';
         }
@@ -1523,7 +1521,7 @@ def resumo_trava_noticias(evento):
     touros = "🐂" * max(1, min(3, impacto))
     return f"🔒 {touros} {evento.get('currency', '')} — {evento.get('event', 'Evento')} às {horario} | trava ±30 min"
 
-# ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
+# ================= MOTOR DE ANÁLISE DE CONFLUÊNCIAS =================
 def _normalizar_candles_fechados(ohlc, tf):
     """Remove candles incompletos e valores inválidos antes da análise."""
     try:
@@ -2298,7 +2296,7 @@ def status():
         "candle_elapsed": time.time() - (math.floor(time.time() / (st["timeframe"] * 60)) * (st["timeframe"] * 60)),
         "candle_remaining": max(0.0, ((math.floor(time.time() / (st["timeframe"] * 60)) + 1) * (st["timeframe"] * 60)) - time.time()),
         "warmup_concluido": bool(st.get("warmup_concluido")),
-        "warmup_status": st.get("warmup_status", "AGUARDANDO 30 VELAS"),
+        "warmup_status": st.get("warmup_status", "ANÁLISE EM TEMPO REAL"),
         "warmup_ativos_analisados": len(st.get("warmup_ativos_analisados", set())),
         "entry_end_ts": (((st.get("alerta_ativo") or {}).get("prox_minuto_entrada").timestamp()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("prox_minuto_entrada")) else None),
         "entry_remaining": max(0.0, (st.get("alerta_ativo") or {}).get("prox_minuto_entrada").timestamp() - time.time()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("prox_minuto_entrada")) else 0,
@@ -2328,13 +2326,13 @@ def set_assets():
         if ativo in validos and ativo not in selecionados:
             selecionados.append(ativo)
     st["selected_assets"] = selecionados
-    st["warmup_concluido"] = False
+    st["warmup_concluido"] = True
     st["warmup_ativos_analisados"] = set()
     st["warmup_analysis"] = {}
-    st["warmup_inicio"] = time.time()
+    st["warmup_inicio"] = 0.0
     if st.get("bot_iniciado"):
         st["startup_lock_until"] = 0.0
-        st["warmup_status"] = "NOVA SELEÇÃO • ANALISANDO 30 VELAS RAPIDAMENTE"
+        st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
     return jsonify({"ok": True, "assets": selecionados})
 
 @app.route('/backtest', methods=['POST'])
@@ -2483,15 +2481,15 @@ def command(cmd):
         st["news_guard_updated"] = 0.0
         st["analise_atual"] = None
         st["sinais_sessao_total"] = 0
-        st["warmup_concluido"] = False
+        st["warmup_concluido"] = True
         st["warmup_ativos_analisados"] = set()
         st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
-        st["warmup_inicio"] = time.time()
+        st["warmup_inicio"] = 0.0
         st["startup_lock_until"] = 0.0
         st["startup_lock_seconds"] = 0
-        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS EM PARALELO"
-        st["inicio_varredura"] = time.time() + 0.5 
+        st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
+        st["inicio_varredura"] = time.time()
         st["sinais_enviados"].clear() 
         
         st["ativo_atual"] = "INICIANDO VARREDURA..."
@@ -2499,7 +2497,7 @@ def command(cmd):
         
         msg_inicio_telegram = (
             f"🚀 <b>SISTEMA VISION PRO V4 INICIADO</b>\n\n"
-            f"🟢 <b>Status:</b> Análise de 30 velas ativada\n"
+            f"🟢 <b>Status:</b> Análise em tempo real ativada\n"
             f"👤 <b>Usuário:</b> Vision Pro\n"
             f"📊 <b>Timeframe:</b> M{st['timeframe']}\n"
             f"🌐 <b>Mercado:</b> {st['tipo_mercado']}\n"
@@ -2525,7 +2523,7 @@ def command(cmd):
     elif cmd == "pause_bot":
         st["bot_pausado"] = not st["bot_pausado"]
         status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if st["bot_pausado"] else f"🔍 ANALISANDO: {st['ativo_atual']} (M{st['timeframe']})"
-        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO 30 VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[VARREDURA CONTINUA]</span></div><div class='tech-scanner'></div>"
+        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO ATIVOS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[CONFLUÊNCIAS EM TEMPO REAL]</span></div><div class='tech-scanner'></div>"
         msg_pause = "⏸ <b>SISTEMA PAUSADO</b>" if st["bot_pausado"] else "▶️ <b>SISTEMA RETOMADO!</b>"
         enviar_telegram(msg_pause, user_solicitante=user)
         return jsonify({"ok": True})
@@ -2556,7 +2554,7 @@ def command(cmd):
         st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["startup_lock_until"] = 0.0
-        st["warmup_status"] = "AGUARDANDO 30 VELAS"
+        st["warmup_status"] = "AGUARDANDO START"
         st["ultimo_sinal"] = "Aguardando Comando..."
         
         # Mantém o comportamento anterior de zerar o placar geral no encerramento.
@@ -2568,24 +2566,24 @@ def command(cmd):
 
     elif cmd.startswith("tf_"): 
         st["timeframe"] = int(cmd.split('_')[1])
-        st["warmup_concluido"] = False
+        st["warmup_concluido"] = True
         st["warmup_ativos_analisados"] = set()
         st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
-        st["warmup_inicio"] = time.time()
+        st["warmup_inicio"] = 0.0
         st["startup_lock_until"] = 0.0
         st["startup_lock_seconds"] = 0
-        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS EM PARALELO"
+        st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
     elif cmd.startswith("mkt_"): 
         st["tipo_mercado"] = cmd.split('_', 1)[1] 
-        st["warmup_concluido"] = False
+        st["warmup_concluido"] = True
         st["warmup_ativos_analisados"] = set()
         st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
-        st["warmup_inicio"] = time.time()
+        st["warmup_inicio"] = 0.0
         st["startup_lock_until"] = 0.0
         st["startup_lock_seconds"] = 0
-        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS EM PARALELO"
+        st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
     elif cmd.startswith("set_est_"): 
         st["estrategia"] = cmd.replace("set_est_", "")
     
@@ -3156,71 +3154,19 @@ def bot_loop():
                     selecionados_usuario = [a for a in st.get("selected_assets", []) if a in ativos_mercado]
                     ativos = selecionados_usuario if selecionados_usuario else ativos_mercado
 
-                    # PRÉ-CARGA RÁPIDA: valida as últimas 30 velas de todos os ativos
-                    # simultaneamente. Não existe mais uma espera fixa de 5 minutos.
-                    # Os dados válidos ficam no cache e são reutilizados imediatamente
-                    # pela varredura de confluência abaixo.
+                    # COLETA E ANÁLISE EM TEMPO REAL
+                    # Ao clicar em START, o motor agenda os dados de cada ativo em
+                    # background e analisa imediatamente tudo que já estiver disponível.
+                    # Não existe etapa separada de "pré-análise" nem contagem de 30 velas.
+                    # O histórico técnico necessário é usado apenas internamente pelos
+                    # indicadores; ele nunca bloqueia o início da sessão.
                     ativos = list(dict.fromkeys(ativos))
-                    # PRÉ-CARGA NÃO BLOQUEANTE
-                    # Agenda os candles em segundo plano e analisa imediatamente tudo
-                    # que já estiver no cache. O bot não espera nenhum request.
-                    warmup_set = st.setdefault("warmup_ativos_analisados", set())
-                    warmup_analysis = st.setdefault("warmup_analysis", {})
-                    indisponiveis = st.setdefault("warmup_ativos_indisponiveis", set())
-
-                    grupos_ticker = {}
-                    for ativo_w in ativos:
-                        ticker_w = MAPA_TICKERS.get(ativo_w, ativo_w)
-                        grupos_ticker.setdefault(ticker_w, []).append(ativo_w)
-
-                    disponiveis_agora = 0
-                    for ticker_w, aliases_w in grupos_ticker.items():
-                        # Se já há dados prontos, usa imediatamente; caso contrário
-                        # apenas agenda a coleta e segue sem esperar.
-                        data_w = obter_cache_ohlc_background(ticker_w, tf)
-                        if data_w is None:
-                            solicitar_dados_background(ticker_w, tf)
-                            continue
-
-                        disponiveis_agora += len(aliases_w)
-                        cache_key_w = f"{ticker_w}_{tf}"
-                        ohlc_cache[cache_key_w] = {"data": data_w, "time": time.time()}
-                        try:
-                            diag_w = _indicadores_confluencia(data_w, None)
-                            for ativo_w in aliases_w:
-                                warmup_analysis[ativo_w] = {
-                                    "confluencia": float(diag_w.get("confluencia", 0)),
-                                    "tendencia": diag_w.get("tendencia"),
-                                    "rsi": float(diag_w.get("rsi", 50)),
-                                    "timestamp": time.time()
-                                }
-                                warmup_set.add(ativo_w)
-                                indisponiveis.discard(ativo_w)
-                        except Exception as exc_diag:
-                            print(f"⚠️ Warmup diagnóstico {ticker_w}: {exc_diag}")
-
-                    processados_w = len(warmup_set)
-                    pendentes_w = max(0, len(ativos) - processados_w)
-                    st["warmup_concluido"] = bool(processados_w > 0)
-                    st["warmup_status"] = (
-                        f"DADOS EM BACKGROUND • {processados_w}/{len(ativos)} ATIVOS PRONTOS"
-                        + (f" • {pendentes_w} CARREGANDO" if pendentes_w else "")
-                    )
-                    if processados_w == 0:
-                        st["ativo_atual"] = "CARREGANDO DADOS EM BACKGROUND"
-                        st["ultimo_sinal"] = (
-                            "<div class='system-console' style='color:#f59e0b;'>"
-                            "⚡ <b>COLETA NÃO BLOQUEANTE</b><br>"
-                            "Os dados estão sendo carregados em segundo plano. "
-                            "A análise começa automaticamente assim que os primeiros ativos estiverem prontos."
-                            "</div>"
-                        )
-                    # Não existe trava temporal. O loop segue para a análise dos
-                    # ativos que já possuem 30 candles; os demais continuam carregando.
-
-                    # Sem trava temporal: assim que a pré-análise paralela termina (ou
-                    # existe pelo menos um ativo válido), a varredura de confluência pode
-                    # selecionar e programar um sinal imediatamente.
+                    for ativo_rt in ativos:
+                        ticker_rt = MAPA_TICKERS.get(ativo_rt, ativo_rt)
+                        if obter_cache_ohlc_background(ticker_rt, tf) is None:
+                            solicitar_dados_background(ticker_rt, tf)
+                    st["warmup_concluido"] = True
+                    st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
                     st["startup_lock_until"] = 0.0
 
                     # 🛡️ CONSULTA DO CALENDÁRIO ANTES DA VARREDURA
@@ -3287,11 +3233,9 @@ def bot_loop():
 
                     # 2. VARREDURA PROFISSIONAL: SOMENTE ATIVOS COM DADOS PRONTOS
                     #
-                    # A coleta de candles acontece exclusivamente em background.
-                    # A varredura nunca dispara HTTP e nunca cria uma fila de futures
-                    # por ativo. Isso elimina o principal ponto de travamento observado
-                    # no painel: "VARREDURA CONCLUÍDA 0/63" enquanto os dados ainda
-                    # estavam sendo carregados.
+                    # A coleta acontece exclusivamente em background. A varredura
+                    # trabalha somente com dados já disponíveis e executa o motor de
+                    # estratégias + confluências sem esperar rede.
                     candidatos_globais = []
                     diagnostico_melhor = None
                     melhor_diag_chave = (-1, -1, -1, -1)
@@ -3315,17 +3259,15 @@ def bot_loop():
                     # Apenas mantemos a coleta em background e voltamos ao loop.
                     if not prontos_scan:
                         st["ativo_atual"] = (
-                            f"COLETANDO DADOS • 0/{total_ativos_scan} ATIVOS PRONTOS"
+                            f"ANALISANDO ATIVOS • {len(prontos_scan)}/{total_ativos_scan} COM DADOS PRONTOS"
                         )
-                        st["warmup_status"] = (
-                            f"COLETA EM BACKGROUND • 0/{total_ativos_scan} PRONTOS"
-                        )
+                        st["warmup_status"] = "ANÁLISE EM TEMPO REAL • AGUARDANDO DADOS DOS ATIVOS"
                         st["ultimo_sinal"] = (
                             "<div class='system-console' style='color:#f59e0b;'>"
-                            "⚡ <b>COLETANDO DADOS REAIS</b><br>"
-                            f"Nenhum dos {total_ativos_scan} ativos possui 30 velas fechadas prontas nesta rodada.<br>"
-                            "A coleta continua em segundo plano; a varredura será iniciada automaticamente "
-                            "assim que os primeiros dados chegarem."
+                            "⚡ <b>ANÁLISE EM TEMPO REAL</b><br>"
+                            f"Aguardando dados dos {total_ativos_scan} ativos selecionados.<br>"
+                            "A coleta ocorre em segundo plano e a análise de confluências começa automaticamente "
+                            "assim que cada ativo fica disponível."
                             "</div>"
                         )
                         continue
