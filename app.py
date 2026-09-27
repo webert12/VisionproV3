@@ -86,6 +86,7 @@ def get_user_state(email):
             "sinais_sessao_total": 0,
             "warmup_concluido": False,
             "warmup_ativos_analisados": set(),
+            "warmup_ativos_indisponiveis": set(),
             "warmup_analysis": {},
             "warmup_inicio": 0.0,
             "startup_lock_until": 0.0,
@@ -611,7 +612,17 @@ function abrirView(name,btn){
 }
 function toggleBox(id){const e=document.getElementById(id); if(e)e.classList.toggle('open')}
 function toast(msg){const e=document.getElementById('toast');if(!e)return;e.innerText=msg;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2200)}
-function sendCommand(cmd){fetch('/command/'+cmd,{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d.redirect)location.href=d.redirect;else if(d.error)toast(d.error);else toast('Comando atualizado');}).catch(()=>toast('Falha de comunicação com o servidor'))}
+async function sendCommand(cmd){
+    try{
+        const r=await fetch('/command/'+encodeURIComponent(cmd),{cache:'no-store',headers:{'Accept':'application/json'}});
+        const ct=r.headers.get('content-type')||'';
+        const d=ct.includes('application/json')?await r.json():{error:'Servidor retornou uma resposta inválida ('+r.status+').'};
+        if(!r.ok){toast(d.error||('Falha no comando ('+r.status+')'));return;}
+        if(d.redirect)location.href=d.redirect;
+        else if(d.error)toast(d.error);
+        else toast('Comando atualizado');
+    }catch(e){toast('Falha de comunicação com o servidor. Tente novamente.');}
+}
 
 let assetsCatalog=[];
 function assetsForMarket(mkt){
@@ -2271,6 +2282,18 @@ def backtest():
         print(f"⚠️ Backtest: {e}")
         return jsonify({"ok":False,"error":"Não foi possível concluir o backtest com os dados disponíveis agora."}), 500
 
+@app.errorhandler(500)
+def handle_server_error(error):
+    # Comandos do painel devem sempre receber JSON, mesmo se alguma dependência
+    # externa falhar. Isso evita o toast genérico de comunicação causado por uma
+    # página HTML de erro 500. O erro continua registrado no log do servidor.
+    path = request.path or ""
+    if path.startswith("/command/"):
+        print(f"❌ Erro interno em {path}: {error}")
+        return jsonify({"ok": False, "error": "O servidor encontrou um erro ao processar este comando. Tente novamente."}), 500
+    return "Erro interno do servidor.", 500
+
+
 @app.route('/command/<cmd>')
 def command(cmd):
     user = session.get('user')
@@ -2308,7 +2331,7 @@ def command(cmd):
         # Guarda o ativo da última operação e a vela em que ela foi encerrada.
         # Isso impede que o mesmo ativo seja escolhido repetidamente na mesma vela
         # quando houver outro candidato válido. Não cria sinais artificiais.
-        ultimo_confirmado = st.get("sinal_confirmado") or alerta_atual or {}
+        ultimo_confirmado = st.get("sinal_confirmado") or st.get("alerta_ativo") or {}
         st["ultimo_sinal_ativo"] = ultimo_confirmado.get("ativo")
         st["ultimo_sinal_candle_ts"] = math.floor(time.time() / (max(1, int(st.get("timeframe", 5))) * 60)) * (max(1, int(st.get("timeframe", 5))) * 60)
 
@@ -2334,6 +2357,7 @@ def command(cmd):
         st["sinais_sessao_total"] = 0
         st["warmup_concluido"] = False
         st["warmup_ativos_analisados"] = set()
+        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["warmup_inicio"] = time.time()
         st["startup_lock_until"] = time.time() + 300
@@ -2354,8 +2378,21 @@ def command(cmd):
             f"⚙️ <b>Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(st['estrategia'], st['estrategia'])}\n\n"
             f"<i>Varrendo gráficos em tempo real...</i>"
         )
-        enviar_telegram(msg_inicio_telegram, user_solicitante=user)
-        return jsonify({"ok": True})
+        # O comando START não pode ficar esperando a API do Telegram. Em hospedagens
+        # como Render isso pode fazer o fetch do painel atingir timeout mesmo com o
+        # motor já iniciado. O envio fica desacoplado da resposta HTTP.
+        def _start_telegram_background(_msg=msg_inicio_telegram, _user=user):
+            try:
+                msg_id = enviar_telegram(_msg, user_solicitante=_user)
+                if msg_id:
+                    print(f"✅ Telegram: START enviado em background (ID {msg_id}).")
+                else:
+                    print("ℹ️ Telegram: START sem envio (trava desativada ou configuração indisponível).")
+            except Exception as e:
+                print(f"⚠️ Erro no Telegram durante START: {e}")
+
+        threading.Thread(target=_start_telegram_background, daemon=True, name="telegram-start").start()
+        return jsonify({"ok": True, "telegram_enviado_em_background": True})
 
     elif cmd == "pause_bot":
         st["bot_pausado"] = not st["bot_pausado"]
@@ -2388,6 +2425,7 @@ def command(cmd):
         st["news_blocked_assets"] = []
         st["warmup_concluido"] = False
         st["warmup_ativos_analisados"] = set()
+        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["startup_lock_until"] = 0.0
         st["warmup_status"] = "AGUARDANDO 30 VELAS"
@@ -2404,6 +2442,7 @@ def command(cmd):
         st["timeframe"] = int(cmd.split('_')[1])
         st["warmup_concluido"] = False
         st["warmup_ativos_analisados"] = set()
+        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["warmup_inicio"] = time.time()
         st["startup_lock_until"] = time.time() + 300
@@ -2413,6 +2452,7 @@ def command(cmd):
         st["tipo_mercado"] = cmd.split('_', 1)[1] 
         st["warmup_concluido"] = False
         st["warmup_ativos_analisados"] = set()
+        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["warmup_inicio"] = time.time()
         st["startup_lock_until"] = time.time() + 300
@@ -2818,9 +2858,10 @@ def bot_loop():
                     ativos = list(dict.fromkeys(ativos))
                     if not st.get("warmup_concluido"):
                         warmup_set = st.setdefault("warmup_ativos_analisados", set())
+                        indisponiveis = st.setdefault("warmup_ativos_indisponiveis", set())
                         st["warmup_status"] = f"ANALISANDO 30 VELAS • {len(warmup_set)}/{len(ativos)} ATIVOS"
                         for ativo_w in ativos:
-                            if ativo_w in warmup_set:
+                            if ativo_w in warmup_set or ativo_w in indisponiveis:
                                 continue
                             ticker_w = MAPA_TICKERS.get(ativo_w, ativo_w)
                             cache_key_w = f"{ticker_w}_{tf}"
@@ -2831,9 +2872,6 @@ def bot_loop():
                                     ohlc_cache[cache_key_w] = {"data": data_w, "time": time.time()}
                             closes_w = data_w.get("close", []) if data_w else []
                             if len(closes_w) >= 30:
-                                # A trava não apenas confere a existência das 30 velas:
-                                # executa a leitura técnica sobre o bloco histórico antes
-                                # de liberar o motor para procurar entradas.
                                 try:
                                     diag_w = _indicadores_confluencia(data_w, None)
                                     st.setdefault("warmup_analysis", {})[ativo_w] = {
@@ -2843,19 +2881,37 @@ def bot_loop():
                                         "timestamp": time.time()
                                     }
                                     warmup_set.add(ativo_w)
-                                except Exception:
-                                    pass
-                        if len(warmup_set) >= len(ativos):
+                                except Exception as exc_w:
+                                    # Falha de uma leitura não pode travar a sessão inteira.
+                                    # O ativo será tentado novamente no próximo ciclo.
+                                    print(f"⚠️ Warmup {ativo_w}: {exc_w}")
+                            else:
+                                # Fontes públicas podem não fornecer histórico para alguns
+                                # ativos/OTC. Eles não devem impedir os demais de operar.
+                                indisponiveis.add(ativo_w)
+
+                        processados_w = len(warmup_set) + len(indisponiveis)
+                        if processados_w >= len(ativos):
                             st["warmup_concluido"] = True
-                            st["warmup_status"] = "30 VELAS VALIDADAS • ANÁLISE LIBERADA"
-                        else:
+                            st["warmup_status"] = (
+                                f"30 VELAS VALIDADAS • {len(warmup_set)} DISPONÍVEIS • "
+                                f"{len(indisponiveis)} SEM HISTÓRICO PÚBLICO"
+                            )
+                        elif not warmup_set:
                             st["ativo_atual"] = "AQUECENDO MOTOR — 30 VELAS"
                             st["ultimo_sinal"] = (
                                 f"<div class='system-console' style='color:#f59e0b;'>🛡️ <b>TRAVA DE SEGURANÇA ATIVA</b><br>"
                                 f"Analisando as últimas <b>30 velas</b> antes de liberar sinais.<br>"
-                                f"<span style='color:#00f2fe;'>{len(warmup_set)}/{len(ativos)} ativos validados.</span></div>"
+                                f"<span style='color:#00f2fe;'>{processados_w}/{len(ativos)} ativos processados.</span></div>"
                             )
                             continue
+                        else:
+                            # Já existe pelo menos um ativo com histórico válido. A varredura
+                            # principal continua enquanto os demais são tentados novamente.
+                            st["warmup_status"] = (
+                                f"ANALISANDO 30 VELAS • {len(warmup_set)}/{len(ativos)} VÁLIDOS • "
+                                f"{len(indisponiveis)} SEM DADOS"
+                            )
 
                     # Segurança adicional: mesmo com 30 velas disponíveis, o sistema
                     # aguarda obrigatoriamente 5 minutos após o START. Durante essa janela
