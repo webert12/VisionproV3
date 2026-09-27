@@ -10,6 +10,7 @@ import os
 import logging
 import numpy as np
 import re
+import html as html_lib
 from datetime import datetime, timedelta
 from flask import Flask, render_template_string, request, jsonify, session, redirect, abort, Response
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -63,6 +64,7 @@ def get_user_state(email):
             "bot_pausado": True,
             "aguardando_confirmacao": False,
             "sinal_permanente": None,
+            "sinal_confirmado": None,  # Estado fixo do último sinal confirmado até registrar o resultado
             "ultimo_sinal": "Aguardando Comando...",
             "ativo_atual": "AGUARDANDO...",
             "inicio_varredura": 0,
@@ -75,7 +77,25 @@ def get_user_state(email):
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
             "candle_remaining": 0,
-            "sessao_resultados": []
+            "news_guard_status": "AGUARDANDO CALENDÁRIO",
+            "news_guard_event": None,
+            "news_blocked_assets": [],
+            "news_guard_updated": 0.0,
+            "analise_atual": None,
+            "sessao_resultados": [],
+            "sinais_sessao_total": 0,
+            "warmup_concluido": False,
+            "warmup_ativos_analisados": set(),
+            "warmup_analysis": {},
+            "warmup_inicio": 0.0,
+            "startup_lock_until": 0.0,
+            "startup_lock_seconds": 300,
+            "warmup_status": "AGUARDANDO 30 VELAS",
+            "selected_assets": [],
+            # Controle de diversificação: evita repetir o mesmo ativo na mesma vela
+            # quando existem outras oportunidades válidas. Não força um ativo sem sinal.
+            "ultimo_sinal_ativo": None,
+            "ultimo_sinal_candle_ts": 0.0
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -341,422 +361,378 @@ HTML_INDEX = """
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VISION PRO V3 - HIGH FREQUENCY BOT ANALYTICS</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#070b12">
+    <title>VISION PRO V4 — Terminal de Análise</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
-        body { background-color: #060913; color: #f1f5f9; display: flex; justify-content: center; min-height: 100vh; padding: 15px 10px; }
-        
-        .container {
-            width: 100%;
-            max-width: 520px;
-            background: rgba(15, 23, 42, 0.8);
-            border: 1px solid rgba(0, 242, 254, 0.2);
-            border-radius: 24px;
-            padding: 20px;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 242, 254, 0.05);
-            backdrop-filter: blur(12px);
+        :root {
+            --bg:#070b12; --panel:#0b111b; --panel2:#0f1724; --line:#1d2938;
+            --text:#e8eef6; --muted:#8290a3; --cyan:#00d9ff; --green:#22c55e;
+            --red:#ef4444; --amber:#f59e0b; --blue:#60a5fa; --purple:#a78bfa;
+            --shadow:0 18px 55px rgba(0,0,0,.35);
         }
-
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
-        .brand { font-size: 17px; font-weight: 900; letter-spacing: 1px; color: #00f2fe; display: flex; align-items: center; gap: 8px; text-shadow: 0 0 10px rgba(0,242,254,0.4); }
-        .brand span { background: rgba(0, 242, 254, 0.15); color: #38ef7d; font-size: 10px; padding: 3px 8px; border-radius: 12px; border: 1px solid rgba(56, 239, 125, 0.4); font-weight: 700; }
-        .btn-logout { font-size: 12px; color: #ef4444; text-decoration: none; font-weight: 700; padding: 6px 14px; border-radius: 10px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); transition: 0.2s; }
-        .btn-logout:hover { background: rgba(239, 68, 68, 0.2); }
-
-        .placar-card { background: #0b1120; border: 1px solid #1e293b; border-radius: 16px; padding: 16px; margin-bottom: 16px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); }
-        .placar-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; text-align: center; }
-        .placar-item .title { font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 700; margin-bottom: 4px; letter-spacing: 0.5px; }
-        .placar-item .val { font-size: 20px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
-        .win-color { color: #10b981; text-shadow: 0 0 10px rgba(16,185,129,0.3); }
-        .loss-color { color: #ef4444; text-shadow: 0 0 10px rgba(239,68,68,0.3); }
-        .wr-color { color: #3b82f6; text-shadow: 0 0 10px rgba(59,130,246,0.3); }
-        .winrate-bar { height: 6px; background: #1e293b; border-radius: 10px; overflow: hidden; margin-top: 14px; }
-        .winrate-fill { height: 100%; background: linear-gradient(90deg, #059669, #10b981); width: 0%; transition: width 0.5s ease-in-out; }
-
-        #broker-view-container { display: none; width: 100%; height: 350px; border-radius: 16px; overflow: hidden; flex-direction: column; margin-bottom: 16px; background: #0b1120; border: 1px solid #1e293b; padding: 8px; }
-        .broker-iframe-inline { width: 100%; height: 100%; border: none; background: #0b1120; border-radius: 10px; }
-        .btn-close-broker { background: #1e293b; border: 1px solid #334155; color: #00f2fe; padding: 6px 12px; font-size: 11px; font-weight: 700; border-radius: 6px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: center; }
-
-        .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 100px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
-        
-        .system-console { font-family: 'JetBrains Mono', monospace; color: #38ef7d; font-size: 13px; text-shadow: 0 0 5px rgba(56, 239, 125, 0.5); width: 100%; }
-
-        .result-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
-        .btn-res { border: none; padding: 12px; border-radius: 10px; font-weight: 800; font-size: 12px; cursor: pointer; color: white; transition: transform 0.1s, box-shadow 0.2s; text-transform: uppercase; }
-        .btn-res:active { transform: scale(0.95); }
-        .btn-res-win { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
-        .btn-res-g1 { background: linear-gradient(135deg, #f59e0b, #d97706); color: #000; box-shadow: 0 4px 12px rgba(245,158,11,0.3); }
-        .btn-res-red { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 12px rgba(239,68,68,0.3); }
-        .btn-res-skip { background: #334155; box-shadow: 0 4px 12px rgba(51,65,85,0.3); }
-
-        .control-panel { background: #0b1120; border: 1px solid #1e293b; border-radius: 16px; padding: 15px; margin-bottom: 16px; }
-        .section-label { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 10px; letter-spacing: 1px; display: block; border-bottom: 1px solid #1e293b; padding-bottom: 5px;}
-        
-        .action-flex { display: flex; gap: 8px; margin-bottom: 15px; }
-        .btn-action { flex: 1; padding: 12px 5px; border: none; border-radius: 10px; font-weight: 800; font-size: 12px; color: white; cursor: pointer; transition: 0.2s; text-transform: uppercase; }
-        .btn-action:active { transform: scale(0.95); }
-        .btn-start { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 12px rgba(16,185,129,0.2); }
-        .btn-pause { background: linear-gradient(135deg, #f59e0b, #d97706); box-shadow: 0 4px 12px rgba(245,158,11,0.2); }
-        .btn-stop { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 12px rgba(239,68,68,0.2); }
-
-        .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
-        .settings-grid.full { grid-template-columns: 1fr; margin-bottom: 15px; }
-        .setting-group label { font-size: 10px; font-weight: 700; color: #94a3b8; margin-bottom: 4px; display: block; }
-        
-        .select-wrapper { position: relative; width: 100%; }
-        .select-wrapper::after { content: "▼"; position: absolute; right: 12px; top: 12px; color: #00f2fe; font-size: 10px; pointer-events: none; }
-        .modern-select { background: #0f172a; color: #f1f5f9; border: 1px solid #1e293b; padding: 10px 12px; border-radius: 8px; font-weight: 600; font-size: 12px; width: 100%; outline: none; appearance: none; cursor: pointer; transition: 0.2s; }
-        .modern-select:hover, .modern-select:focus { border-color: #00f2fe; box-shadow: 0 0 8px rgba(0,242,254,0.2); }
-.btn-toggle-hist { width: 100%; padding: 10px; background: rgba(0, 242, 254, 0.08); border: 1px dashed #00f2fe; color: #00f2fe; border-radius: 8px; font-weight: bold; font-size: 11px; cursor: pointer; margin-top: 10px; transition: 0.3s; }
-        .btn-toggle-hist:hover { background: rgba(0, 242, 254, 0.2); }
-
-        .btn-test-tg { width: 100%; padding: 10px; background: rgba(59, 130, 246, 0.15); border: 1px solid #3b82f6; color: #3b82f6; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 8px; transition: 0.3s; text-transform: uppercase; }
-        .btn-test-tg:hover { background: rgba(59, 130, 246, 0.3); }
-
-        .historico-box { display: none; background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; margin-top: 15px; }
-        .historico-scroll { max-height: 140px; overflow-y: auto; }
-        .historico-item { font-size: 11px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; font-family: 'JetBrains Mono', monospace; }
-        .historico-item:last-child { border-bottom: none; }
-
-        .tech-scanner { width: 28px; height: 28px; margin: 10px auto 0; border: 3px solid rgba(0, 242, 254, 0.2); border-top-color: #00f2fe; border-radius: 50%; animation: spin 0.8s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        .btn-notify { width: 100%; padding: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; }
-        .btn-notify:hover { background: rgba(16, 185, 129, 0.3); }
+        *{box-sizing:border-box;margin:0;padding:0;font-family:Inter,sans-serif}
+        html,body{min-height:100%;background:var(--bg);color:var(--text)}
+        body{overflow-x:hidden}
+        button,select{font:inherit}
+        button{cursor:pointer}
+        .app-shell{min-height:100vh;display:flex}
+        .sidebar{position:fixed;inset:0 auto 0 0;width:238px;background:rgba(8,13,21,.96);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;z-index:50}
+        .logo{display:flex;align-items:center;gap:10px;padding:4px 8px 22px;border-bottom:1px solid var(--line)}
+        .logo-mark{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(145deg,#0b2530,#0b1520);border:1px solid rgba(0,217,255,.4);color:var(--cyan);font-weight:900;box-shadow:0 0 25px rgba(0,217,255,.08)}
+        .logo-title{font-size:15px;font-weight:900;letter-spacing:1.2px}.logo-sub{font-size:9px;color:var(--muted);margin-top:2px;letter-spacing:.7px}
+        .nav{padding-top:18px;display:grid;gap:6px}.nav button{width:100%;border:1px solid transparent;background:transparent;color:#91a0b4;text-align:left;padding:11px 12px;border-radius:10px;font-size:11px;font-weight:800;display:flex;align-items:center;gap:10px;transition:.18s}.nav button:hover,.nav button.active{background:rgba(0,217,255,.07);border-color:rgba(0,217,255,.18);color:#eafcff}.nav button.active{box-shadow:inset 3px 0 0 var(--cyan)}
+        .sidebar-footer{margin-top:auto;color:#586679;font-size:9px;line-height:1.6;padding:12px 8px}
+        .main{width:calc(100% - 238px);margin-left:238px;min-height:100vh;padding:20px 24px 90px}
+        .topbar{display:flex;align-items:center;justify-content:space-between;gap:15px;max-width:1500px;margin:0 auto 16px}
+        .page-title{font-size:20px;font-weight:900;letter-spacing:.2px}.page-title span{color:var(--cyan)}
+        .top-meta{display:flex;align-items:center;gap:8px}.status-pill{padding:7px 10px;border:1px solid rgba(34,197,94,.25);background:rgba(34,197,94,.07);border-radius:999px;color:#86efac;font-size:10px;font-weight:900}.logout{padding:7px 11px;border-radius:9px;text-decoration:none;color:#fca5a5;border:1px solid rgba(239,68,68,.22);background:rgba(239,68,68,.06);font-size:10px;font-weight:800}
+        .workspace{max-width:1500px;margin:auto}.view{display:none}.view.active{display:block}
+        .grid-main{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,.85fr);gap:14px;align-items:start}.central-layout{grid-template-columns:1fr}.central-layout>aside{width:100%;min-width:0}.central-layout>aside>.card{width:100%}
+        .card{background:linear-gradient(145deg,rgba(15,23,36,.98),rgba(9,15,24,.98));border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}.card-pad{padding:16px}.card-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}.eyebrow{font-size:9px;color:#718096;font-weight:900;letter-spacing:1.1px;text-transform:uppercase}.card-title{font-size:13px;font-weight:900;margin-top:4px}.mini{font-size:10px;color:var(--muted)}
+        .hero{min-height:300px;position:relative;background:radial-gradient(circle at 50% 0%,rgba(0,217,255,.07),transparent 50%),linear-gradient(145deg,#0d1724,#090e17);border-color:rgba(0,217,255,.18)}
+        .hero-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.asset-tag{font-family:'JetBrains Mono';font-size:12px;color:#d8f9ff;background:rgba(0,217,255,.08);border:1px solid rgba(0,217,255,.18);padding:7px 9px;border-radius:9px}.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px rgba(34,197,94,.8);margin-right:5px}
+        .signal-center{text-align:center;padding:18px 8px 12px}.signal-direction{font-size:40px;font-weight:900;letter-spacing:1px}.signal-call{color:#34d399;text-shadow:0 0 24px rgba(34,197,94,.18)}.signal-put{color:#fb7185;text-shadow:0 0 24px rgba(239,68,68,.18)}.signal-wait{color:#7f8da0;font-size:25px}.prob-label{font-size:10px;color:#7d8ba0;font-weight:800;text-transform:uppercase;letter-spacing:1px}.prob-value{font-family:'JetBrains Mono';font-size:31px;font-weight:900;margin-top:2px}.prob-bar{height:8px;background:#182231;border-radius:99px;overflow:hidden;margin:10px auto 12px;max-width:330px}.prob-fill{height:100%;width:0%;background:linear-gradient(90deg,#0ea5e9,#22c55e);border-radius:99px;transition:width .4s}.candle-timer{margin-top:12px;background:#070d15;border:1px solid #1a2a3b;border-radius:12px;padding:12px}.timer-head{display:flex;justify-content:space-between;align-items:center;gap:8px}.timer-title{font-size:9px;color:#7d8ba0;font-weight:900;text-transform:uppercase;letter-spacing:1px}.timer-value{font-family:'JetBrains Mono';font-size:18px;font-weight:900;color:#e8f7ff}.timer-track{height:8px;background:#172231;border-radius:99px;overflow:hidden;margin-top:8px}.timer-fill{height:100%;width:0%;background:linear-gradient(90deg,#00d9ff,#22c55e);border-radius:99px;transition:width .25s linear}.timer-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:9px}.timer-box{background:#0b121d;border:1px solid #182536;border-radius:9px;padding:8px;text-align:center}.timer-k{font-size:7px;color:#66758a;text-transform:uppercase;font-weight:900}.timer-v{font-family:'JetBrains Mono';font-size:11px;font-weight:900;color:#dce6f2;margin-top:3px}.timer-note{font-size:8px;color:#718096;text-align:center;margin-top:8px;line-height:1.4}.timer-alert{color:#fbbf24!important}.timer-confirm{color:#4ade80!important}
+        .signal-meta{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.metric{background:#0b121d;border:1px solid #182536;border-radius:10px;padding:9px;text-align:center}.metric .k{font-size:8px;color:#66758a;text-transform:uppercase;font-weight:900}.metric .v{font-size:11px;font-weight:900;margin-top:4px;color:#dce6f2}
+        .console{margin-top:12px;background:#070c13;border:1px solid #182333;border-radius:10px;padding:10px;font-family:'JetBrains Mono';font-size:10px;color:#7de3f5;min-height:34px;line-height:1.5}
+        .chart-wrap{padding:10px 12px 12px}.chart{width:100%;height:150px;display:block;background:#080e16;border:1px solid #172333;border-radius:10px}.chart-grid{stroke:#172333;stroke-width:1}.chart-line{fill:none;stroke:#00d9ff;stroke-width:2.2;vector-effect:non-scaling-stroke}.chart-area{fill:url(#areaGrad);opacity:.25}.chart-empty{fill:#657489;font-size:11px}
+        .confluence{display:grid;gap:7px}.conf-row{display:grid;grid-template-columns:110px 1fr 42px;align-items:center;gap:8px;font-size:9px}.conf-name{color:#a6b3c4;font-weight:800}.conf-bar{height:7px;background:#172231;border-radius:99px;overflow:hidden}.conf-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,#38bdf8,#22c55e)}.conf-points{text-align:right;color:#d9e5f1;font-family:'JetBrains Mono';font-size:9px}
+        .analysis-reasons{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.reason{padding:9px;border:1px solid #182536;background:#0b121c;border-radius:10px}.reason b{font-size:9px}.reason div{font-size:9px;color:#75859a;margin-top:3px;line-height:1.4}.ok{color:#4ade80}.warn{color:#fbbf24}.bad{color:#fb7185}
+        .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.stat-box{background:#0b121d;border:1px solid #182536;border-radius:12px;padding:11px;text-align:center}.stat-k{font-size:8px;color:#66758a;font-weight:900;text-transform:uppercase}.stat-v{font-family:'JetBrains Mono';font-size:19px;font-weight:900;margin-top:3px}.win{color:#4ade80}.loss{color:#fb7185}.blue{color:#60a5fa}
+        .session-bar{height:7px;background:#182231;border-radius:99px;overflow:hidden;margin-top:10px}.session-fill{height:100%;background:linear-gradient(90deg,#16a34a,#4ade80);width:0%;transition:.4s}
+        .protection{display:grid;gap:8px}.protection-main{display:flex;justify-content:space-between;gap:8px;align-items:center}.guard-badge{padding:6px 8px;border-radius:8px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.18);font-size:9px;font-weight:900;color:#86efac}.locked-btn{width:100%;padding:10px;border:1px solid rgba(239,68,68,.25);background:rgba(239,68,68,.06);color:#fca5a5;border-radius:9px;font-size:9px;font-weight:900;text-transform:uppercase}.locked-panel{display:none;border:1px solid rgba(239,68,68,.2);background:#080e15;border-radius:10px;padding:8px}.locked-panel.open{display:block}.locked-item{padding:8px;border-left:3px solid #ef4444;background:rgba(239,68,68,.05);border-radius:7px;margin-top:5px;font-size:9px;line-height:1.5}.locked-item:first-child{margin-top:0}.empty{font-size:9px;color:#66758a;text-align:center;padding:8px}
+        .controls{display:grid;gap:12px}.action-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.action{border:0;border-radius:10px;padding:11px 5px;color:white;font-size:10px;font-weight:900}.start{background:linear-gradient(135deg,#16a34a,#059669)}.pause{background:linear-gradient(135deg,#f59e0b,#d97706)}.stop{background:linear-gradient(135deg,#ef4444,#dc2626)}.action:active{transform:scale(.98)}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.field label{display:block;color:#728197;font-size:8px;font-weight:900;text-transform:uppercase;margin-bottom:4px}.select{width:100%;background:#0a111b;border:1px solid #1b2a3b;color:#dce6f2;padding:10px;border-radius:9px;font-size:10px;outline:none}.select:focus{border-color:rgba(0,217,255,.55)}
+        .tool-btn,.history-btn,.admin-btn{width:100%;padding:10px;border-radius:9px;background:#0b131f;border:1px solid #1c2b3d;color:#8edff0;font-size:9px;font-weight:900;text-transform:uppercase}.tool-btn:hover,.history-btn:hover{border-color:rgba(0,217,255,.35)}.admin-btn{color:#8ab4ff;border-color:rgba(96,165,250,.25)}.tools-content,.history{display:none;margin-top:8px}.tools-content.open,.history.open{display:grid;gap:7px}.tg-btn,.notify-btn{width:100%;padding:9px;border-radius:8px;background:#0a111a;border:1px solid #1d2b3c;color:#94a3b8;font-size:9px;font-weight:900}.history-list{max-height:220px;overflow:auto}.history-item{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);font-family:'JetBrains Mono';font-size:9px}.history-item:last-child{border-bottom:0}.history-result{font-weight:900;padding:4px 7px;border-radius:7px;border:1px solid transparent}.history-win,.history-g1{color:#4ade80;background:rgba(34,197,94,.08);border-color:rgba(34,197,94,.22)}.history-red{color:#fb7185;background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.22)}
+        .section{display:none}.section.active{display:block}.section-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.section-head h2{font-size:15px}.section-head p{font-size:9px;color:#69798d}.table-card{overflow:auto}.data-table{width:100%;border-collapse:collapse;min-width:620px}.data-table th{font-size:8px;color:#66758a;text-transform:uppercase;text-align:left;padding:10px;border-bottom:1px solid var(--line)}.data-table td{font-size:9px;padding:10px;border-bottom:1px solid rgba(255,255,255,.045)}
+        .asset-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;max-height:290px;overflow:auto;padding:8px;background:#080e16;border:1px solid #182536;border-radius:10px}.asset-check{display:flex;align-items:center;gap:6px;padding:7px 8px;background:#0b121d;border:1px solid #182536;border-radius:8px;color:#aebdcd;font-size:8px;font-weight:800}.asset-check input{accent-color:#00d9ff}.asset-check.selected{border-color:rgba(0,217,255,.35);color:#dffbff;background:rgba(0,217,255,.05)}.picker-actions{display:flex;gap:7px}.picker-actions button{flex:1;padding:9px;border-radius:8px;background:#0b131f;border:1px solid #1c2b3d;color:#9fe7f5;font-size:8px;font-weight:900}.backtest-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.backtest-results{display:grid;gap:10px}.bt-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}.bt-table{width:100%;border-collapse:collapse;min-width:760px}.bt-table th,.bt-table td{padding:9px;border-bottom:1px solid rgba(255,255,255,.05);font-size:8px;text-align:left}.bt-table th{color:#66758a;text-transform:uppercase}.bt-win{color:#4ade80;font-weight:900}.bt-loss{color:#fb7185;font-weight:900}.bt-g1{color:#fbbf24;font-weight:900}.bt-note{font-size:8px;color:#718096;line-height:1.5}.warmup-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 8px;border-radius:8px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:8px;font-weight:900}
+        .mobile-nav{display:none}.mobile-only{display:none}.desktop-only{display:block}
+        .toast{position:fixed;right:20px;bottom:20px;background:#101a28;border:1px solid #24354a;border-radius:10px;padding:10px 13px;font-size:10px;color:#dbe8f5;opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s;z-index:100}.toast.show{opacity:1;transform:none}
+        @media(max-width:1100px){.grid-main{grid-template-columns:1fr}.sidebar{width:210px}.main{width:calc(100% - 210px);margin-left:210px}.signal-meta{grid-template-columns:repeat(2,1fr)}}
+        @media(max-width:760px){
+            body{padding:0;background:#070b12}.app-shell{display:block}.sidebar{display:none}.main{width:100%;margin:0;padding:12px 10px 86px}.topbar{margin-bottom:11px}.page-title{font-size:16px}.status-pill{font-size:8px;padding:6px 8px}.logout{font-size:8px;padding:6px 8px}.mobile-only{display:block}.desktop-only{display:none}
+            .grid-main{display:flex;flex-direction:column;gap:10px}.card{border-radius:13px}.card-pad{padding:12px}.hero{min-height:280px}.signal-direction{font-size:35px}.prob-value{font-size:28px}.signal-meta{grid-template-columns:repeat(2,1fr)}.analysis-reasons{grid-template-columns:1fr}.conf-row{grid-template-columns:92px 1fr 36px}.chart{height:135px}.stat-grid{grid-template-columns:repeat(2,1fr)}.field-grid{grid-template-columns:1fr}.action-grid{position:sticky;bottom:72px;z-index:20;background:rgba(7,11,18,.92);padding:7px;border:1px solid #182333;border-radius:12px;backdrop-filter:blur(12px)}
+            .mobile-nav{position:fixed;display:grid;grid-template-columns:repeat(7,1fr);left:8px;right:8px;bottom:8px;height:60px;background:rgba(8,14,22,.96);border:1px solid #203044;border-radius:16px;z-index:60;box-shadow:0 10px 35px rgba(0,0,0,.45);padding:4px}.mobile-nav button{border:0;background:transparent;color:#65758a;font-size:7px;font-weight:900;border-radius:11px;min-width:0}.mobile-nav button.active{background:rgba(0,217,255,.08);color:#dffbff}.mobile-nav span{display:block;font-size:15px;margin-bottom:2px}
+            .topbar .top-meta{gap:5px}.topbar{gap:6px}.hero-top .mini{max-width:160px}.locked-btn{padding:11px}.section-head{margin-top:2px}.table-card{border-radius:12px}.asset-picker{grid-template-columns:repeat(2,minmax(0,1fr));max-height:360px}.backtest-grid{grid-template-columns:1fr 1fr}.bt-summary{grid-template-columns:repeat(2,1fr)}
+        }
+        @media(min-width:1400px){.main{padding-left:32px;padding-right:32px}.grid-main{grid-template-columns:minmax(0,1.65fr) minmax(350px,.8fr)}}
+        @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <div class="brand">VISION PRO <span>V3 ULTRA</span></div>
-            <a href="/logout" class="btn-logout">SAIR</a>
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="logo"><div class="logo-mark">VP</div><div><div class="logo-title">VISION PRO</div><div class="logo-sub">V4 ANALYTICS TERMINAL</div></div></div>
+        <nav class="nav">
+            <button class="active" data-view="central" onclick="abrirView('central',this)">🏠 <span>Central</span></button>
+            <button data-view="analise" onclick="abrirView('analise',this)">📊 <span>Análise</span></button>
+            <button data-view="sinais" onclick="abrirView('sinais',this)">🎯 <span>Sinais</span></button>
+            <button data-view="protecao" onclick="abrirView('protecao',this)">🛡️ <span>Proteção</span></button>
+            <button data-view="historico" onclick="abrirView('historico',this)">📈 <span>Histórico</span></button>
+            <button data-view="backtest" onclick="abrirView('backtest',this)">🧪 <span>Backtest</span></button>
+            <button data-view="config" onclick="abrirView('config',this)">⚙️ <span>Configurações</span></button>
+        </nav>
+        <div class="sidebar-footer">Sistema de análise estatística e técnica. Os alertas não garantem resultados financeiros. Opere com responsabilidade.</div>
+    </aside>
+
+    <main class="main">
+        <div class="topbar">
+            <div><div class="page-title">VISION <span>PRO</span></div><div class="mini">Terminal de análise em tempo real</div></div>
+            <div class="top-meta"><div class="status-pill"><span class="live-dot"></span><span id="top-status">ONLINE</span></div><a class="logout" href="/logout">SAIR</a></div>
         </div>
 
-        <div class="tools-box">
-            <button class="btn-notify" onclick="toggleFerramentas()">⚙️ FERRAMENTAS E NOTIFICAÇÕES</button>
-            <div id="ferramentas-box" style="display:none;">
-                <button class="btn-notify" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
-                {% if user == admin %}
-                <button class="btn-test-tg" onclick="sendCommand('test_telegram')">🧪 TESTAR CONEXÃO TELEGRAM</button>
-                <button class="btn-test-tg" id="btn-telegram-toggle" onclick="toggleTelegram()">{{ '🟢 ENVIO TELEGRAM ATIVADO' if telegram_ativo else '🔴 ENVIO TELEGRAM DESATIVADO' }}</button>
-                <div style="font-size:10px;color:#94a3b8;text-align:center;margin:6px 0 10px;">Quando ativado pelo ADM, somente mensagens da sessão ADM são enviadas ao Telegram.</div>
-                {% endif %}
-            </div>
-        </div>
+        <div class="workspace">
+            <section id="view-central" class="view active">
+                <div class="grid-main central-layout">
+                    <div>
+                        <div class="card hero">
+                            <div class="card-pad">
+                                <div class="hero-top">
+                                    <div><div class="eyebrow">Sinal operacional</div><div class="card-title">Monitoramento de mercado</div></div>
+                                    <div class="asset-tag" id="asset-tag">AGUARDANDO</div>
+                                </div>
+                                <div class="signal-center">
+                                    <div class="signal-direction signal-wait" id="signal-direction">AGUARDANDO</div>
+                                    <div class="prob-label">Probabilidade estimada</div>
+                                    <div class="prob-value" id="prob-value">--%</div>
+                                    <div class="mini" id="confluence-overall">Confluência técnica: --/100</div>
+                                    <div class="prob-bar"><div class="prob-fill" id="prob-fill"></div></div>
+                                    <div class="mini" id="signal-strategy">Motor aguardando análise</div>
+                                </div>
+                                <div class="signal-meta">
+                                    <div class="metric"><div class="k">Timeframe</div><div class="v" id="signal-tf">M5</div></div>
+                                    <div class="metric"><div class="k">Entrada</div><div class="v" id="signal-entry">--:--:--</div></div>
+                                    <div class="metric"><div class="k">Expiração</div><div class="v" id="signal-expiry">--:--</div></div>
+                                    <div class="metric"><div class="k">Status</div><div class="v" id="signal-status">AGUARDANDO</div></div>
+                                </div>
+                                <div class="candle-timer">
+                                    <div class="timer-head"><div class="timer-title">⏱ TEMPO EXATO DO CANDLE</div><div class="timer-value" id="candle-countdown">--:--</div></div>
+                                    <div class="timer-track"><div class="timer-fill" id="candle-fill"></div></div>
+                                    <div class="timer-grid">
+                                        <div class="timer-box"><div class="timer-k">Candle atual</div><div class="timer-v" id="candle-window">--:--:-- → --:--:--</div></div>
+                                        <div class="timer-box"><div class="timer-k">Entrada prevista</div><div class="timer-v" id="entry-countdown">--:--:--</div></div>
+                                    </div>
+                                    <div class="timer-note" id="timer-note">Aguardando sincronização do candle.</div>
+                                </div>
+                                <div class="console" id="panel-text">Aguardando Comando...</div>
+                            </div>
+                            <div class="chart-wrap"><canvas id="market-chart" class="chart"></canvas></div>
+                        </div>
 
-        <div class="placar-card">
-            <div class="placar-grid">
-                <div class="placar-item">
-                    <div class="title">WINS</div>
-                    <div class="val win-color" id="win-count">0</div>
-                </div>
-                <div class="placar-item">
-                    <div class="title">ASSERTIVIDADE</div>
-                    <div class="val wr-text" id="wr-text">0%</div>
-                </div>
-                <div class="placar-item">
-                    <div class="title">LOSS</div>
-                    <div class="val loss-color" id="loss-count">0</div>
-                </div>
-            </div>
-            <div class="winrate-bar"><div id="wr-fill" class="winrate-fill"></div></div>
-        </div>
-        <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
-            MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
-            ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
-        </div>
-
-        <div id="timing-panel" style="background:rgba(16,185,129,0.06); border:1px solid rgba(16,185,129,0.28); border-radius:12px; padding:12px; margin-bottom:12px; text-align:center; font-size:12px; line-height:1.7;">
-            <div id="candle-timer" style="color:#00f2fe; font-weight:800;">⏳ FECHAMENTO DO CANDLE: --:--</div>
-            <div id="entry-timer" style="color:#38ef7d; font-weight:900; font-size:14px; margin-top:3px;">🎯 AGUARDANDO SINAL DE ENTRADA</div>
-            <div id="entry-clock" style="color:#94a3b8; font-size:11px;">Horário exato: --:--:--</div>
-        </div>
-
-        <div class="status-box" id="panel-text">Aguardando Comando...</div>
-
-        <div id="result-area" class="result-grid" style="display:none;">
-            <button class="btn-res btn-res-win" onclick="fetch('/resultado/win')">WIN</button>
-            <button class="btn-res btn-res-g1" onclick="fetch('/resultado/g1')">G1</button>
-            <button class="btn-res btn-res-red" onclick="fetch('/resultado/red')">RED</button>
-            <button class="btn-res btn-res-skip" onclick="fetch('/resultado/pular')">PULAR</button>
-        </div>
-
-        <div class="control-panel">
-            <span class="section-label">Controles do Robô</span>
-            
-            <div class="action-flex">
-                <button class="btn-action btn-start" onclick="sendCommand('start_bot')">▶ START</button>
-                <button class="btn-action btn-pause" onclick="sendCommand('pause_bot')">⏸ PAUSE</button>
-                <button class="btn-action btn-stop" onclick="sendCommand('stop_bot')">⏹ STOP</button>
-            </div>
-
-            <span class="section-label">Configurações de Análise</span>
-            
-            <div class="settings-grid">
-                <div class="setting-group">
-                    <label>TIPO DE MERCADO</label>
-                    <div class="select-wrapper">
-                        <select class="modern-select" onchange="sendCommand('mkt_' + this.value)">
-                            <option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>🌐 Todos os Mercados (Aberto + OTC)</option>
-                            <option value="ABERTO_TODOS" {% if modo == 'ABERTO_TODOS' %}selected{% endif %}>🟢 Todo Mercado Aberto (Forex + Cripto)</option>
-                            <option value="OTC_TODOS" {% if modo == 'OTC_TODOS' %}selected{% endif %}>🌙 Todo Mercado OTC (Forex + Cripto)</option>
-                            <option value="FOREX_ABERTO" {% if modo == 'FOREX_ABERTO' %}selected{% endif %}>📈 Forex Aberto (Seg a Sex)</option>
-                            <option value="CRIPTO_ABERTO" {% if modo == 'CRIPTO_ABERTO' %}selected{% endif %}>🪙 Criptomoedas Aberto (24/7)</option>
-                            <option value="FOREX_OTC" {% if modo == 'FOREX_OTC' %}selected{% endif %}>📊 Forex OTC (Noite/FDS)</option>
-                            <option value="CRIPTO_OTC" {% if modo == 'CRIPTO_OTC' %}selected{% endif %}>⚡ Cripto OTC (Noite/FDS)</option>
-                        </select>
+                        <div class="card" style="margin-top:12px">
+                            <div class="card-head"><div><div class="eyebrow">Confluência técnica</div><div class="card-title">Raio-X do sinal</div></div><div class="mini" id="analysis-direction">Sem sinal</div></div>
+                            <div class="card-pad">
+                                <div class="confluence" id="confluence-list"><div class="empty">Aguardando dados do mercado...</div></div>
+                                <div class="analysis-reasons" id="analysis-reasons"></div>
+                            </div>
+                        </div>
                     </div>
-                </div>
-                <div class="setting-group">
-                    <label>TIMEFRAME</label>
-                    <div class="select-wrapper">
-                        <select class="modern-select" onchange="sendCommand('tf_' + this.value)">
-                            <option value="1" {% if tf == 1 %}selected{% endif %}>M1 (1 Minuto)</option>
-                            <option value="5" {% if tf == 5 %}selected{% endif %}>M5 (5 Minutos)</option>
-                            <option value="15" {% if tf == 15 %}selected{% endif %}>M15 (15 Minutos)</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="settings-grid full">
-                <div class="setting-group">
-                    <label>ESTRATÉGIA OPERACIONAL</label>
-                    <div class="select-wrapper">
-                        <select class="modern-select" onchange="sendCommand('set_est_' + this.value)">
-                            <option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS (Analisar Todas as Estratégias)</option>
-                            <option value="LOGICA_DO_PRECO" {% if estrat == 'LOGICA_DO_PRECO' %}selected{% endif %}>Lógica do Preço</option>
-                            <option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + Cruzamento MACD + MA</option>
-                            <option value="MHI1" {% if estrat == 'MHI1' %}selected{% endif %}>MHI 1 (+ Filtro Tendência)</option>
-                            <option value="REVERSAO" {% if estrat == 'REVERSAO' %}selected{% endif %}>Reversão de Bandas</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-            {% if user == admin %}
-            <button onclick="location.href='/admin_panel'" style="width:100%; margin-top:15px; padding:12px; background:rgba(0,242,254,0.1); border:1px solid #00f2fe; color:#00f2fe; font-weight:bold; border-radius:10px; cursor:pointer;">🛡️ ABRIR PAINEL ADMINISTRATIVO</button>
-            {% endif %}
 
-            <button class="btn-toggle-hist" onclick="toggleHistorico()">👁️ EXIBIR HISTÓRICO PASSADO</button>
+                    <aside>
+                        <div class="card">
+                            <div class="card-head"><div><div class="eyebrow">Sessão</div><div class="card-title">Desempenho atual</div></div><div class="mini" id="session-count">0 operações</div></div>
+                            <div class="card-pad">
+                                <div class="stat-grid">
+                                    <div class="stat-box"><div class="stat-k">Wins</div><div class="stat-v win" id="win-count">0</div></div>
+                                    <div class="stat-box"><div class="stat-k">Loss</div><div class="stat-v loss" id="loss-count">0</div></div>
+                                    <div class="stat-box"><div class="stat-k">Assert.</div><div class="stat-v blue" id="wr-text">0%</div></div>
+                                    <div class="stat-box"><div class="stat-k">G1</div><div class="stat-v" id="g1-count">0</div></div>
+                                </div>
+                                <div class="session-bar"><div class="session-fill" id="wr-fill"></div></div>
+                            </div>
+                        </div>
 
-            <div class="historico-box" id="box-historico">
-                <span class="section-label">Histórico de Sinais Salvo</span>
-                <div class="historico-scroll" id="lista-sinais"></div>
-            </div>
+                        <div class="card" style="margin-top:12px">
+                            <div class="card-head"><div><div class="eyebrow">Controle</div><div class="card-title">Robô</div></div><div class="mini" id="robot-status">PARADO</div></div>
+                            <div class="card-pad controls">
+                                <div class="action-grid"><button class="action start" onclick="sendCommand('start_bot')">▶ START</button><button class="action pause" onclick="sendCommand('pause_bot')">⏸ PAUSE</button><button class="action stop" onclick="sendCommand('stop_bot')">⏹ STOP</button></div>
+                                <button class="tool-btn" onclick="toggleBox('tools-content')">⚙️ FERRAMENTAS E NOTIFICAÇÕES</button>
+                                <div id="tools-content" class="tools-content">
+                                    <button class="notify-btn" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
+                                    {% if user == admin %}
+                                    <button class="tg-btn" onclick="sendCommand('test_telegram')">🧪 TESTAR TELEGRAM</button>
+                                    <button class="tg-btn" id="btn-telegram-toggle" onclick="toggleTelegram()">{{ '🟢 ENVIO TELEGRAM ATIVADO' if telegram_ativo else '🔴 ENVIO TELEGRAM DESATIVADO' }}</button>
+                                    <button class="admin-btn" onclick="location.href='/admin_panel'">🛡️ PAINEL ADMINISTRATIVO</button>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </aside>
+                </div>
+            </section>
+
+            <section id="view-analise" class="view">
+                <div class="section-head"><div><h2>📊 Análise detalhada</h2><p>Indicadores e confluências usadas pelo motor.</p></div><div class="asset-tag" id="analysis-asset">AGUARDANDO</div></div>
+                <div class="grid-main">
+                    <div class="card"><div class="card-head"><div><div class="eyebrow">Mercado</div><div class="card-title">Leitura técnica</div></div></div><div class="chart-wrap"><canvas id="market-chart-2" class="chart"></canvas></div><div class="card-pad"><div class="confluence" id="confluence-list-2"></div></div></div>
+                    <div class="card"><div class="card-head"><div><div class="eyebrow">Diagnóstico</div><div class="card-title">Motivos do sinal</div></div></div><div class="card-pad"><div class="analysis-reasons" id="analysis-reasons-2"></div><div style="margin-top:12px" class="metric"><div class="k">Probabilidade estimada</div><div class="v" id="prob-value-2">--%</div></div></div></div>
+                </div>
+            </section>
+
+            <section id="view-sinais" class="view">
+                <div class="section-head"><div><h2>🎯 Sinais</h2><p>O sinal atual fica destacado e sincronizado com o Telegram.</p></div></div>
+                <div class="card"><div class="card-pad"><div class="signal-center"><div class="signal-direction signal-wait" id="signal-direction-2">AGUARDANDO</div><div class="prob-label">Probabilidade estimada</div><div class="prob-value" id="prob-value-3">--%</div><div class="prob-bar"><div class="prob-fill" id="prob-fill-3"></div></div><div class="mini" id="signal-strategy-2">--</div></div><div class="signal-meta"><div class="metric"><div class="k">Ativo</div><div class="v" id="signal-asset-2">--</div></div><div class="metric"><div class="k">Timeframe</div><div class="v" id="signal-tf-2">M5</div></div><div class="metric"><div class="k">Entrada</div><div class="v" id="signal-entry-2">--:--:--</div></div><div class="metric"><div class="k">Expiração</div><div class="v" id="signal-expiry-2">--:--</div></div></div></div></div>
+                <div id="result-area" class="action-grid" style="display:none;margin-top:12px"><button class="action start" onclick="registrarResultado('win')">WIN</button><button class="action pause" onclick="registrarResultado('g1')">G1</button><button class="action stop" onclick="registrarResultado('red')">RED</button></div>
+                <button class="history-btn" style="margin-top:8px" onclick="registrarResultado('pular')">⏭️ PULAR SINAL</button>
+            </section>
+
+            <section id="view-protecao" class="view">
+                <div class="section-head"><div><h2>🛡️ Proteção macro</h2><p>Eventos de impacto moderado/alto retiram somente os ativos afetados da análise.</p></div></div>
+                <div class="grid-main">
+                    <div class="card"><div class="card-head"><div><div class="eyebrow">Calendário econômico</div><div class="card-title" id="guard-detail-status">Aguardando atualização</div></div><div class="guard-badge" id="guard-badge-2">● ATIVO</div></div><div class="card-pad protection"><div class="protection-main"><span class="mini">Status da trava</span><b id="news-guard-status" style="font-size:9px;color:#fbbf24">AGUARDANDO CALENDÁRIO</b></div><button class="locked-btn" id="news-locked-toggle" onclick="toggleAtivosBloqueados()">🔒 VER ATIVOS BLOQUEADOS (0)</button><div id="news-locked-panel" class="locked-panel"><div id="news-locked-list"><div class="empty">Nenhum ativo bloqueado por notícia no momento.</div></div></div></div></div>
+                    <div class="card"><div class="card-head"><div><div class="eyebrow">Regra de segurança</div><div class="card-title">Proteção operacional</div></div></div><div class="card-pad"><div class="metric"><div class="k">Impacto</div><div class="v">🐂🐂 / 🐂🐂🐂</div></div><div class="metric" style="margin-top:8px"><div class="k">Janela</div><div class="v">30 min antes + 30 min depois</div></div><div class="metric" style="margin-top:8px"><div class="k">Comportamento</div><div class="v">Somente o ativo afetado é retirado</div></div><div class="metric" style="margin-top:8px"><div class="k">Fonte</div><div class="v">Investing.com Economic Calendar</div></div></div></div>
+                </div>
+                <div class="card" style="margin-top:12px"><div class="card-head"><div><div class="eyebrow">Proteção ativa</div><div class="card-title">Detalhes dos bloqueios</div></div></div><div class="card-pad" id="news-locked-list-2"><div class="empty">Nenhum ativo bloqueado por notícia no momento.</div></div></div>
+            </section>
+
+            <section id="view-historico" class="view">
+                <div class="section-head"><div><h2>📈 Histórico</h2><p>Últimos sinais registrados para esta conta.</p></div></div>
+                <div class="grid-main" style="margin-bottom:12px"><div class="card"><div class="card-head"><div><div class="eyebrow">Por estratégia</div><div class="card-title">Desempenho recente</div></div></div><div class="card-pad" id="strategy-summary"><div class="empty">Aguardando histórico.</div></div></div><div class="card"><div class="card-head"><div><div class="eyebrow">Por ativo</div><div class="card-title">Desempenho recente</div></div></div><div class="card-pad" id="asset-summary"><div class="empty">Aguardando histórico.</div></div></div></div><div class="card table-card"><table class="data-table"><thead><tr><th>ID</th><th>Sinal</th><th>Resultado</th></tr></thead><tbody id="history-table-body"><tr><td colspan="3" class="empty">Nenhum histórico.</td></tr></tbody></table></div>
+            </section>
+
+            <section id="view-backtest" class="view">
+                <div class="section-head"><div><h2>🧪 Backtest histórico</h2><p>Simulação sobre candles históricos disponíveis nas fontes do Vision Pro.</p></div><div class="warmup-badge">⚠️ Não é garantia de resultado futuro</div></div>
+                <div class="card"><div class="card-pad controls">
+                    <div class="backtest-grid">
+                        <div class="field"><label>Timeframe</label><select class="select" id="bt-tf"><option value="1">M1</option><option value="5" selected>M5</option><option value="15">M15</option></select></div>
+                        <div class="field"><label>Mercado</label><select class="select" id="bt-market"><option value="TODOS">Todos</option><option value="ABERTO_TODOS">Abertos</option><option value="OTC_TODOS">OTC</option><option value="FOREX_ABERTO">Forex Aberto</option><option value="CRIPTO_ABERTO">Cripto Aberto</option><option value="FOREX_OTC">Forex OTC</option><option value="CRIPTO_OTC">Cripto OTC</option></select></div>
+                        <div class="field"><label>Estratégia</label><select class="select" id="bt-est"><option value="TODAS">Todas</option><option value="LOGICA_DO_PRECO">Lógica do Preço</option><option value="RSI_MACD_MA">RSI + MACD + MA</option><option value="MHI1">MHI 1 + Tendência</option><option value="REVERSAO">Reversão de Bandas</option></select></div>
+                        <div class="field"><label>G1</label><select class="select" id="bt-g1"><option value="sim">Com G1</option><option value="nao">Sem G1</option></select></div>
+                    </div>
+                    <div class="field"><label>Quantidade de candles históricos</label><select class="select" id="bt-limit"><option value="200">200 candles</option><option value="300" selected>300 candles</option><option value="500">500 candles</option></select></div>
+                    <div class="field"><label>Ativos para o backtest</label><div class="picker-actions"><button type="button" onclick="btSelecionarTodos()">SELECIONAR TODOS</button><button type="button" onclick="btLimparAtivos()">LIMPAR</button></div><div id="bt-assets" class="asset-picker" style="margin-top:8px"></div></div>
+                    <button class="action start" style="width:100%;margin-top:2px" onclick="executarBacktest()">🧪 EXECUTAR BACKTEST</button>
+                    <div class="bt-note">O resultado é uma simulação histórica. Para ativos OTC, a fonte pública disponível pode usar o ticker equivalente do mercado aberto; o painel identifica essa limitação quando aplicável.</div>
+                </div></div>
+                <div id="backtest-results" class="backtest-results" style="margin-top:12px"><div class="card"><div class="card-pad empty">Escolha os parâmetros e execute o backtest.</div></div></div>
+            </section>
+
+            <section id="view-config" class="view">
+                <div class="section-head"><div><h2>⚙️ Configurações</h2><p>Parâmetros operacionais do motor.</p></div></div>
+                <div class="card"><div class="card-pad controls">
+                    <div class="field-grid">
+                        <div class="field"><label>Mercado</label><select class="select" onchange="sendCommand('mkt_'+this.value)"><option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>🌐 Todos</option><option value="ABERTO_TODOS" {% if modo == 'ABERTO_TODOS' %}selected{% endif %}>🟢 Aberto</option><option value="OTC_TODOS" {% if modo == 'OTC_TODOS' %}selected{% endif %}>🌙 OTC</option><option value="FOREX_ABERTO" {% if modo == 'FOREX_ABERTO' %}selected{% endif %}>📈 Forex Aberto</option><option value="CRIPTO_ABERTO" {% if modo == 'CRIPTO_ABERTO' %}selected{% endif %}>🪙 Cripto Aberto</option><option value="FOREX_OTC" {% if modo == 'FOREX_OTC' %}selected{% endif %}>📊 Forex OTC</option><option value="CRIPTO_OTC" {% if modo == 'CRIPTO_OTC' %}selected{% endif %}>⚡ Cripto OTC</option></select></div>
+                        <div class="field"><label>Timeframe</label><select class="select" onchange="sendCommand('tf_'+this.value)"><option value="1" {% if tf == 1 %}selected{% endif %}>M1</option><option value="5" {% if tf == 5 %}selected{% endif %}>M5</option><option value="15" {% if tf == 15 %}selected{% endif %}>M15</option></select></div>
+                    </div>
+                    <div class="field"><label>Estratégia operacional</label><select class="select" onchange="sendCommand('set_est_'+this.value)"><option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS — análise dinâmica múltipla</option><option value="LOGICA_DO_PRECO" {% if estrat == 'LOGICA_DO_PRECO' %}selected{% endif %}>Lógica do Preço</option><option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + MACD + MA</option><option value="MHI1" {% if estrat == 'MHI1' %}selected{% endif %}>MHI 1 + Tendência</option><option value="REVERSAO" {% if estrat == 'REVERSAO' %}selected{% endif %}>Reversão de Bandas</option></select></div>
+                    <div class="field"><label>Ativos para operar</label><div class="picker-actions"><button type="button" onclick="selecionarTodosAtivos()">TODOS DO MERCADO</button><button type="button" onclick="limparAtivosOperacao()">LIMPAR</button></div><div id="operating-assets" class="asset-picker" style="margin-top:8px"></div><div class="bt-note" style="margin-top:6px">Selecione um ou mais ativos. Se nenhum for selecionado, o Vision Pro usa todos os ativos do mercado escolhido.</div></div>
+                    <div class="metric"><div class="k">Regra de proteção</div><div class="v">🐂🐂 / 🐂🐂🐂 → trava ±30 min</div></div>
+                    <div class="metric"><div class="k">Dados</div><div class="v">Somente candles válidos e fechados</div></div>
+                </div></div>
+            </section>
         </div>
+    </main>
+</div>
 
-    </div>
+<div class="mobile-nav">
+    <button class="active" data-view="central" onclick="abrirView('central',this)"><span>🏠</span>Início</button>
+    <button data-view="analise" onclick="abrirView('analise',this)"><span>📊</span>Análise</button>
+    <button data-view="sinais" onclick="abrirView('sinais',this)"><span>🎯</span>Sinais</button>
+    <button data-view="protecao" onclick="abrirView('protecao',this)"><span>🛡️</span>Proteção</button>
+    <button data-view="historico" onclick="abrirView('historico',this)"><span>📈</span>Histórico</button>
+    <button data-view="backtest" onclick="abrirView('backtest',this)"><span>🧪</span>Backtest</button>
+    <button data-view="config" onclick="abrirView('config',this)"><span>⚙️</span>Config</button>
+</div>
+<div id="toast" class="toast"></div>
 
-    <script>
-        let lastNotifId = null;
-        const NATIVE_NOTIFICATION_COOLDOWN_MS = 60000;
+<script>
+let lastNotifId=null;
+let latestData=null;
+const NATIVE_NOTIFICATION_COOLDOWN_MS=0;
 
-        // Registra o Service Worker, mas não dispara nenhuma notificação automaticamente.
-        if ('serviceWorker' in navigator && 'Notification' in window) {
-            navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
-                .then(() => console.log('Service Worker de notificações registrado.'))
-                .catch(err => console.warn('Falha ao registrar Service Worker:', err));
+function abrirView(name,btn){
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    const el=document.getElementById('view-'+name); if(el) el.classList.add('active');
+    document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===name));
+    window.scrollTo({top:0,behavior:'smooth'});
+    if(name==='analise' && latestData) renderAnalysis(latestData);
+    if(name==='historico' && latestData) renderHistory(latestData.historico||[]);
+    if(name==='backtest' && latestData) { const m=document.getElementById('bt-market'); if(m) renderAssetPicker('bt-assets',m.value,[]); }
+}
+function toggleBox(id){const e=document.getElementById(id); if(e)e.classList.toggle('open')}
+function toast(msg){const e=document.getElementById('toast');if(!e)return;e.innerText=msg;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2200)}
+function sendCommand(cmd){fetch('/command/'+cmd,{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d.redirect)location.href=d.redirect;else if(d.error)toast(d.error);else toast('Comando atualizado');}).catch(()=>toast('Falha de comunicação com o servidor'))}
+
+let assetsCatalog=[];
+function assetsForMarket(mkt){
+    const groups={TODOS:['FOREX_ABERTO','CRIPTO_ABERTO','FOREX_OTC','CRIPTO_OTC'],ABERTO_TODOS:['FOREX_ABERTO','CRIPTO_ABERTO'],OTC_TODOS:['FOREX_OTC','CRIPTO_OTC'],FOREX_ABERTO:['FOREX_ABERTO'],CRIPTO_ABERTO:['CRIPTO_ABERTO'],FOREX_OTC:['FOREX_OTC'],CRIPTO_OTC:['CRIPTO_OTC']};
+    const gs=groups[mkt]||groups.TODOS; const out=[]; gs.forEach(g=>(assetsCatalog[g]||[]).forEach(a=>{if(!out.includes(a))out.push(a)})); return out;
+}
+function renderAssetPicker(id,mkt,selected){const box=document.getElementById(id);if(!box)return;const assets=assetsForMarket(mkt);const sel=new Set(selected||[]);box.innerHTML=assets.map(a=>`<label class="asset-check ${sel.has(a)?'selected':''}"><input type="checkbox" value="${a}" ${sel.has(a)?'checked':''} onchange="this.parentElement.classList.toggle('selected',this.checked)"> ${a}</label>`).join('')||'<div class="empty">Nenhum ativo disponível.</div>';}
+function pickerValues(id){return Array.from(document.querySelectorAll('#'+id+' input[type=checkbox]:checked')).map(x=>x.value)}
+function saveOperatingAssets(){const assets=pickerValues('operating-assets');fetch('/set_assets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({assets})}).then(r=>r.json()).then(d=>{if(d.ok)toast(assets.length?assets.length+' ativo(s) selecionado(s)':'Todos os ativos do mercado serão analisados')})}
+function selecionarTodosAtivos(){const m=(latestData&&latestData.mercado)||'TODOS';renderAssetPicker('operating-assets',m,assetsForMarket(m));saveOperatingAssets()}
+function limparAtivosOperacao(){document.querySelectorAll('#operating-assets input').forEach(x=>{x.checked=false;x.parentElement.classList.remove('selected')});saveOperatingAssets()}
+function btSelecionarTodos(){const m=document.getElementById('bt-market').value;renderAssetPicker('bt-assets',m,assetsForMarket(m))}
+function btLimparAtivos(){document.querySelectorAll('#bt-assets input').forEach(x=>{x.checked=false;x.parentElement.classList.remove('selected')})}
+function executarBacktest(){const box=document.getElementById('backtest-results');const assets=pickerValues('bt-assets');if(!assets.length){toast('Selecione pelo menos um ativo para o backtest');return}box.innerHTML='<div class="card"><div class="card-pad empty">⏳ Executando backtest histórico...</div></div>';fetch('/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({timeframe:Number(document.getElementById('bt-tf').value),market:document.getElementById('bt-market').value,estrategia:document.getElementById('bt-est').value,g1:document.getElementById('bt-g1').value==='sim',limit:Number(document.getElementById('bt-limit').value),assets})}).then(r=>r.json()).then(d=>{if(!d.ok){box.innerHTML='<div class="card"><div class="card-pad empty">❌ '+(d.error||'Falha no backtest')+'</div></div>';return}renderBacktestResults(d)}).catch(()=>{box.innerHTML='<div class="card"><div class="card-pad empty">❌ Falha de comunicação com o servidor.</div></div>'})}
+function renderBacktestResults(d){const box=document.getElementById('backtest-results');const s=d.summary||{};const cards=[['Entradas',s.entradas||0,''],['Wins',s.wins||0,'bt-win'],['G1',s.g1||0,'bt-g1'],['Loss',s.losses||0,'bt-loss'],['Assertividade',((s.assertividade||0).toFixed? s.assertividade.toFixed(1):s.assertividade)+'%','']];let html='<div class="card"><div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Backtest histórico</div></div><div class="mini">'+(d.meta||'')+'</div></div><div class="card-pad"><div class="bt-summary">'+cards.map(c=>`<div class="stat-box"><div class="stat-k">${c[0]}</div><div class="stat-v ${c[2]}">${c[1]}</div></div>`).join('')+'</div></div></div>';const mk=(arr,key)=>'<div class="card"><div class="card-head"><div><div class="eyebrow">Ranking</div><div class="card-title">'+key+'</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Nome</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(arr||[]).map(x=>`<tr><td><b>${x.nome||x.ativo||x.estrategia||'--'}</b></td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+=mk(d.top_assets,'Melhores ativos');html+=mk(d.top_strategies,'Melhores estratégias');html+='<div class="card"><div class="card-head"><div><div class="eyebrow">Detalhamento</div><div class="card-title">Ativo × estratégia</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Ativo</th><th>Estratégia</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(d.rows||[]).map(x=>`<tr><td><b>${x.ativo}</b></td><td>${x.estrategia}</td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+='<div class="card"><div class="card-pad bt-note">Fonte: '+(d.source||'dados históricos públicos')+'. '+(d.note||'')+'</div></div>';box.innerHTML=html}
+function atualizarAssetPickers(d){assetsCatalog=d.assets_catalog||{};const m=d.mercado||'TODOS';const selected=d.selected_assets||[];const op=document.getElementById('operating-assets');if(op&&!op.dataset.userEditing){renderAssetPicker('operating-assets',m,selected)}const btM=document.getElementById('bt-market');if(btM&&!document.getElementById('bt-assets')?.dataset.initialized){document.getElementById('bt-assets').dataset.initialized='1';renderAssetPicker('bt-assets',btM.value,[])} }
+function registrarResultado(res){fetch('/resultado/'+res,{cache:'no-store'}).then(()=>toast('Resultado registrado')).catch(()=>toast('Falha ao registrar resultado'))}
+function toggleTelegram(){fetch('/command/telegram_toggle',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d.ok){const b=document.getElementById('btn-telegram-toggle');if(b)b.innerText=d.telegram_ativo?'🟢 ENVIO TELEGRAM ATIVADO':'🔴 ENVIO TELEGRAM DESATIVADO';}})}
+function solicitarPermissaoNotificacao(){if(!('Notification'in window)){alert('Este navegador não suporta notificações.');return}Notification.requestPermission().then(p=>{const b=document.getElementById('btn-enable-notify');if(p==='granted'){if(b)b.innerText='✅ NOTIFICAÇÕES NATIVAS ATIVADAS';toast('Notificações ativadas')}else alert('Permissão de notificação recusada.')})}
+if('serviceWorker'in navigator&&'Notification'in window){navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'}).catch(()=>{})}
+async function dispararNotificacaoNativa(titulo,corpo,id){if(!('Notification'in window)||Notification.permission!=='granted')return;const nid=String(id||''),now=Date.now(),last=localStorage.getItem('vision_last_notif_id')||'',lastAt=Number(localStorage.getItem('vision_last_notif_at')||0);if(nid&&nid===last)return;if(lastAt&&NATIVE_NOTIFICATION_COOLDOWN_MS>0&&now-lastAt<NATIVE_NOTIFICATION_COOLDOWN_MS)return;try{const opcoes={body:corpo,tag:nid?'vision-signal-'+nid:'vision-signal-'+now,renotify:true,requireInteraction:true,silent:false,vibrate:[250,120,250,120,400],timestamp:now};if('serviceWorker'in navigator){const reg=await navigator.serviceWorker.ready;await reg.showNotification(titulo,opcoes)}else new Notification(titulo,opcoes);if(nid)localStorage.setItem('vision_last_notif_id',nid);localStorage.setItem('vision_last_notif_at',String(now))}catch(e){console.warn('Notificação nativa indisponível:',e)}}
+function toggleAtivosBloqueados(){const p=document.getElementById('news-locked-panel');const b=document.getElementById('news-locked-toggle');if(!p||!b)return;p.classList.toggle('open');const n=(latestData&&latestData.news_blocked_assets||[]).length;b.innerText=(p.classList.contains('open')?'🔽 OCULTAR':'🔒 VER')+' ATIVOS BLOQUEADOS ('+n+')'}
+function atualizarAtivosBloqueados(lista){const itens=Array.isArray(lista)?lista:[];const b=document.getElementById('news-locked-toggle'),p=document.getElementById('news-locked-panel'),box=document.getElementById('news-locked-list');if(!b||!p||!box)return;b.innerText=(p.classList.contains('open')?'🔽 OCULTAR':'🔒 VER')+' ATIVOS BLOQUEADOS ('+itens.length+')';box.innerHTML=itens.length?itens.map(x=>{const imp=Math.max(1,Math.min(3,parseInt(x.impact||2,10)));return `<div class="locked-item"><b>🚫 ${x.ativo||'ATIVO'}</b><br>${'🐂'.repeat(imp)} ${x.currency||''} — ${x.event||'Evento econômico'}<br><span style="color:#6f8095">Notícia: ${x.horario||'--:--'} | Liberação: ${x.liberacao||'--:--'}</span></div>`}).join(''):'<div class="empty">Nenhum ativo bloqueado por notícia no momento.</div>';
+    const b2=document.getElementById('news-locked-list-2');if(b2)b2.innerHTML=itens.length?itens.map(x=>{const imp=Math.max(1,Math.min(3,parseInt(x.impact||2,10)));return `<div class="locked-item"><b>🚫 ${x.ativo||'ATIVO'}</b><br>${'🐂'.repeat(imp)} ${x.currency||''} — ${x.event||'Evento econômico'}<br><span style="color:#6f8095">Notícia: ${x.horario||'--:--'} | Liberação: ${x.liberacao||'--:--'}</span></div>`}).join(''):'<div class="empty">Nenhum ativo bloqueado por notícia no momento.</div>';
+}
+function setText(id,v){const e=document.getElementById(id);if(e)e.innerText=v}
+function renderProbability(prob,id='prob-value',fill='prob-fill'){const p=Math.max(0,Math.min(100,Number(prob)||0));setText(id,p?p+'%':'--%');const e=document.getElementById(fill);if(e)e.style.width=p+'%'}
+function renderSignal(d){
+    const a=d.analise_atual||{};
+    const alerta=d.alerta||null;
+    const confirmado=d.sinal_confirmado||null;
+    // Prioridade: confirmado > alerta > análise corrente. Assim outro ativo analisado
+    // pelo bot nunca substitui o ativo da entrada confirmada.
+    const fonte=confirmado||alerta||a;
+    const dir=(fonte.direcao||fonte.sinal||null);
+    const prob=Number(fonte.probabilidade||0);
+    const ativo=fonte.ativo||d.ativo_atual||'AGUARDANDO';
+    const tf=Number(fonte.tf||d.timeframe||5);
+    const entrada=fonte.str_entrada||fonte.entrada||d.entry_time||'--:--:--';
+    const expiracao=fonte.str_saida||fonte.expiracao||'--:--';
+    const est=fonte.estrategia_fmt||a.estrategia_fmt||'Motor aguardando análise';
+    const conf=fonte.confluencia!=null?fonte.confluencia:a.confluencia;
+    const analise=fonte.analise||a;
+
+    const panel=document.getElementById('panel-text');
+    if(panel){
+        if(confirmado){
+            const corConfirmada=dir==='CALL'?'#34d399':dir==='PUT'?'#fb7185':'#67e8f9';
+            panel.innerHTML=`<div style=\"text-align:center;line-height:1.6\"><b style=\"color:#67e8f9\">🎯 SINAL CONFIRMADO — ENTRADA AGORA!</b><br><b style=\"font-size:15px;color:${corConfirmada}\">${ativo} • ${dir||'--'}</b><br><span style=\"color:#cbd5e1\">Probabilidade: ${prob||'--'}% • M${tf}</span><br><span style=\"color:#94a3b8\">Entrada: ${entrada} • Expiração: ${expiracao}</span></div>`;
+        }else if(alerta){
+            const corAlerta=dir==='CALL'?'#34d399':dir==='PUT'?'#fb7185':'#fbbf24';
+            panel.innerHTML=`<div style=\"text-align:center;line-height:1.6\"><b style=\"color:#fbbf24\">⚠️ PRÉ-ALERTA</b><br><b style=\"font-size:15px;color:${corAlerta}\">${ativo} • ${dir||'--'}</b><br><span style=\"color:#cbd5e1\">Probabilidade: ${prob||'--'}% • M${tf}</span><br><span style=\"color:#94a3b8\">Entrada prevista: ${entrada} • Expiração: ${expiracao}</span></div>`;
+        }else if(d.rodando && Number(d.startup_lock_remaining||0)>0){
+            panel.innerHTML=`<div style=\"text-align:center;color:#f59e0b;line-height:1.6\">🛡️ <b>TRAVA DE SEGURANÇA</b><br>30 VELAS VALIDADAS • AGUARDANDO 5 MINUTOS<br><span style=\"color:#00d9ff\">LIBERAÇÃO EM ${Math.ceil(Number(d.startup_lock_remaining))}s</span></div>`;
+        }else if(!d.warmup_concluido && d.rodando){
+            panel.innerHTML=`<div style=\"text-align:center;color:#f59e0b;line-height:1.6\">🛡️ <b>TRAVA DE SEGURANÇA</b><br>ANALISANDO AS ÚLTIMAS 30 VELAS<br><span style=\"color:#00d9ff\">${d.warmup_ativos_analisados||0} ATIVOS VALIDADOS</span></div>`;
+        }else{
+            panel.innerHTML=d.html||'Aguardando Comando...';
         }
+    }
 
-        function solicitarPermissaoNotificacao() {
-            if (!('Notification' in window)) {
-                alert('Este navegador não suporta notificações de sistema.');
-                return;
-            }
+    setText('asset-tag',ativo);
+    setText('analysis-asset',ativo);
+    setText('signal-asset-2',ativo);
+    setText('signal-tf','M'+tf);
+    setText('signal-tf-2','M'+tf);
 
-            Notification.requestPermission().then(permission => {
-                if (permission === 'granted') {
-                    const btn = document.getElementById('btn-enable-notify');
-                    btn.innerText = "✅ NOTIFICAÇÕES NATIVAS ATIVADAS!";
-                    btn.style.borderColor = "#10b981";
-                    btn.style.color = "#10b981";
+    ['signal-direction','signal-direction-2'].forEach(id=>{
+        const e=document.getElementById(id);
+        if(!e)return;
+        e.className='signal-direction '+(dir==='CALL'?'signal-call':dir==='PUT'?'signal-put':'signal-wait');
+        e.innerText=dir||'AGUARDANDO';
+    });
 
-                    // Não envia uma notificação de teste imediatamente após a permissão.
-                    // Isso evita uma notificação desnecessária no momento da ativação.
-                } else {
-                    alert('Permissão de Notificação Recusada.');
-                }
-            });
-        }
+    renderProbability(prob);
+    renderProbability(prob,'prob-value-3','prob-fill-3');
+    setText('prob-value-2',prob?prob+'%':'--%');
+    setText('confluence-overall',conf!=null?'Confluência técnica: '+Number(conf).toFixed(0)+'/100':'Confluência técnica: --/100');
+    setText('confluence-overall-2',conf!=null?'Confluência '+Number(conf).toFixed(0)+'/100':'Confluência --/100');
+    setText('signal-strategy',est);
+    setText('signal-strategy-2',est);
+    setText('analysis-direction',dir||'Sem sinal');
+    setText('signal-entry',entrada);
+    setText('signal-entry-2',entrada);
+    setText('signal-expiry',expiracao);
+    setText('signal-expiry-2',expiracao);
 
-        async function dispararNotificacaoNativa(titulo, corpo, notifId) {
-            if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    if(confirmado){
+        setText('signal-status','CONFIRMADO • '+ativo);
+    }else if(alerta){
+        setText('signal-status','⚠️ ALERTA • '+ativo);
+    }else{
+        setText('signal-status',d.rodando?'ANALISANDO':'PARADO');
+    }
+    setText('robot-status',d.rodando?'ONLINE':'PARADO');
+    setText('top-status',d.rodando?'ANALISANDO':'ONLINE');
 
-            const id = String(notifId || '');
-            const agora = Date.now();
+    renderConfluence(analise,'confluence-list');
+    renderReasons(analise,'analysis-reasons');
+    renderConfluence(analise,'confluence-list-2');
+    renderReasons(analise,'analysis-reasons-2');
+    drawChart(analise.grafico||[],'market-chart');
+    drawChart(analise.grafico||[],'market-chart-2');
+}
 
-            // Evita repetir a mesma notificação após recarregar/consultar o painel.
-            const ultimoId = localStorage.getItem('vision_last_notif_id') || '';
-            const ultimaHora = Number(localStorage.getItem('vision_last_notif_at') || '0');
-
-            if (id && id === ultimoId) return;
-            if (ultimaHora && (agora - ultimaHora) < NATIVE_NOTIFICATION_COOLDOWN_MS) return;
-
-            try {
-                if ('serviceWorker' in navigator) {
-                    const reg = await navigator.serviceWorker.ready;
-
-                    await reg.showNotification(titulo, {
-                        body: corpo,
-                        // Sem vibração repetitiva e sem renotify: comportamento menos intrusivo.
-                        tag: 'vision-signal',
-                        renotify: false,
-                        requireInteraction: false
-                    });
-                } else {
-                    new Notification(titulo, { body: corpo });
-                }
-
-                if (id) localStorage.setItem('vision_last_notif_id', id);
-                localStorage.setItem('vision_last_notif_at', String(agora));
-            } catch (err) {
-                console.warn('Não foi possível exibir a notificação:', err);
-            }
-        }
-
-        function openBroker(url) {
-            const brokerContainer = document.getElementById('broker-view-container');
-            document.getElementById('brokerIframe').src = url;
-            brokerContainer.style.display = 'flex';
-        }
-
-        function closeBrokerView() {
-            document.getElementById('broker-view-container').style.display = 'none';
-            document.getElementById('brokerIframe').src = '';
-        }
-
-        function toggleHistorico() {
-            const box = document.getElementById('box-historico');
-            if (box.style.display === 'block') {
-                box.style.display = 'none';
-            } else {
-                box.style.display = 'block';
-            }
-        }
-
-        function toggleFerramentas() {
-            const box = document.getElementById('ferramentas-box');
-            box.style.display = box.style.display === 'block' ? 'none' : 'block';
-        }
-
-        function toggleTelegram() {
-            fetch('/command/telegram_toggle').then(r => r.json()).then(data => {
-                if (data.ok) {
-                    const b = document.getElementById('btn-telegram-toggle');
-                    b.innerText = data.telegram_ativo ? '🟢 ENVIO TELEGRAM ATIVADO' : '🔴 ENVIO TELEGRAM DESATIVADO';
-                } else if (data.error) alert(data.error);
-            });
-        }
-
-        function sendCommand(cmd) {
-            fetch('/command/' + cmd).then(r => r.json()).then(data => {
-                if(data.redirect) window.location.href = data.redirect;
-            });
-        }
-
-        let timerState = { candleEnd: 0, entryEnd: 0, running: false, entryTime: null, aguardando: false };
-        let serverClockOffset = 0;
-
-        function formatarContagem(segundos) {
-            const total = Math.max(0, Math.ceil(Number(segundos) || 0));
-            const m = Math.floor(total / 60);
-            const sec = total % 60;
-            return String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
-        }
-
-        function atualizarRelogios() {
-            const agora = (Date.now() / 1000) + serverClockOffset;
-            const candleEl = document.getElementById('candle-timer');
-            if (candleEl) {
-                candleEl.innerText = timerState.running
-                    ? ('⏳ FECHAMENTO DO CANDLE: ' + formatarContagem(timerState.candleEnd - agora))
-                    : '⏸ CANDLE: PAUSADO';
-            }
-
-            const entryEl = document.getElementById('entry-timer');
-            const clockEl = document.getElementById('entry-clock');
-            if (entryEl && clockEl) {
-                const restante = timerState.entryEnd ? (timerState.entryEnd - agora) : 0;
-                if (timerState.entryTime && restante > 0) {
-                    entryEl.innerText = '🎯 ENTRADA EM: ' + formatarContagem(restante);
-                    clockEl.innerText = '⏰ HORÁRIO EXATO DA ENTRADA: ' + timerState.entryTime;
-                } else if (timerState.entryTime && timerState.aguardando) {
-                    entryEl.innerText = '🎯 ENTRADA CONFIRMADA — EXECUTE NO HORÁRIO INDICADO';
-                    clockEl.innerText = '⏰ HORÁRIO DA ENTRADA: ' + timerState.entryTime;
-                } else {
-                    entryEl.innerText = '🎯 AGUARDANDO SINAL DE ENTRADA';
-                    clockEl.innerText = 'Horário exato: --:--:--';
-                }
-            }
-        }
-
-        setInterval(atualizarRelogios, 1000);
-
-        async function atualizarPainel() {
-            try {
-                const r = await fetch('/status', { cache: 'no-store' });
-                const data = await r.json();
-                // Sincroniza os relógios com o servidor apenas quando chega um novo estado.
-                serverClockOffset = Number(data.server_now || (Date.now() / 1000)) - (Date.now() / 1000);
-                timerState.running = !!data.rodando;
-                timerState.candleEnd = Number(data.candle_end_ts || 0);
-                timerState.entryEnd = data.entry_end_ts ? Number(data.entry_end_ts) : 0;
-                timerState.entryTime = data.entry_time || null;
-                timerState.aguardando = !!data.aguardando;
-                atualizarRelogios();
-                const panel = document.getElementById('panel-text');
-                if(panel && data.html) panel.innerHTML = data.html;
-                if(document.getElementById('win-count')) document.getElementById('win-count').innerText = data.wins;
-                if(document.getElementById('loss-count')) document.getElementById('loss-count').innerText = data.reds;
-                if(document.getElementById('wr-text')) document.getElementById('wr-text').innerText = data.winrate + "%";
-                if(document.getElementById('wr-fill')) document.getElementById('wr-fill').style.width = data.winrate + "%";
-                if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
-                
-                if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
-                if(document.getElementById('current-asset')) {
-                    if(data.rodando) {
-                        document.getElementById('current-asset').innerText = data.ativo_atual || "VARRENDO...";
-                    } else {
-                        document.getElementById('current-asset').innerText = "SISTEMA PAUSADO";
-                    }
-                }
-
-                if(data.notificacao && data.notificacao.id !== lastNotifId) {
-                    lastNotifId = data.notificacao.id;
-                    dispararNotificacaoNativa(data.notificacao.titulo, data.notificacao.corpo, data.notificacao.id);
-                }
-
-                let histHtml = "";
-                if(data.historico) {
-                    data.historico.forEach(item => {
-                        let cor = "#64748b";
-                        if(item.res.includes("Win")) cor = "#10b981";
-                        if(item.res.includes("Red")) cor = "#ef4444";
-                        histHtml += `<div class="historico-item"><span>🕒 ${item.sinal}</span><b style="color:${cor}">${item.res}</b></div>`;
-                    });
-                }
-                if(document.getElementById('lista-sinais')) document.getElementById('lista-sinais').innerHTML = histHtml || "<div style='text-align:center; font-size:11px; color:#64748b;'>Nenhum sinal no histórico.</div>";
-            } catch (err) {
-                console.warn('Falha ao atualizar o painel:', err);
-            } finally {
-                // Atualiza dados do painel sem usar a consulta HTTP como relógio.
-                // Os cronômetros continuam correndo localmente de 1 em 1 segundo.
-                setTimeout(atualizarPainel, 1000);
-            }
-        }
-
-        atualizarPainel();
-
-        window.addEventListener('load', () => {
-            if (window.Notification && Notification.permission === 'granted') {
-                document.getElementById('btn-enable-notify').innerText = "✅ NOTIFICAÇÕES NATIVAS ATIVADAS";
-                document.getElementById('btn-enable-notify').style.borderColor = "#10b981";
-                document.getElementById('btn-enable-notify').style.color = "#10b981";
-            }
-        });
-    </script>
+function renderConfluence(a,id){const box=document.getElementById(id);if(!box)return;const items=Array.isArray(a.confluencias)?a.confluencias:[];box.innerHTML=items.length?items.map(x=>`<div class="conf-row"><div class="conf-name">${x.nome||'Indicador'}</div><div class="conf-bar"><div class="conf-fill" style="width:${Math.max(0,Math.min(100,Number(x.pontos)||0))*5}%"></div></div><div class="conf-points">${x.pontos||0}/20</div></div>`).join(''):'<div class="empty">Aguardando dados do mercado...</div>'}
+function renderReasons(a,id){const box=document.getElementById(id);if(!box)return;const items=Array.isArray(a.motivos)?a.motivos:[];box.innerHTML=items.length?items.map(x=>`<div class="reason"><b class="${x.status==='ok'?'ok':x.status==='warn'?'warn':'bad'}">${x.status==='ok'?'✓':x.status==='warn'?'•':'×'} ${x.nome||'Indicador'}</b><div>${x.detalhe||''}</div></div>`).join(''):'<div class="empty">Sem diagnóstico disponível.</div>'}
+function drawChart(vals,id){const c=document.getElementById(id);if(!c)return;const ctx=c.getContext('2d');const rect=c.getBoundingClientRect();const w=Math.max(300,Math.floor(rect.width)),h=Math.max(120,Math.floor(rect.height));const dpr=window.devicePixelRatio||1;c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.strokeStyle='#172333';ctx.lineWidth=1;for(let i=1;i<4;i++){const y=i*h/4;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}if(!Array.isArray(vals)||vals.length<2){ctx.fillStyle='#64748b';ctx.font='11px Inter';ctx.fillText('Aguardando candles válidos...',12,20);return}const min=Math.min(...vals),max=Math.max(...vals),range=max-min||1;const pts=vals.map((v,i)=>[i*(w-18)/(vals.length-1)+9,h-10-((v-min)/range)*(h-24)]);ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.strokeStyle='#00d9ff';ctx.lineWidth=2.2;ctx.stroke();ctx.lineTo(pts[pts.length-1][0],h-10);ctx.lineTo(pts[0][0],h-10);ctx.closePath();ctx.fillStyle='rgba(0,217,255,.07)';ctx.fill();const last=pts[pts.length-1];ctx.beginPath();ctx.arc(last[0],last[1],3.5,0,Math.PI*2);ctx.fillStyle='#22c55e';ctx.fill()}
+function renderHistory(hist){const body=document.getElementById('history-table-body');if(!body)return;if(!hist.length){body.innerHTML='<tr><td colspan="3" class="empty">Nenhum histórico.</td></tr>';return}body.innerHTML=hist.map(x=>{const raw=String(x.res||'--');const r=raw.toLowerCase();const cls=r.includes('red')?'history-red':(r.includes('win')?'history-win':'');const label=raw.replace('WinG1','WIN G1').replace('winG1','WIN G1');return `<tr><td>#${x.id||'--'}</td><td>${x.sinal||'--'}</td><td><span class="history-result ${cls}">${label}</span></td></tr>`}).join('')}
+function renderResumoHistorico(r){const make=(arr)=>arr&&arr.length?arr.map(x=>`<div class="history-item"><span>${x.nome}</span><b>${x.assertividade}% <span style="color:#66758a">(${x.wins}W/${x.reds}R)</span></b></div>`).join(''):'<div class="empty">Sem dados suficientes.</div>';const a=document.getElementById('strategy-summary'),b=document.getElementById('asset-summary');if(a)a.innerHTML=make((r||{}).estrategias||[]);if(b)b.innerHTML=make((r||{}).ativos||[])}
+function atualizarSessao(d){setText('win-count',d.wins||0);setText('loss-count',d.reds||0);setText('wr-text',(d.winrate||0)+'%');setText('g1-count',d.g1_sessao||0);setText('session-count',(d.sinais_sessao_total||0)+' operações');const f=document.getElementById('wr-fill');if(f)f.style.width=Math.max(0,Math.min(100,Number(d.winrate)||0))+'%'}
+function formatarTempo(seg){seg=Math.max(0,Math.floor(Number(seg)||0));const h=Math.floor(seg/3600),m=Math.floor((seg%3600)/60),s=seg%60;return h>0?String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'):String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')}
+function formatarHora(ts){if(!ts)return'--:--:--';return new Date(Number(ts)*1000).toLocaleTimeString('pt-BR',{hour12:false})}
+function atualizarTimerMercado(d){const end=Number(d.candle_end_ts||0),start=Number(d.candle_start_ts||0),server=Number(d.server_now||Date.now()/1000),now=server+((Date.now()/1000)-server);const remaining=Math.max(0,end-now);const elapsed=Math.max(0,Math.min(end-start,now-start));const total=Math.max(1,Number(d.candle_total||((d.timeframe||5)*60)));const pct=Math.max(0,Math.min(100,(elapsed/total)*100));setText('candle-countdown',formatarTempo(remaining));const fill=document.getElementById('candle-fill');if(fill)fill.style.width=pct+'%';setText('candle-window',formatarHora(start)+' → '+formatarHora(end));const entryTs=Number(d.entry_end_ts||0);const entryRemaining=entryTs?Math.max(0,entryTs-now):0;const confirmTs=Number(d.confirmation_ts||0);const confirmRemaining=confirmTs?Math.max(0,confirmTs-now):0;const entrada=d.entry_time||'--:--:--';setText('entry-countdown',entryTs?(entrada+' • '+formatarTempo(entryRemaining)):(entrada==='--:--:--'?'--:--:--':entrada));const note=document.getElementById('timer-note');if(note){if(d.sinal_confirmado){note.innerText='🎯 Entrada confirmada • expiração: '+((d.sinal_confirmado||{}).str_saida||'--:--:--');note.className='timer-note timer-confirm'}else if(d.alerta){note.innerText=confirmRemaining<=5&&confirmRemaining>0?'⚡ CONFIRMAÇÃO EM '+Math.ceil(confirmRemaining)+'s':'⚠️ Confirmação programada 5s antes da virada • entrada '+entrada;note.className='timer-note '+(confirmRemaining<=5&&confirmRemaining>0?'timer-alert':'')}else if(Number(d.startup_lock_remaining||0)>0){note.innerText='🛡️ Trava inicial: '+Math.ceil(Number(d.startup_lock_remaining))+'s restantes • analisando mercado';note.className='timer-note timer-alert'}else{note.innerText='Aguardando uma confluência válida para programar a entrada.';note.className='timer-note'}}}
+async function atualizarPainel(){try{const r=await fetch('/status',{cache:'no-store'});const d=await r.json();if(d.redirect){location.href=d.redirect;return}latestData=d;atualizarAssetPickers(d);renderSignal(d);atualizarSessao(d);atualizarTimerMercado(d);atualizarAtivosBloqueados(d.news_blocked_assets||[]);const ng=d.news_guard_status||'AGUARDANDO CALENDÁRIO';setText('news-guard-status',ng);setText('guard-detail-status',ng);const blocked=(d.news_blocked_assets||[]).length;const color=blocked?'#fb7185':ng.includes('INDISPONÍVEL')?'#fbbf24':'#86efac';['news-guard-status','guard-detail-status'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.color=color});const b=document.getElementById('guard-badge');if(b)b.innerText=blocked?'● PROTEGENDO':'● ATIVO';const b2=document.getElementById('guard-badge-2');if(b2)b2.innerText=blocked?'● PROTEGENDO':'● ATIVO';const result=document.getElementById('result-area');if(result)result.style.display=d.aguardando?'grid':'none';renderHistory(d.historico||[]);renderResumoHistorico(d.historico_resumo||{});if(d.notificacao&&d.notificacao.id!==lastNotifId){lastNotifId=d.notificacao.id;dispararNotificacaoNativa(d.notificacao.titulo,d.notificacao.corpo,d.notificacao.id)}}catch(e){setText('top-status','REDE');}finally{setTimeout(atualizarPainel,1000)}}
+window.addEventListener('resize',()=>{if(latestData){const f=latestData.sinal_confirmado||latestData.alerta||latestData.analise_atual||{};drawChart((f.analise||f).grafico||[],'market-chart');drawChart((f.analise||f).grafico||[],'market-chart-2')}});
+document.getElementById('bt-market')?.addEventListener('change',e=>renderAssetPicker('bt-assets',e.target.value,[]));
+const opPicker=document.getElementById('operating-assets'); if(opPicker) opPicker.addEventListener('change',()=>saveOperatingAssets());
+atualizarPainel();
+setInterval(()=>{if(latestData)atualizarTimerMercado(latestData)},1000);
+</script>
 </body>
 </html>
 """
@@ -1065,6 +1041,31 @@ def atualizar_ultimo_sinal_bd(email, resultado):
     except Exception:
         pass
 
+def resumir_historico(historico):
+    """Resume os últimos registros por estratégia e ativo sem alterar o banco legado."""
+    por_estrategia = {}
+    por_ativo = {}
+    for item in historico or []:
+        sinal = str(item.get("sinal", ""))
+        resultado = str(item.get("res", "")).lower()
+        partes = [p.strip() for p in sinal.split("|")]
+        ativo = partes[0] if partes else "OUTRO"
+        estrategia = partes[2] if len(partes) >= 3 else "Não informado"
+        for mapa, chave in ((por_estrategia, estrategia), (por_ativo, ativo)):
+            reg = mapa.setdefault(chave, {"total": 0, "wins": 0, "reds": 0})
+            reg["total"] += 1
+            if "win" in resultado:
+                reg["wins"] += 1
+            elif "red" in resultado:
+                reg["reds"] += 1
+    def finalizar(mapa):
+        out=[]
+        for nome, reg in mapa.items():
+            concl=reg["wins"]+reg["reds"]
+            out.append({"nome":nome,"total":reg["total"],"wins":reg["wins"],"reds":reg["reds"],"assertividade":round(reg["wins"]/concl*100,1) if concl else 0})
+        return sorted(out,key=lambda x:(-x["total"],-x["assertividade"],x["nome"]))[:8]
+    return {"estrategias":finalizar(por_estrategia),"ativos":finalizar(por_ativo)}
+
 # ================= BOT CONFIGS & ESTRATÉGIAS =================
 LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
 
@@ -1101,79 +1102,439 @@ MAPA_TICKERS = {}
 for par in ATIVOS_BASE["FOREX_ABERTO"]: MAPA_TICKERS[par] = par + "=X"
 for par in ATIVOS_BASE["CRIPTO_ABERTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
 for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X")
+
 for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
+def ativos_por_mercado(mkt):
+    grupos = {
+        "TODOS": ["FOREX_ABERTO", "CRIPTO_ABERTO", "FOREX_OTC", "CRIPTO_OTC"],
+        "ABERTO_TODOS": ["FOREX_ABERTO", "CRIPTO_ABERTO"],
+        "OTC_TODOS": ["FOREX_OTC", "CRIPTO_OTC"],
+        "FOREX_ABERTO": ["FOREX_ABERTO"],
+        "CRIPTO_ABERTO": ["CRIPTO_ABERTO"],
+        "FOREX_OTC": ["FOREX_OTC"],
+        "CRIPTO_OTC": ["CRIPTO_OTC"],
+    }
+    out=[]
+    for grupo in grupos.get(mkt, grupos["TODOS"]):
+        for ativo in ATIVOS_BASE.get(grupo, []):
+            if ativo not in out:
+                out.append(ativo)
+    return out
+
+# ================= TRAVA DE NOTÍCIAS / CALENDÁRIO INVESTING.COM =================
+# O Investing.com classifica o impacto dos eventos com 1, 2 ou 3 estrelas/touros.
+# 1 = baixo, 2 = moderado e 3 = alto. A proteção do Vision Pro usa somente 2 e 3.
+NEWS_MIN_IMPACT = 2
+NEWS_LOCK_BEFORE_MIN = 30
+NEWS_LOCK_AFTER_MIN = 30
+NEWS_CACHE_TTL = 60
+
+# IMPORTANTE: se o Investing.com estiver temporariamente indisponível, o bot NÃO
+# bloqueia todos os ativos. Ele continua a análise normal e tenta consultar a fonte
+# novamente no próximo ciclo. Assim, somente uma notícia realmente identificada
+# pelo calendário pode bloquear um ativo.
+NEWS_FAIL_OPEN = True
+
+INVESTING_CALENDAR_CACHE = {
+    "updated": 0.0,
+    "events": [],
+    "ok": False,
+    "error": "",
+}
+INVESTING_CALENDAR_LOCK = threading.Lock()
+
+# Códigos de países usados pelo calendário do Investing.com para as moedas dos ativos.
+# O código 12 é GMT -3:00 (horário de Brasília) no calendário do Investing.com.
+INVESTING_COUNTRIES = "5,4,72,35,25,6,12,43"
+INVESTING_TIMEZONE = "12"
+
+
+def _limpar_html_investing(valor):
+    if not valor:
+        return ""
+    valor = re.sub(r"<script[^>]*>.*?</script>", " ", str(valor), flags=re.I | re.S)
+    valor = re.sub(r"<style[^>]*>.*?</style>", " ", valor, flags=re.I | re.S)
+    valor = re.sub(r"<[^>]+>", " ", valor)
+    return re.sub(r"\s+", " ", html_lib.unescape(valor)).strip()
+
+
+def _parsear_datetime_investing(valor, origem="local"):
+    """Converte data/hora do Investing.com sem deslocar 3 horas por engano."""
+    if valor is None or valor == "":
+        return None
+
+    bruto = str(valor).strip()
+
+    # event_timestamp pode aparecer como timestamp Unix em algumas respostas.
+    if re.fullmatch(r"\d{10}(?:\.\d+)?", bruto):
+        try:
+            return datetime.fromtimestamp(float(bruto), tz=pytz.utc).astimezone(FUSO_SP)
+        except Exception:
+            return None
+
+    # Algumas versões usam ISO com timezone.
+    try:
+        iso = bruto.replace("Z", "+00:00")
+        dt_iso = datetime.fromisoformat(iso)
+        if dt_iso.tzinfo is not None:
+            return dt_iso.astimezone(FUSO_SP)
+    except Exception:
+        pass
+
+    for fmt in (
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y-%m-%d %H:%M",
+    ):
+        try:
+            dt = datetime.strptime(bruto, fmt)
+            if origem == "utc":
+                return pytz.utc.localize(dt).astimezone(FUSO_SP)
+            # Com timeZone=12, o Investing devolve o horário do calendário em GMT-3.
+            return FUSO_SP.localize(dt)
+        except ValueError:
+            continue
+    return None
+
+
+def _extrair_eventos_investing(html_resposta):
+    """Extrai somente eventos de 2 ou 3 estrelas/touros do calendário."""
+    if not html_resposta:
+        return []
+
+    texto = html_resposta.decode("utf-8", errors="ignore") if isinstance(html_resposta, bytes) else str(html_resposta)
+
+    # O endpoint Service retorna JSON com o HTML dentro de data.
+    try:
+        obj = json.loads(texto)
+        if isinstance(obj, dict) and obj.get("data"):
+            texto = obj["data"]
+    except Exception:
+        pass
+
+    # Aceita tanto js-event-item quanto eventRowId_ (variações do Investing).
+    rows = re.findall(
+        r"<tr\b[^>]*(?:class=[\"'][^\"']*js-event-item[^\"']*|id=[\"']eventRowId_[^\"']+)[^>]*>.*?</tr>",
+        texto,
+        flags=re.I | re.S,
+    )
+
+    # Fallback mais amplo para respostas do widget/espelho.
+    if not rows:
+        rows = re.findall(r"<tr\b[^>]*id=[\"'][^\"']*eventRowId[^\"']*[\"'][^>]*>.*?</tr>", texto, flags=re.I | re.S)
+
+    eventos = []
+    vistos = set()
+
+    for row in rows:
+        # data-event-datetime normalmente representa o horário exibido pelo calendário.
+        m_dt = re.search(r'data-event-datetime=[\"\']([^\"\']+)', row, flags=re.I)
+        if m_dt:
+            dt_evento = _parsear_datetime_investing(m_dt.group(1), origem="local")
+        else:
+            m_ts = re.search(r'event_timestamp=[\"\']([^\"\']+)', row, flags=re.I)
+            dt_evento = _parsear_datetime_investing(m_ts.group(1) if m_ts else "", origem="utc")
+        if not dt_evento:
+            continue
+
+        # Moeda: o Investing usa td.flagCur e, em algumas versões, title/data-attr.
+        m_cur = re.search(
+            r'<td[^>]*class=["\'][^"\']*flagCur[^"\']*["\'][^>]*>(.*?)</td>',
+            row,
+            flags=re.I | re.S,
+        )
+        currency_text = _limpar_html_investing(m_cur.group(1) if m_cur else "")
+        currencies = re.findall(r"\b[A-Z]{3}\b", currency_text.upper())
+        currency = currencies[0] if currencies else ""
+        if not currency and m_cur:
+            m_title = re.search(r'(?:title|data-currency)=["\']([A-Za-z]{3})["\']', m_cur.group(1), flags=re.I)
+            currency = m_title.group(1).upper() if m_title else ""
+
+        # Impacto: 2/3 grayFullBullishIcon = 2/3 touros/estrelas.
+        m_sent = re.search(
+            r'<td[^>]*class=["\'][^"\']*sentiment[^"\']*["\'][^>]*>(.*?)</td>',
+            row,
+            flags=re.I | re.S,
+        )
+        sentiment_html = m_sent.group(1) if m_sent else ""
+        impacto = len(re.findall(r"grayFullBullishIcon", sentiment_html, flags=re.I))
+
+        # Fallbacks para versões que expõem bull1/bull2/bull3 ou quantidade de ícones.
+        if impacto <= 0:
+            m_bull = re.search(r'data-img_key=["\']bull([1-3])["\']', sentiment_html, flags=re.I)
+            impacto = int(m_bull.group(1)) if m_bull else 0
+        if impacto <= 0:
+            bull_classes = re.findall(r"bull(?:ish)?(?:Icon)?(?:[ _-]?(?:1|2|3))?", sentiment_html, flags=re.I)
+            if bull_classes:
+                impacto = min(3, len(bull_classes))
+
+        if not currency or impacto < NEWS_MIN_IMPACT:
+            continue
+
+        m_event = re.search(
+            r'<td[^>]*class=["\'][^"\']*event[^"\']*["\'][^>]*>(.*?)</td>',
+            row,
+            flags=re.I | re.S,
+        )
+        nome_evento = _limpar_html_investing(m_event.group(1) if m_event else "") or "Evento econômico"
+
+        chave = (dt_evento.isoformat(), currency, impacto, nome_evento)
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        eventos.append({
+            "datetime": dt_evento,
+            "currency": currency,
+            "impact": impacto,
+            "event": nome_evento,
+        })
+
+    eventos.sort(key=lambda x: x["datetime"])
+    return eventos
+
+
+def atualizar_calendario_investing(force=False):
+    """Consulta o Investing.com e mantém apenas eventos reais de 2/3 touros."""
+    agora_ts = time.time()
+    with INVESTING_CALENDAR_LOCK:
+        if not force and (agora_ts - INVESTING_CALENDAR_CACHE.get("updated", 0)) < NEWS_CACHE_TTL:
+            return INVESTING_CALENDAR_CACHE.get("ok", False)
+
+        hoje = agora_brasilia().date()
+        amanha = hoje + timedelta(days=1)
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/140.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "X-Requested-With": "XMLHttpRequest",
+            "Origin": "https://www.investing.com",
+            "Referer": "https://www.investing.com/economic-calendar/",
+        }
+
+        eventos = []
+        erro = ""
+        sucesso_fonte = False
+
+        # 1) Endpoint oficial usado pelo calendário.
+        urls_api = [
+            "https://br.investing.com/economic-calendar/Service/getCalendarFilteredData",
+            "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData",
+        ]
+
+        for url in urls_api:
+            try:
+                with requests.Session() as sess:
+                    base = url.split("/Service/")[0] + "/"
+                    sess.headers.update({"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]})
+                    try:
+                        sess.get(base, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=8)
+                    except Exception:
+                        pass
+
+                    payload = {
+                        "country[]": INVESTING_COUNTRIES.split(","),
+                        "dateFrom": hoje.strftime("%Y-%m-%d"),
+                        "dateTo": amanha.strftime("%Y-%m-%d"),
+                        "timeZone": INVESTING_TIMEZONE,
+                        "timeFilter": "timeRemain",
+                        "currentTab": "custom",
+                        "submitFilters": "1",
+                        "limit_from": "0",
+                    }
+                    resp = sess.post(url, data=payload, headers=headers, timeout=12)
+                    if resp.status_code == 200 and resp.text:
+                        sucesso_fonte = True
+                        eventos = _extrair_eventos_investing(resp.text)
+                        # Resposta válida sem eventos de 2/3 touros é normal.
+                        break
+                    erro = f"HTTP {resp.status_code} em {url}"
+            except Exception as exc:
+                erro = str(exc)
+
+        # 2) Página oficial do calendário como fallback.
+        if not sucesso_fonte:
+            for url in ("https://br.investing.com/economic-calendar/", "https://www.investing.com/economic-calendar/"):
+                try:
+                    resp = requests.get(url, headers={**headers, "X-Requested-With": ""}, timeout=12)
+                    if resp.status_code == 200 and resp.text:
+                        sucesso_fonte = True
+                        eventos = _extrair_eventos_investing(resp.text)
+                        break
+                    erro = f"HTTP {resp.status_code} em {url}"
+                except Exception as exc:
+                    erro = str(exc)
+
+        # 3) Widget oficial do Investing.com: alternativa quando o endpoint principal
+        # estiver protegido/indisponível no servidor do Render.
+        if not sucesso_fonte:
+            widget_url = (
+                "https://sslecal2.investing.com/?"
+                "columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous&"
+                "features=datepicker,timezone&"
+                f"countries={INVESTING_COUNTRIES}&"
+                "calType=week&"
+                f"timeZone={INVESTING_TIMEZONE}&"
+                "lang=12"
+            )
+            try:
+                resp = requests.get(widget_url, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=12)
+                if resp.status_code == 200 and resp.text:
+                    sucesso_fonte = True
+                    eventos = _extrair_eventos_investing(resp.text)
+            except Exception as exc:
+                erro = str(exc)
+
+        INVESTING_CALENDAR_CACHE["updated"] = agora_ts
+
+        if sucesso_fonte:
+            INVESTING_CALENDAR_CACHE["events"] = eventos
+            INVESTING_CALENDAR_CACHE["ok"] = True
+            INVESTING_CALENDAR_CACHE["error"] = ""
+        else:
+            # Não limpa eventos antigos aqui para facilitar diagnóstico, mas o motor
+            # não usa cache antigo quando a fonte não confirmou uma atualização.
+            INVESTING_CALENDAR_CACHE["ok"] = False
+            INVESTING_CALENDAR_CACHE["error"] = erro or "Fonte indisponível"
+
+        return sucesso_fonte
+
+
+def moedas_do_ativo(ativo):
+    base = str(ativo or "").upper().replace("-OTC", "")
+    cripto = {x.replace("-OTC", "") for x in (ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["CRIPTO_OTC"])}
+    if base in cripto:
+        # Notícias macro de USD são aplicadas aos ativos de cripto cotados em USD.
+        return ["USD"]
+    if len(base) >= 6:
+        return [base[:3], base[3:6]]
+    return []
+
+
+def evento_bloqueia_ativo(ativo, agora, eventos=None):
+    """Retorna o evento de 2/3 touros que está dentro da janela do ativo."""
+    moedas = set(moedas_do_ativo(ativo))
+    if not moedas:
+        return None
+
+    eventos = eventos if eventos is not None else INVESTING_CALENDAR_CACHE.get("events", [])
+    inicio_janela = timedelta(minutes=NEWS_LOCK_BEFORE_MIN)
+    fim_janela = timedelta(minutes=NEWS_LOCK_AFTER_MIN)
+    melhor = None
+    distancia_melhor = None
+
+    for evento in eventos:
+        if evento.get("currency") not in moedas or int(evento.get("impact", 0)) < NEWS_MIN_IMPACT:
+            continue
+        dt_evento = evento.get("datetime")
+        if not dt_evento:
+            continue
+        if not (dt_evento - inicio_janela <= agora <= dt_evento + fim_janela):
+            continue
+        distancia = abs((agora - dt_evento).total_seconds())
+        if distancia_melhor is None or distancia < distancia_melhor:
+            distancia_melhor = distancia
+            melhor = evento
+
+    return melhor
+
+
+def ativo_bloqueado_por_noticia(ativo, agora=None):
+    """Compatibilidade: verifica um ativo sem bloquear por falha da fonte."""
+    agora = agora or agora_brasilia()
+    calendario_ok = atualizar_calendario_investing()
+    if not calendario_ok and NEWS_FAIL_OPEN:
+        return False, None
+    evento = evento_bloqueia_ativo(ativo, agora)
+    return evento is not None, evento
+
+
+def resumo_trava_noticias(evento):
+    if not evento:
+        return ""
+    dt = evento.get("datetime")
+    horario = dt.strftime("%H:%M") if hasattr(dt, "strftime") else "--:--"
+    impacto = int(evento.get("impact", NEWS_MIN_IMPACT))
+    touros = "🐂" * max(1, min(3, impacto))
+    return f"🔒 {touros} {evento.get('currency', '')} — {evento.get('event', 'Evento')} às {horario} | trava ±30 min"
+
 # ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
+def _normalizar_candles_fechados(ohlc, tf):
+    """Remove candles incompletos e valores inválidos antes da análise."""
+    try:
+        n = len(ohlc.get("close", []))
+        if n < 2:
+            return None
+        mask = np.isfinite(ohlc["open"]) & np.isfinite(ohlc["high"]) & np.isfinite(ohlc["low"]) & np.isfinite(ohlc["close"])
+        for k in ohlc:
+            ohlc[k] = np.asarray(ohlc[k])[mask]
+        if len(ohlc["close"]) < 2:
+            return None
+        # A análise usa apenas candles fechados. O último candle é descartado
+        # quando ainda estiver dentro da janela corrente do timeframe.
+        ultimo_ts = float(ohlc["time"][-1])
+        agora_ts = time.time()
+        if ultimo_ts + (int(tf) * 60) > agora_ts:
+            for k in ohlc:
+                ohlc[k] = ohlc[k][:-1]
+        return ohlc if len(ohlc["close"]) >= 30 else None
+    except Exception:
+        return None
+
 def get_data_v2(ticker, tf, velas_minimas=30):
+    """Obtém candles reais. Nunca cria candles aleatórios quando uma fonte falha."""
     try:
         base_ticker = ticker
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36',
             'Accept': 'application/json, text/plain, */*'
         }
-        
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d"
         res = requests.get(url, headers=headers, timeout=5.0)
-        
-        if res.status_code == 200 and 'chart' in res.json():
-            data_json = res.json()
-            result = data_json['chart']['result'][0]
-            timestamps = result['timestamp']
-            quote = result['indicators']['quote'][0]
-            
-            ohlc = {
-                "time": np.array(timestamps),
-                "open": np.array(quote['open'], dtype=float),
-                "high": np.array(quote['high'], dtype=float),
-                "low": np.array(quote['low'], dtype=float),
-                "close": np.array(quote['close'], dtype=float)
-            }
-            
-            idx = ~np.isnan(ohlc["close"])
-            for k in ohlc: 
-                ohlc[k] = ohlc[k][idx]
-                
-            if len(ohlc["close"]) >= velas_minimas:
-                return ohlc
+        if res.status_code == 200:
+            payload = res.json()
+            result = (payload.get('chart') or {}).get('result')
+            if result:
+                result = result[0]
+                timestamps = result.get('timestamp') or []
+                quote = (result.get('indicators') or {}).get('quote', [{}])[0]
+                ohlc = {
+                    "time": np.array(timestamps),
+                    "open": np.array(quote.get('open', []), dtype=float),
+                    "high": np.array(quote.get('high', []), dtype=float),
+                    "low": np.array(quote.get('low', []), dtype=float),
+                    "close": np.array(quote.get('close', []), dtype=float)
+                }
+                fechado = _normalizar_candles_fechados(ohlc, tf)
+                if fechado is not None and len(fechado["close"]) >= velas_minimas:
+                    return fechado
 
         if "-USD" in base_ticker or "USD" in ticker:
             crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
-            url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=100&aggregate={tf}"
-            r_alt = requests.get(url_alt, timeout=5.0).json()
-            
-            if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
-                data_list = r_alt['Data']['Data']
-                closes = np.array([x['close'] for x in data_list], dtype=float)
-                opens = np.array([x['open'] for x in data_list], dtype=float)
-                highs = np.array([x['high'] for x in data_list], dtype=float)
-                lows = np.array([x['low'] for x in data_list], dtype=float)
-                times = np.array([x['time'] for x in data_list])
-                
-                if len(closes) >= velas_minimas:
-                    return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
-        
-        base_val = 1.0850 if "EUR" in ticker else (65000.0 if "BTC" in ticker else 150.0)
-        times = np.array([int(time.time()) - (i * tf * 60) for i in range(velas_minimas, 0, -1)])
-        closes, opens, highs, lows = [], [], [], []
-        c = base_val
-        for _ in range(velas_minimas):
-            o = c + random.uniform(-0.0005, 0.0005)
-            c = o + random.uniform(-0.0008, 0.0008)
-            h = max(o, c) + random.uniform(0.0001, 0.0004)
-            l = min(o, c) - random.uniform(0.0001, 0.0004)
-            opens.append(o)
-            closes.append(c)
-            highs.append(h)
-            lows.append(l)
-
-        return {
-            "time": times,
-            "open": np.array(opens, dtype=float),
-            "high": np.array(highs, dtype=float),
-            "low": np.array(lows, dtype=float),
-            "close": np.array(closes, dtype=float)
-        }
-    except Exception:
+            url_alt = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={crypto_symbol}&tsym=USD&limit=300&aggregate={tf}"
+            r_alt = requests.get(url_alt, timeout=5.0)
+            if r_alt.status_code == 200:
+                payload = r_alt.json()
+                data_list = (payload.get('Data') or {}).get('Data') or []
+                if data_list:
+                    ohlc = {
+                        "time": np.array([x.get('time', 0) for x in data_list]),
+                        "open": np.array([x.get('open', np.nan) for x in data_list], dtype=float),
+                        "high": np.array([x.get('high', np.nan) for x in data_list], dtype=float),
+                        "low": np.array([x.get('low', np.nan) for x in data_list], dtype=float),
+                        "close": np.array([x.get('close', np.nan) for x in data_list], dtype=float)
+                    }
+                    fechado = _normalizar_candles_fechados(ohlc, tf)
+                    if fechado is not None and len(fechado["close"]) >= velas_minimas:
+                        return fechado
+        return None
+    except Exception as e:
+        print(f"⚠️ Falha ao obter dados reais de {ticker}: {e}")
         return None
 
 def calcular_ema(dados, periodo):
@@ -1187,104 +1548,146 @@ def calcular_ema(dados, periodo):
     return ema
 
 # ================= MOTOR DE ESTRATÉGIAS COM SCORE DE PROBABILIDADE =================
-def analisar_estrategia(data, estrategia, i=-1):
+def _rsi_atual(c, periodo=14):
+    if len(c) < periodo + 1:
+        return 50.0
+    delta = np.diff(c)
+    ganhos = np.where(delta > 0, delta, 0.0)
+    perdas = np.where(delta < 0, -delta, 0.0)
+    ganho = np.mean(ganhos[-periodo:])
+    perda = np.mean(perdas[-periodo:])
+    if perda <= 1e-12:
+        return 100.0 if ganho > 0 else 50.0
+    rs = ganho / perda
+    return float(100 - (100 / (1 + rs)))
+
+def _macd_atual(c):
+    ema12 = calcular_ema(c, 12)
+    ema26 = calcular_ema(c, 26)
+    linha = ema12 - ema26
+    sinal = calcular_ema(linha, 9)
+    return float(linha[-1]), float(sinal[-1]), float(linha[-1] - sinal[-1])
+
+def _indicadores_confluencia(data, direcao=None):
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
-    
-    if len(c) < 30: 
+    ema9 = calcular_ema(c, 9)
+    ema21 = calcular_ema(c, 21)
+    rsi = _rsi_atual(c, 14)
+    macd, macd_signal, macd_hist = _macd_atual(c)
+    ma20 = np.mean(c[-20:])
+    std20 = np.std(c[-20:])
+    bb_sup, bb_inf = ma20 + 2 * std20, ma20 - 2 * std20
+    tr = np.maximum(h[-20:] - l[-20:], np.maximum(np.abs(h[-20:] - c[-21:-1]), np.abs(l[-20:] - c[-21:-1]))) if len(c) >= 21 else h[-20:] - l[-20:]
+    atr = float(np.mean(tr)) if len(tr) else 0.0
+    preco = float(c[-1])
+    atr_pct = (atr / preco * 100) if preco else 0.0
+    corpo = abs(c[-1] - o[-1])
+    amplitude = max(h[-1] - l[-1], 1e-12)
+    pavio_sup = h[-1] - max(o[-1], c[-1])
+    pavio_inf = min(o[-1], c[-1]) - l[-1]
+    suporte = float(np.min(l[-20:-1]))
+    resistencia = float(np.max(h[-20:-1]))
+    tendencia = 'ALTA' if ema9[-1] > ema21[-1] and ema21[-1] >= ema21[-4] else ('BAIXA' if ema9[-1] < ema21[-1] and ema21[-1] <= ema21[-4] else 'LATERAL')
+
+    itens=[]
+    def add(nome,pontos,detalhe,status): itens.append({"nome":nome,"pontos":int(max(0,min(20,pontos))),"detalhe":detalhe,"status":status})
+
+    # Tendência
+    if direcao == 'CALL':
+        ok=tendencia=='ALTA'; pts=20 if ok else (10 if tendencia=='LATERAL' else 3)
+        add('Tendência',pts,f"EMA9 {('acima' if ema9[-1]>ema21[-1] else 'abaixo')} da EMA21 • {tendencia}",'ok' if ok else 'warn' if tendencia=='LATERAL' else 'bad')
+    elif direcao == 'PUT':
+        ok=tendencia=='BAIXA'; pts=20 if ok else (10 if tendencia=='LATERAL' else 3)
+        add('Tendência',pts,f"EMA9 {('abaixo' if ema9[-1]<ema21[-1] else 'acima')} da EMA21 • {tendencia}",'ok' if ok else 'warn' if tendencia=='LATERAL' else 'bad')
+    else:
+        add('Tendência',20 if tendencia!='LATERAL' else 10,f"Mercado em {tendencia}",'ok' if tendencia!='LATERAL' else 'warn')
+
+    # RSI
+    if direcao=='CALL':
+        ok=45 <= rsi <= 68; pts=18 if ok else (11 if 35<=rsi<45 or 68<rsi<=75 else 5)
+    elif direcao=='PUT':
+        ok=32 <= rsi <= 55; pts=18 if ok else (11 if 25<=rsi<32 or 55<rsi<=65 else 5)
+    else: ok=False; pts=10
+    add('RSI',pts,f"RSI {rsi:.1f}",'ok' if ok else 'warn')
+
+    # MACD
+    macd_ok=(macd_hist>0) if direcao=='CALL' else ((macd_hist<0) if direcao=='PUT' else False)
+    add('MACD',18 if macd_ok else 7,f"Histograma {'positivo' if macd_hist>0 else 'negativo'}",'ok' if macd_ok else 'warn')
+
+    # Price action
+    bullish = c[-1] > o[-1]
+    bearish = c[-1] < o[-1]
+    rejection = (pavio_inf/amplitude >= .35) if direcao=='CALL' else ((pavio_sup/amplitude >= .35) if direcao=='PUT' else False)
+    pa_ok = (bullish if direcao=='CALL' else bearish if direcao=='PUT' else False) or rejection
+    pa_pts=18 if pa_ok else 7
+    add('Price Action',pa_pts,f"Corpo {corpo/amplitude*100:.0f}% • {'rejeição detectada' if rejection else 'candle direcional'}",'ok' if pa_ok else 'warn')
+
+    # Suporte / resistência
+    dist_sup=abs(preco-suporte)/(preco or 1)*100
+    dist_res=abs(resistencia-preco)/(preco or 1)*100
+    sr_ok=(dist_sup <= max(0.15, atr_pct*1.4)) if direcao=='CALL' else ((dist_res <= max(0.15, atr_pct*1.4)) if direcao=='PUT' else False)
+    add('Suporte/Resist.',15 if sr_ok else 7,f"Sup {dist_sup:.2f}% • Res {dist_res:.2f}%",'ok' if sr_ok else 'warn')
+
+    # Volatilidade
+    vol_ok = 0.02 <= atr_pct <= 1.8
+    add('Volatilidade',11 if vol_ok else 5,f"ATR {atr_pct:.3f}% do preço",'ok' if vol_ok else 'warn')
+
+    # Banda de Bollinger
+    bb_ok=(preco<=bb_inf*1.003) if direcao=='CALL' else ((preco>=bb_sup*.997) if direcao=='PUT' else False)
+    add('Bollinger',12 if bb_ok else 7,f"Preço {'próximo da banda inferior' if preco<=bb_inf else 'próximo da banda superior' if preco>=bb_sup else 'dentro das bandas'}",'ok' if bb_ok else 'warn')
+
+    # Probabilidade heuristicamente calibrada sobre a estratégia existente.
+    soma=sum(x['pontos'] for x in itens); maximo=len(itens)*20
+    confluencia=round((soma/maximo)*100,1) if maximo else 0.0
+    return {
+        'rsi':rsi,'ema9':float(ema9[-1]),'ema21':float(ema21[-1]),'macd':macd,'macd_signal':macd_signal,'macd_hist':macd_hist,
+        'atr_pct':atr_pct,'tendencia':tendencia,'suporte':suporte,'resistencia':resistencia,
+        'confluencia':confluencia,'confluencias':itens
+    }
+
+def analisar_estrategia(data, estrategia, i=-1):
+    """Motor legado preservado para compatibilidade; retorna sinal e probabilidade em %."""
+    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
+    if len(c) < 30:
         return None, 0
-        
-    sinal = None
-    probabilidade = 0
-
+    sinal=None; probabilidade=0
     if estrategia == "LOGICA_DO_PRECO":
-        tamanho = abs(c[i] - o[i])
-        amplitude = h[i] - l[i]
-        if amplitude > 0 and tamanho > 0:
-            cor = "G" if c[i] > o[i] else "R"
-            p_sup = h[i] - max(o[i], c[i])
-            p_inf = min(o[i], c[i]) - l[i]
-            
-            # Rejeição de Fundo / Suporte
-            if cor == "G" and p_inf >= (amplitude * 0.45) and p_sup <= (amplitude * 0.20):
-                sinal = "CALL"
-                probabilidade = int(82 + (p_inf / amplitude) * 15)
-            # Rejeição de Topo / Resistência
-            elif cor == "R" and p_sup >= (amplitude * 0.45) and p_inf <= (amplitude * 0.20):
-                sinal = "PUT"
-                probabilidade = int(82 + (p_sup / amplitude) * 15)
-            # Exaustão Compradora
-            elif cor == "G" and p_sup >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
-                sinal = "PUT"
-                probabilidade = int(80 + (p_sup / amplitude) * 15)
-            # Exaustão Vendedora
-            elif cor == "R" and p_inf >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
-                sinal = "CALL"
-                probabilidade = int(80 + (p_inf / amplitude) * 15)
-
+        tamanho=abs(c[i]-o[i]); amplitude=h[i]-l[i]
+        if amplitude>0 and tamanho>0:
+            cor='G' if c[i]>o[i] else 'R'; p_sup=h[i]-max(o[i],c[i]); p_inf=min(o[i],c[i])-l[i]
+            if cor=='G' and p_inf>=amplitude*.45 and p_sup<=amplitude*.20: sinal='CALL'; probabilidade=int(82+(p_inf/amplitude)*15)
+            elif cor=='R' and p_sup>=amplitude*.45 and p_inf<=amplitude*.20: sinal='PUT'; probabilidade=int(82+(p_sup/amplitude)*15)
+            elif cor=='G' and p_sup>=amplitude*.50 and tamanho<=amplitude*.35: sinal='PUT'; probabilidade=int(80+(p_sup/amplitude)*15)
+            elif cor=='R' and p_inf>=amplitude*.50 and tamanho<=amplitude*.35: sinal='CALL'; probabilidade=int(80+(p_inf/amplitude)*15)
     elif estrategia == "RSI_MACD_MA":
-        if len(c) >= 26:
-            diff = np.diff(c[-15:])
-            gains = diff[diff > 0]
-            losses = np.abs(diff[diff < 0])
-            avg_gain = np.mean(gains) if len(gains) > 0 else 1e-7
-            avg_loss = np.mean(losses) if len(losses) > 0 else 1e-7
-            rs = avg_gain / avg_loss
-            rsi = 100 - (100 / (1 + rs))
-
-            ema12 = calcular_ema(c, 12)
-            ema26 = calcular_ema(c, 26)
-            macd_line = ema12 - ema26
-            signal_line = calcular_ema(macd_line, 9)
-
-            if rsi <= 35 and macd_line[i] > signal_line[i]:
-                sinal = "CALL"
-                probabilidade = int(83 + (35 - rsi) * 0.5)
-            elif rsi >= 65 and macd_line[i] < signal_line[i]:
-                sinal = "PUT"
-                probabilidade = int(83 + (rsi - 65) * 0.5)
-
+        rsi=_rsi_atual(c,14); macd_line,signal_line,_=_macd_atual(c)
+        if rsi<=35 and macd_line>signal_line: sinal='CALL'; probabilidade=int(83+(35-rsi)*.5)
+        elif rsi>=65 and macd_line<signal_line: sinal='PUT'; probabilidade=int(83+(rsi-65)*.5)
     elif estrategia == "MHI1":
-        cores = []
-        for j in range(i-2, i+1):
-            if c[j] > o[j]: cores.append("G")
-            elif c[j] < o[j]: cores.append("R")
-            else: cores.append("D") 
-            
-        if "D" not in cores:
-            qtd_g = cores.count("G")
-            qtd_r = cores.count("R")
-            
-            ema20 = np.mean(c[-20:])
-            if qtd_g == 2 and qtd_r == 1 and c[i] <= ema20:
-                sinal = "PUT"
-                probabilidade = 84
-            elif qtd_r == 2 and qtd_g == 1 and c[i] >= ema20:
-                sinal = "CALL"
-                probabilidade = 84
-            elif qtd_g == 3:
-                sinal = "PUT"
-                probabilidade = 88
-            elif qtd_r == 3:
-                sinal = "CALL"
-                probabilidade = 88
+        cores=[]
+        for j in range(i-2,i+1): cores.append('G' if c[j]>o[j] else 'R' if c[j]<o[j] else 'D')
+        if 'D' not in cores:
+            qtd_g=cores.count('G');qtd_r=cores.count('R');ema20=np.mean(c[-20:])
+            if qtd_g==2 and qtd_r==1 and c[i]<=ema20: sinal='PUT';probabilidade=84
+            elif qtd_r==2 and qtd_g==1 and c[i]>=ema20: sinal='CALL';probabilidade=84
+            elif qtd_g==3: sinal='PUT';probabilidade=88
+            elif qtd_r==3: sinal='CALL';probabilidade=88
+    elif estrategia in ['REVERSAO','RETRACAO']:
+        std=np.std(c[-20:]);ma=np.mean(c[-20:]);bs=ma+2*std;bi=ma-2*std
+        if c[i]<=bi and c[i]<o[i]: sinal='CALL';dist=(bi-c[i])/(std if std>0 else 1);probabilidade=int(81+min(15,dist*10))
+        elif c[i]>=bs and c[i]>o[i]: sinal='PUT';dist=(c[i]-bs)/(std if std>0 else 1);probabilidade=int(81+min(15,dist*10))
+    probabilidade=min(98,max(75,probabilidade)) if sinal else 0
+    return sinal,probabilidade
 
-    elif estrategia in ["REVERSAO", "RETRACAO"]:
-        std = np.std(c[-20:])
-        ma = np.mean(c[-20:])
-        banda_superior = ma + (2.0 * std)
-        banda_inferior = ma - (2.0 * std)
-
-        if c[i] <= banda_inferior and c[i] < o[i]: 
-            sinal = "CALL"
-            dist = (banda_inferior - c[i]) / (std if std > 0 else 1)
-            probabilidade = int(81 + min(15, dist * 10))
-        elif c[i] >= banda_superior and c[i] > o[i]: 
-            sinal = "PUT"
-            dist = (c[i] - banda_superior) / (std if std > 0 else 1)
-            probabilidade = int(81 + min(15, dist * 10))
-
-    probabilidade = min(98, max(75, probabilidade)) if sinal else 0
-    return sinal, probabilidade
+def analisar_estrategia_detalhada(data, estrategia):
+    sinal, base_prob = analisar_estrategia(data, estrategia)
+    indicadores = _indicadores_confluencia(data, sinal)
+    if not sinal:
+        return None, 0, indicadores
+    # Ajuste moderado baseado nas confluências, mantendo a faixa histórica do Vision Pro.
+    ajuste = round((indicadores['confluencia'] - 65) * 0.12)
+    prob = int(max(75, min(98, base_prob + ajuste)))
+    return sinal, prob, indicadores
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
 @app.route('/sw.js')
@@ -1481,6 +1884,8 @@ def status():
     u_info = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
     historico = buscar_historico_bd(user)
     
+    # O painel deve distinguir claramente três estados: pré-alerta, confirmado e varredura.
+    # O sinal confirmado é persistente e não pode ser substituído pela análise de outro ativo.
     display_texto = st["sinal_permanente"] if (st["aguardando_confirmacao"] and st["sinal_permanente"]) else st["ultimo_sinal"]
 
     response = jsonify({
@@ -1490,21 +1895,141 @@ def status():
         "reds": u_info.get("reds", 0), 
         "winrate": u_info.get("winrate", 0.0), 
         "historico": historico,
+        "historico_resumo": resumir_historico(historico),
         "ativo_atual": st["ativo_atual"],
+        "news_guard_status": st.get("news_guard_status", "AGUARDANDO CALENDÁRIO"),
+        "news_guard_event": st.get("news_guard_event"),
+        "news_blocked_assets": st.get("news_blocked_assets", []),
+        "analise_atual": st.get("analise_atual"),
+        "alerta": st.get("alerta_ativo"),
+        "sinal_confirmado": st.get("sinal_confirmado"),
+        "sinais_sessao_total": st.get("sinais_sessao_total", 0),
+        "g1_sessao": sum(1 for r in st.get("sessao_resultados", []) if r == "g1"),
         "mercado": st["tipo_mercado"],
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
         "notificacao": st["notificacao"],
         "timeframe": st["timeframe"],
+        "selected_assets": st.get("selected_assets", []),
+        "assets_catalog": ATIVOS_BASE,
+        "startup_lock_remaining": max(0.0, st.get("startup_lock_until", 0.0) - time.time()),
         "server_now": time.time(),
+        "candle_start_ts": math.floor(time.time() / (st["timeframe"] * 60)) * (st["timeframe"] * 60),
         "candle_end_ts": (math.floor(time.time() / (st["timeframe"] * 60)) + 1) * (st["timeframe"] * 60),
+        "candle_total": st["timeframe"] * 60,
+        "candle_elapsed": time.time() - (math.floor(time.time() / (st["timeframe"] * 60)) * (st["timeframe"] * 60)),
         "candle_remaining": max(0.0, ((math.floor(time.time() / (st["timeframe"] * 60)) + 1) * (st["timeframe"] * 60)) - time.time()),
-        "entry_end_ts": (((st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else None),
-        "entry_remaining": max(0.0, (st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp() - time.time()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else 0,
-        "entry_time": ((st.get("alerta_ativo") or {}).get("str_entrada") if st.get("alerta_ativo") else (re.search(r"ENTRADA:</b> ([0-9:]+)", st.get("sinal_permanente") or "") or [None, None])[1])
+        "warmup_concluido": bool(st.get("warmup_concluido")),
+        "warmup_status": st.get("warmup_status", "AGUARDANDO 30 VELAS"),
+        "warmup_ativos_analisados": len(st.get("warmup_ativos_analisados", set())),
+        "entry_end_ts": (((st.get("alerta_ativo") or {}).get("prox_minuto_entrada").timestamp()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("prox_minuto_entrada")) else None),
+        "entry_remaining": max(0.0, (st.get("alerta_ativo") or {}).get("prox_minuto_entrada").timestamp() - time.time()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("prox_minuto_entrada")) else 0,
+        "confirmation_ts": (((st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else None),
+        "confirmation_remaining": max(0.0, (st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp() - time.time()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else 0,
+        "entry_time": (
+            (st.get("sinal_confirmado") or {}).get("str_entrada")
+            or (st.get("alerta_ativo") or {}).get("str_entrada")
+            or (re.search(r"ENTRADA:</b> ([0-9:]+)", st.get("sinal_permanente") or "") or [None, None])[1]
+        )
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     return response
+
+@app.route('/set_assets', methods=['POST'])
+def set_assets():
+    user = session.get('user')
+    if not user:
+        return jsonify({"ok": False, "error": "Não autenticado"}), 401
+    st = get_user_state(user)
+    payload = request.get_json(silent=True) or {}
+    assets = payload.get("assets") or []
+    validos = set(sum(ATIVOS_BASE.values(), []))
+    selecionados = []
+    for ativo in assets:
+        if ativo in validos and ativo not in selecionados:
+            selecionados.append(ativo)
+    st["selected_assets"] = selecionados
+    st["warmup_concluido"] = False
+    st["warmup_ativos_analisados"] = set()
+    st["warmup_analysis"] = {}
+    st["warmup_inicio"] = time.time()
+    if st.get("bot_iniciado"):
+        st["startup_lock_until"] = time.time() + 300
+        st["warmup_status"] = "NOVA SELEÇÃO • ANALISANDO 30 VELAS + 5 MINUTOS"
+    return jsonify({"ok": True, "assets": selecionados})
+
+@app.route('/backtest', methods=['POST'])
+def backtest():
+    user = session.get('user')
+    if not user:
+        return jsonify({"ok": False, "error": "Não autenticado"}), 401
+    try:
+        payload = request.get_json(silent=True) or {}
+        tf = int(payload.get("timeframe", 5))
+        if tf not in (1,5,15): tf = 5
+        market = str(payload.get("market", "TODOS"))
+        mercado_assets=set(ativos_por_mercado(market))
+        assets = [a for a in (payload.get("assets") or []) if a in mercado_assets]
+        if not assets:
+            return jsonify({"ok": False, "error": "Selecione pelo menos um ativo."}), 400
+        est_req = str(payload.get("estrategia", "TODAS"))
+        estrategias = LISTA_ESTRATEGIAS.copy() if est_req == "TODAS" else ([est_req] if est_req in LISTA_ESTRATEGIAS else LISTA_ESTRATEGIAS.copy())
+        use_g1 = bool(payload.get("g1", True))
+        limit = max(100, min(int(payload.get("limit", 300)), 600))
+        rows=[]; asset_acc={}; est_acc={}; total_entries=total_wins=total_g1=total_losses=0
+        for ativo in assets:
+            ticker = MAPA_TICKERS.get(ativo, ativo)
+            data = get_data_v2(ticker, tf, velas_minimas=60)
+            if not data or len(data.get("close", [])) < 40:
+                continue
+            n=min(len(data["close"]), limit+32)
+            base={k: np.asarray(v)[-n:] for k,v in data.items() if k in ("time","open","high","low","close")}
+            for est in estrategias:
+                entradas=wins=g1s=losses=0
+                c=base["close"]
+                for i in range(30, len(c)-1):
+                    janela={k: v[:i+1] for k,v in base.items()}
+                    sinal, prob, ana = analisar_estrategia_detalhada(janela, est)
+                    if not sinal or prob < 80:
+                        continue
+                    entradas += 1
+                    prox_open=float(c[i+1] if i+1 < len(c) else np.nan)
+                    prox_close=float(base["close"][i+1])
+                    direto=(prox_close>prox_open) if sinal=="CALL" else (prox_close<prox_open)
+                    if direto:
+                        wins += 1
+                    elif use_g1 and i+2 < len(c):
+                        g_open=float(base["open"][i+2]); g_close=float(base["close"][i+2])
+                        g_ok=(g_close>g_open) if sinal=="CALL" else (g_close<g_open)
+                        if g_ok: g1s += 1
+                        else: losses += 1
+                    else:
+                        losses += 1
+                if entradas:
+                    concl=wins+g1s+losses
+                    acc=((wins+g1s)/concl*100) if concl else 0
+                    row={"ativo":ativo,"estrategia":NOME_ESTRATEGIAS_DISPLAY.get(est,est),"entradas":entradas,"wins":wins,"g1":g1s,"losses":losses,"assertividade":round(acc,1)}
+                    rows.append(row)
+                    ar=asset_acc.setdefault(ativo,{"entradas":0,"wins":0,"g1":0,"losses":0})
+                    er=est_acc.setdefault(est,{"nome":NOME_ESTRATEGIAS_DISPLAY.get(est,est),"entradas":0,"wins":0,"g1":0,"losses":0})
+                    for reg in (ar,er):
+                        reg["entradas"]+=entradas; reg["wins"]+=wins; reg["g1"]+=g1s; reg["losses"]+=losses
+                    total_entries+=entradas; total_wins+=wins; total_g1+=g1s; total_losses+=losses
+        rows.sort(key=lambda x:(-x["assertividade"],-x["entradas"],-x["wins"]))
+        def finalize_map(m, keyname):
+            out=[]
+            for key,v in m.items():
+                concl=v["wins"]+v["g1"]+v["losses"]
+                out.append({keyname:key,"nome":v.get("nome",key),"entradas":v["entradas"],"wins":v["wins"],"g1":v["g1"],"losses":v["losses"],"assertividade":round(((v["wins"]+v["g1"])/concl*100),1) if concl else 0})
+            return sorted(out,key=lambda x:(-x["assertividade"],-x["entradas"]))[:10]
+        concl=total_wins+total_g1+total_losses
+        summary={"entradas":total_entries,"wins":total_wins,"g1":total_g1,"losses":total_losses,"assertividade":round(((total_wins+total_g1)/concl*100),1) if concl else 0}
+        source="Yahoo Finance/CryptoCompare (candles históricos públicos)"
+        note="Com G1, a primeira falha é testada novamente no candle seguinte. Para OTC, o ticker público equivalente pode representar um proxy e não o feed OTC proprietário."
+        return jsonify({"ok":True,"summary":summary,"rows":rows[:50],"top_assets":finalize_map(asset_acc,"ativo"),"top_strategies":finalize_map(est_acc,"estrategia"),"meta":f"M{tf} • {len(assets)} ativo(s) • {'com G1' if use_g1 else 'sem G1'} • até {limit} candles/ativo","source":source,"note":note})
+    except Exception as e:
+        print(f"⚠️ Backtest: {e}")
+        return jsonify({"ok":False,"error":"Não foi possível concluir o backtest com os dados disponíveis agora."}), 500
 
 @app.route('/command/<cmd>')
 def command(cmd):
@@ -1525,9 +2050,9 @@ def command(cmd):
         if user != ADMIN_EMAIL:
             return jsonify({"ok": False, "error": "Somente o ADM pode testar o Telegram."}), 403
         msg_teste = (
-            f"🧪 <b>TESTE DE COMUNICAÇÃO - VISION PRO V3</b>\n\n"
+            f"🧪 <b>TESTE DE COMUNICAÇÃO - VISION PRO V4</b>\n\n"
             f"✅ Conexão estabelecida com sucesso com o Telegram!\n"
-            f"👤 Usuário: {user}\n"
+            f"👤 Usuário: Vision Pro\n"
             f"⏰ Horário: {agora_brasilia().strftime('%H:%M:%S')}"
         )
         msg_id = enviar_telegram(msg_teste, user_solicitante=user)
@@ -1540,8 +2065,16 @@ def command(cmd):
     elif cmd == "start_bot":
         st["bot_iniciado"] = True
         st["bot_pausado"] = False
+        # Guarda o ativo da última operação e a vela em que ela foi encerrada.
+        # Isso impede que o mesmo ativo seja escolhido repetidamente na mesma vela
+        # quando houver outro candidato válido. Não cria sinais artificiais.
+        ultimo_confirmado = st.get("sinal_confirmado") or alerta_atual or {}
+        st["ultimo_sinal_ativo"] = ultimo_confirmado.get("ativo")
+        st["ultimo_sinal_candle_ts"] = math.floor(time.time() / (max(1, int(st.get("timeframe", 5))) * 60)) * (max(1, int(st.get("timeframe", 5))) * 60)
+
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
+        st["sinal_confirmado"] = None
         if st.get("timer_confirmacao"):
             try:
                 st["timer_confirmacao"].cancel()
@@ -1553,16 +2086,29 @@ def command(cmd):
         st["ultima_confirmacao_msg_id"] = None
         st["ultima_confirmacao_alert_id"] = None
         st["sessao_resultados"] = []
-        st["inicio_varredura"] = time.time() + 2 
+        st["news_guard_status"] = "CONSULTANDO INVESTING.COM"
+        st["news_guard_event"] = None
+        st["news_blocked_assets"] = []
+        st["news_guard_updated"] = 0.0
+        st["analise_atual"] = None
+        st["sinais_sessao_total"] = 0
+        st["warmup_concluido"] = False
+        st["warmup_ativos_analisados"] = set()
+        st["warmup_analysis"] = {}
+        st["warmup_inicio"] = time.time()
+        st["startup_lock_until"] = time.time() + 300
+        st["startup_lock_seconds"] = 300
+        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS • AGUARDANDO 5 MINUTOS"
+        st["inicio_varredura"] = time.time() + 0.5 
         st["sinais_enviados"].clear() 
         
         st["ativo_atual"] = "INICIANDO VARREDURA..."
         st["ultimo_sinal"] = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE DINÂMICA</b><br><span style='color:#00f2fe;'>[VARRENDO TODOS OS ATIVOS...]</span></div><div class='tech-scanner'></div>"
         
         msg_inicio_telegram = (
-            f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
+            f"🚀 <b>SISTEMA VISION PRO V4 INICIADO</b>\n\n"
             f"🟢 <b>Status:</b> Análise de 30 velas ativada\n"
-            f"👤 <b>Usuário:</b> {user}\n"
+            f"👤 <b>Usuário:</b> Vision Pro\n"
             f"📊 <b>Timeframe:</b> M{st['timeframe']}\n"
             f"🌐 <b>Mercado:</b> {st['tipo_mercado']}\n"
             f"⚙️ <b>Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(st['estrategia'], st['estrategia'])}\n\n"
@@ -1584,6 +2130,7 @@ def command(cmd):
         st["bot_pausado"] = True
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
+        st["sinal_confirmado"] = None
         if st.get("timer_confirmacao"):
             try:
                 st["timer_confirmacao"].cancel()
@@ -1596,17 +2143,41 @@ def command(cmd):
         enviar_telegram(mensagem_encerramento_sessao(st), user_solicitante=user)
 
         st["ativo_atual"] = "DESCONECTADO"
+        st["news_guard_status"] = "DESATIVADA"
+        st["news_guard_event"] = None
+        st["news_blocked_assets"] = []
+        st["warmup_concluido"] = False
+        st["warmup_ativos_analisados"] = set()
+        st["warmup_analysis"] = {}
+        st["startup_lock_until"] = 0.0
+        st["warmup_status"] = "AGUARDANDO 30 VELAS"
         st["ultimo_sinal"] = "Aguardando Comando..."
         
         # Mantém o comportamento anterior de zerar o placar geral no encerramento.
         zerar_estatisticas_usuario(user)
         st["sessao_resultados"] = []
+        st["analise_atual"] = None
+        st["sinais_sessao_total"] = 0
         return jsonify({"ok": True})
 
     elif cmd.startswith("tf_"): 
         st["timeframe"] = int(cmd.split('_')[1])
+        st["warmup_concluido"] = False
+        st["warmup_ativos_analisados"] = set()
+        st["warmup_analysis"] = {}
+        st["warmup_inicio"] = time.time()
+        st["startup_lock_until"] = time.time() + 300
+        st["startup_lock_seconds"] = 300
+        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS • AGUARDANDO 5 MINUTOS"
     elif cmd.startswith("mkt_"): 
         st["tipo_mercado"] = cmd.split('_', 1)[1] 
+        st["warmup_concluido"] = False
+        st["warmup_ativos_analisados"] = set()
+        st["warmup_analysis"] = {}
+        st["warmup_inicio"] = time.time()
+        st["startup_lock_until"] = time.time() + 300
+        st["startup_lock_seconds"] = 300
+        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS • AGUARDANDO 5 MINUTOS"
     elif cmd.startswith("set_est_"): 
         st["estrategia"] = cmd.replace("set_est_", "")
     
@@ -1639,30 +2210,68 @@ def formatar_resultados_sessao(st):
     return "\n".join(linhas)
 
 def mensagem_resultado_telegram(st, resultado):
+    """Monta o fechamento do sinal confirmado sem apagar a confirmação anterior.
+
+    A mensagem de confirmação continua no Telegram. Esta é uma nova mensagem
+    apenas para registrar o resultado da operação e o placar da sessão.
+    """
     wins, reds, _ = placar_sessao(st)
     placar = f"{wins} / {reds}"
+    sinal = st.get("sinal_confirmado") or {}
+    ativo = sinal.get("ativo") or "ATIVO"
+    direcao = sinal.get("sinal") or sinal.get("direcao") or "--"
+    prob = sinal.get("probabilidade")
+    tf = sinal.get("tf")
+    entrada = sinal.get("str_entrada") or sinal.get("entrada") or "--:--:--"
+    expiracao = sinal.get("str_saida") or sinal.get("expiracao") or "--:--"
+    estrategia = sinal.get("estrategia_fmt") or sinal.get("estrategia") or "Análise Vision Pro"
+
+    prob_txt = f"{prob}%" if prob is not None else "--%"
+    tf_txt = f"M{tf}" if tf else "--"
+
+    cabecalho = (
+        "Vision Trade FREE 📈\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"💱 <b>Paridade:</b> {ativo}\n"
+        f"↕️ <b>Direção:</b> {direcao}\n"
+        f"⏱ <b>Timeframe:</b> {tf_txt}\n"
+        f"🧠 <b>Estratégia:</b> {estrategia}\n"
+        f"🔥 <b>Probabilidade Estimada:</b> {prob_txt}\n"
+        f"🕐 <b>Entrada:</b> {entrada}\n"
+        f"⌛ <b>Expiração:</b> {expiracao}\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+    )
+
     if resultado == "win":
         return (
-            "Vision Trade FREE 📈:\n"
-            "💎 <b>TA NA CONTA! WIN DIRETO!</b> 💎\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "🔥 A IA do Vision Pro não falha. Operação encerrada com precisão cirúrgica!\n"
-            "🚀 Mais um lucro garantido para o bolso!\n\n"
-            f"📊 Placar Geral: {placar}"
+            cabecalho +
+            "💎 <b>WIN DIRETO — OPERAÇÃO ENCERRADA</b> 💎\n"
+            "📊 Resultado registrado com sucesso no Vision Pro.\n"
+            "🚀 O sinal foi encerrado no primeiro nível de operação.\n\n"
+            f"📊 <b>Placar Geral:</b> {placar}\n"
+            "⚠️ Gerencie seu capital com responsabilidade.\n"
+            "⚠️ Resultados passados não garantem resultados futuros."
         )
+
     if resultado == "g1":
         return (
-            "🔄 <b>VITÓRIA CONFIRMADA NO GALE 1!</b> 🔄\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "✅ Recuperação e lucro! Nossa estratégia de proteção funcionou perfeitamente.\n"
-            "💪 O mercado tentou, mas a nossa análise venceu!\n\n"
-            f"Placar Geral: {placar}"
+            cabecalho +
+            "🔄 <b>WIN NO G1 — OPERAÇÃO ENCERRADA</b> 🔄\n"
+            "📊 Resultado registrado como Gale 1 no Vision Pro.\n"
+            "🧠 O resultado foi obtido no segundo nível da operação.\n\n"
+            f"📊 <b>Placar Geral:</b> {placar}\n"
+            "⚠️ Gerencie seu capital com responsabilidade.\n"
+            "⚠️ Resultados passados não garantem resultados futuros."
         )
+
     return (
-        "🛑 <b>ANÁLISE ENCERRADA - STOP LOSS</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "⚠️ O mercado apresentou volatilidade atípica.\n\n"
-        f"📊 Placar Geral: {placar}"
+        cabecalho +
+        "🛑 <b>RED — OPERAÇÃO ENCERRADA</b>\n"
+        "📉 Resultado negativo registrado no Vision Pro.\n"
+        "🔎 O resultado será considerado nas estatísticas da sessão.\n\n"
+        f"📊 <b>Placar Geral:</b> {placar}\n"
+        "⚠️ Gerencie seu capital com responsabilidade.\n"
+        "⚠️ Resultados passados não garantem resultados futuros."
     )
 
 def mensagem_encerramento_sessao(st):
@@ -1687,30 +2296,32 @@ def resultado(res):
         confirmacao_msg_id = st.get("ultima_confirmacao_msg_id")
 
         if res in ("win", "g1", "red", "pular"):
-            # Qualquer resultado encerra o ciclo do alerta atual.
+            # Somente o PRÉ-ALERTA deve ser removido do Telegram.
+            # A mensagem "SINAL CONFIRMADO" permanece no histórico do canal.
             cancelar_alerta_telegram(st, alerta_atual)
 
         if res == 'win':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "Win")
             registrar_resultado_sessao(st, "win")
+            st["sinais_sessao_total"] = st.get("sinais_sessao_total", 0) + 1
             enviar_telegram(mensagem_resultado_telegram(st, "win"), user_solicitante=user)
         elif res == 'g1':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "WinG1")
             registrar_resultado_sessao(st, "g1")
+            st["sinais_sessao_total"] = st.get("sinais_sessao_total", 0) + 1
             enviar_telegram(mensagem_resultado_telegram(st, "g1"), user_solicitante=user)
         elif res == 'red':
             atualizar_estatisticas_usuario(user, False)
             atualizar_ultimo_sinal_bd(user, "Red")
             registrar_resultado_sessao(st, "red")
+            st["sinais_sessao_total"] = st.get("sinais_sessao_total", 0) + 1
             enviar_telegram(mensagem_resultado_telegram(st, "red"), user_solicitante=user)
         elif res == 'pular':
-            # Se o sinal já foi confirmado, apagar a confirmação anterior.
-            if confirmacao_msg_id:
-                deletar_mensagem_telegram(confirmacao_msg_id)
-                st["ultima_confirmacao_msg_id"] = None
-                st["ultima_confirmacao_alert_id"] = None
+            # PULAR não apaga a confirmação já publicada. A confirmação
+            # continua no Telegram como registro da entrada; somente o
+            # pré-alerta ativo é removido pelo cancelar_alerta_telegram().
 
             # O aviso de PULADO permanece somente por 5 segundos.
             enviar_telegram(
@@ -1721,6 +2332,7 @@ def resultado(res):
 
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
+        st["sinal_confirmado"] = None
         if st.get("timer_confirmacao"):
             try:
                 st["timer_confirmacao"].cancel()
@@ -1728,6 +2340,7 @@ def resultado(res):
                 pass
         st["timer_confirmacao"] = None
         st["alerta_ativo"] = None
+        st["analise_atual"] = None
         
         st["ultimo_sinal"] = f"<div class='system-console'>🔍 ANALISANDO VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[RETOMANDO VARREDURA COMPLETA]</span></div><div class='tech-scanner'></div>"
     
@@ -1807,6 +2420,7 @@ def confirmar_alerta_agendado(user_email, alert_id):
         str_saida = alerta["str_saida"]
         prob = alerta["probabilidade"]
         tf = alerta["tf"]
+        analise_info = alerta.get("analise", {})
         str_entrada = alerta["str_entrada"]
         alerta_msg_id = alerta.get("msg_id")
         alerta_id_atual = alerta.get("alert_id")
@@ -1822,15 +2436,33 @@ def confirmar_alerta_agendado(user_email, alert_id):
 
         # Atualiza a tela ANTES de qualquer operação de rede/banco.
         st["sinal_permanente"] = (
-            f"<div class='status-box' style='border-color:#00f2fe; background:rgba(0,242,254,0.1);'>"
-            f"<h3 style='color:#00f2fe; margin-bottom:8px;'>🎯 SINAL CONFIRMADO!</h3>"
-            f"<b>ATIVO:</b> {ativo}<br>"
-            f"<b>DIREÇÃO DE ENTRADA:</b> <span style='color:{cor_direcao}; font-size:18px;'>{sinal}</span><br>"
-            f"<b>ESTRATÉGIA:</b> <span style='color:#38ef7d;'>{est_fmt} ({prob}%)</span><br>"
-            f"<b>TIMEFRAME:</b> M{tf} | <b>ENTRADA:</b> {str_entrada} | <b>EXPIRAÇÃO:</b> {str_saida}"
+            f"<div style='text-align:center;padding:8px;'>"
+            f"<div style='color:#67e8f9;font-size:11px;font-weight:900;letter-spacing:1px;'>🎯 SINAL CONFIRMADO</div>"
+            f"<div style='font-size:24px;font-weight:900;color:{cor_direcao};margin:6px 0;'>{ativo} • {sinal}</div>"
+            f"<div style='font-size:11px;color:#cbd5e1;'>Probabilidade estimada: <b style='color:#4ade80'>{prob}%</b> • M{tf}</div>"
+            f"<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>{est_fmt} • Entrada {str_entrada} • Expiração {str_saida}</div>"
             f"</div>"
         )
+        # Congela o sinal confirmado. O bot pode continuar varrendo outros ativos,
+        # mas a interface continuará mostrando este ativo até WIN/G1/RED/PULAR.
+        st["sinal_confirmado"] = {
+            "ativo": ativo,
+            "sinal": sinal,
+            "direcao": sinal,
+            "estrategia": alerta.get("estrategia"),
+            "estrategia_fmt": est_fmt,
+            "probabilidade": prob,
+            "tf": tf,
+            "str_entrada": str_entrada,
+            "str_saida": str_saida,
+            "entrada": str_entrada,
+            "expiracao": str_saida,
+            "confluencia": analise_info.get("confluencia", 0),
+            "analise": analise_info,
+            "confirmado_em": agora_brasilia().isoformat(),
+        }
         st["aguardando_confirmacao"] = True
+        # O pré-alerta é apagado; o estado confirmado acima passa a ser a referência da UI.
         st["alerta_ativo"] = None
         st["timer_confirmacao"] = None
 
@@ -1937,46 +2569,152 @@ def bot_loop():
                     # -------------------------------------------------------------
                     # 2. VARREDURA DINÂMICA DE TODOS OS ATIVOS DO MERCADO
                     # -------------------------------------------------------------
-                    if mkt == "TODOS":
-                        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
-                    elif mkt == "ABERTO_TODOS":
-                        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
-                    elif mkt == "OTC_TODOS":
-                        ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
-                    else:
-                        ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
+                    ativos_mercado = ativos_por_mercado(mkt)
+                    selecionados_usuario = [a for a in st.get("selected_assets", []) if a in ativos_mercado]
+                    ativos = selecionados_usuario if selecionados_usuario else ativos_mercado
 
-                    ativos_scan = ativos.copy()
-                    random.shuffle(ativos_scan)
+                    # Trava de segurança: antes de qualquer alerta, o motor valida
+                    # as últimas 30 velas de todos os ativos selecionados.
+                    ativos = list(dict.fromkeys(ativos))
+                    if not st.get("warmup_concluido"):
+                        warmup_set = st.setdefault("warmup_ativos_analisados", set())
+                        st["warmup_status"] = f"ANALISANDO 30 VELAS • {len(warmup_set)}/{len(ativos)} ATIVOS"
+                        for ativo_w in ativos:
+                            if ativo_w in warmup_set:
+                                continue
+                            ticker_w = MAPA_TICKERS.get(ativo_w, ativo_w)
+                            cache_key_w = f"{ticker_w}_{tf}"
+                            data_w = ohlc_cache.get(cache_key_w, {}).get("data") if cache_key_w in ohlc_cache else None
+                            if data_w is None:
+                                data_w = get_data_v2(ticker_w, tf, velas_minimas=30)
+                                if data_w:
+                                    ohlc_cache[cache_key_w] = {"data": data_w, "time": time.time()}
+                            closes_w = data_w.get("close", []) if data_w else []
+                            if len(closes_w) >= 30:
+                                # A trava não apenas confere a existência das 30 velas:
+                                # executa a leitura técnica sobre o bloco histórico antes
+                                # de liberar o motor para procurar entradas.
+                                try:
+                                    diag_w = _indicadores_confluencia(data_w, None)
+                                    st.setdefault("warmup_analysis", {})[ativo_w] = {
+                                        "confluencia": float(diag_w.get("confluencia",0)),
+                                        "tendencia": diag_w.get("tendencia"),
+                                        "rsi": float(diag_w.get("rsi",50)),
+                                        "timestamp": time.time()
+                                    }
+                                    warmup_set.add(ativo_w)
+                                except Exception:
+                                    pass
+                        if len(warmup_set) >= len(ativos):
+                            st["warmup_concluido"] = True
+                            st["warmup_status"] = "30 VELAS VALIDADAS • ANÁLISE LIBERADA"
+                        else:
+                            st["ativo_atual"] = "AQUECENDO MOTOR — 30 VELAS"
+                            st["ultimo_sinal"] = (
+                                f"<div class='system-console' style='color:#f59e0b;'>🛡️ <b>TRAVA DE SEGURANÇA ATIVA</b><br>"
+                                f"Analisando as últimas <b>30 velas</b> antes de liberar sinais.<br>"
+                                f"<span style='color:#00f2fe;'>{len(warmup_set)}/{len(ativos)} ativos validados.</span></div>"
+                            )
+                            continue
+
+                    # Segurança adicional: mesmo com 30 velas disponíveis, o sistema
+                    # aguarda obrigatoriamente 5 minutos após o START. Durante essa janela
+                    # ele continua analisando os ativos, mas NÃO cria alerta nem sinal.
+                    startup_remaining = max(0.0, st.get("startup_lock_until", 0.0) - time.time())
+                    if startup_remaining > 0:
+                        st["warmup_status"] = f"ANALISANDO 30 VELAS • AGUARDANDO {int(math.ceil(startup_remaining))}s PARA LIBERAR SINAIS"
+                        st["ultimo_sinal"] = (
+                            f"<div class='system-console' style='color:#f59e0b;'>🛡️ <b>TRAVA DE SEGURANÇA ATIVA</b><br>"
+                            f"30 velas validadas. O motor continuará procurando a melhor confluência por mais <b>{int(math.ceil(startup_remaining))}s</b>.<br>"
+                            f"<span style='color:#00f2fe;'>Nenhum alerta ou sinal será enviado antes do fim dos 5 minutos.</span></div>"
+                        )
+                        # Mantém a análise de mercado abaixo, mas bloqueia a emissão de alertas.
+
+                    # 🛡️ CONSULTA DO CALENDÁRIO ANTES DA VARREDURA
+                    # A consulta é feita uma vez por ciclo, e não uma vez por ativo.
+                    # Assim, os ativos realmente bloqueados são retirados da lista de
+                    # análise, enquanto todos os demais continuam normalmente.
+                    calendario_ok = atualizar_calendario_investing()
+                    eventos_calendario = INVESTING_CALENDAR_CACHE.get("events", []) if calendario_ok else []
+
+                    ativos_bloqueados = set()
+                    eventos_bloqueados = {}
+                    detalhes_bloqueados = []
+
+                    if calendario_ok:
+                        for ativo_candidato in ativos:
+                            evento_candidato = evento_bloqueia_ativo(ativo_candidato, agora_scan, eventos_calendario)
+                            if evento_candidato:
+                                ativos_bloqueados.add(ativo_candidato)
+                                eventos_bloqueados[ativo_candidato] = evento_candidato
+                                dt_evento = evento_candidato.get("datetime")
+                                dt_liberacao = (dt_evento + timedelta(minutes=NEWS_LOCK_AFTER_MIN)) if dt_evento else None
+                                detalhes_bloqueados.append({
+                                    "ativo": ativo_candidato,
+                                    "currency": evento_candidato.get("currency", ""),
+                                    "impact": int(evento_candidato.get("impact", NEWS_MIN_IMPACT)),
+                                    "event": evento_candidato.get("event", "Evento econômico"),
+                                    "horario": dt_evento.strftime("%H:%M") if hasattr(dt_evento, "strftime") else "--:--",
+                                    "liberacao": dt_liberacao.strftime("%H:%M") if hasattr(dt_liberacao, "strftime") else "--:--",
+                                })
+
+                        if ativos_bloqueados:
+                            st["news_guard_status"] = f"{len(ativos_bloqueados)} ATIVO(S) BLOQUEADO(S) POR NOTÍCIA"
+                            st["news_guard_event"] = {
+                                "blocked_assets": sorted(ativos_bloqueados),
+                                "count": len(ativos_bloqueados),
+                            }
+                        else:
+                            st["news_guard_status"] = "ATIVA — SEM BLOQUEIO"
+                            st["news_guard_event"] = None
+                    else:
+                        # FAIL-OPEN: se o Investing não responder, não inventamos
+                        # uma notícia e não bloqueamos o mercado inteiro.
+                        ativos_bloqueados = set()
+                        st["news_guard_status"] = "INVESTING INDISPONÍVEL — ANÁLISE LIBERADA"
+                        st["news_guard_event"] = None
+                        st["news_guard_updated"] = time.time()
+
+                    detalhes_bloqueados.sort(key=lambda x: (x.get("liberacao", "99:99"), x.get("ativo", "")))
+                    st["news_blocked_assets"] = detalhes_bloqueados
+
+                    # Somente ativos sem notícia de 2/3 touros entram na lista de análise.
+                    ativos_scan = [a for a in ativos if a not in ativos_bloqueados]
+
+                    if not ativos_scan:
+                        st["ativo_atual"] = "TODOS OS ATIVOS BLOQUEADOS POR NOTÍCIA"
+                        st["ultimo_sinal"] = (
+                            "<div class='system-console' style='color:#ef4444;'>"
+                            "🛡️ <b>VARREDURA TEMPORARIAMENTE PAUSADA</b><br>"
+                            "Todos os ativos selecionados estão dentro de uma janela de proteção de notícia 2/3 touros.<br>"
+                            "<span style='color:#94a3b8;'>A varredura será retomada automaticamente quando cada janela de 30 minutos terminar.</span>"
+                            "</div>"
+                        )
+                        continue
+
+                    # 2. VARREDURA GLOBAL: primeiro analisa TODOS os ativos selecionados,
+                    # depois escolhe apenas o candidato mais forte. Isso impede a cascata
+                    # de alertas aleatórios observada quando o loop encontrava vários sinais.
+                    candidatos_globais = []
+                    diagnostico_melhor = None
+                    melhor_diag_chave = (-1, -1, -1)
 
                     for ativo in ativos_scan:
                         if not st.get("bot_iniciado") or st.get("bot_pausado"):
                             break
-
                         st["ativo_atual"] = ativo
                         ticker = MAPA_TICKERS.get(ativo, ativo)
-
-                        if not alerta and not st.get("aguardando_confirmacao"):
-                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
-
                         cache_key = f"{ticker}_{tf}"
-                        if cache_key in ohlc_cache:
-                            data = ohlc_cache[cache_key]["data"]
-                        else:
+                        data = ohlc_cache.get(cache_key, {}).get("data") if cache_key in ohlc_cache else None
+                        if data is None:
                             data = get_data_v2(ticker, tf, velas_minimas=30)
                             if data:
                                 ohlc_cache[cache_key] = {"data": data, "time": time.time()}
-
                         if not data:
                             continue
 
-                        sinal_encontrado = None
-                        est_nome_encontrada = None
-                        maior_prob = 0
-
                         if user_est == "TODAS":
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
-                            random.shuffle(estrategias_para_analisar)
                         elif "," in str(user_est):
                             estrategias_para_analisar = [e.strip() for e in user_est.split(",") if e.strip() in LISTA_ESTRATEGIAS]
                         elif user_est in LISTA_ESTRATEGIAS:
@@ -1984,178 +2722,154 @@ def bot_loop():
                         else:
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
 
+                        candidatos = []
                         for est_nome in estrategias_para_analisar:
-                            sinal_test, prob_test = analisar_estrategia(data, est_nome)
-                            if sinal_test and prob_test > maior_prob:
-                                sinal_encontrado = sinal_test
-                                est_nome_encontrada = est_nome
-                                maior_prob = prob_test
+                            sinal_test, prob_test, analise_test = analisar_estrategia_detalhada(data, est_nome)
+                            if sinal_test:
+                                candidatos.append({"sinal": sinal_test, "prob": int(prob_test), "estrategia": est_nome, "analise": analise_test})
 
-                        if sinal_encontrado and not bloquear_novos_alertas:
-                            agora = agora_brasilia()
-                            
-                            min_pass = agora.minute % tf
-                            seg_pass = min_pass * 60 + agora.second
-                            total_seg = tf * 60
-                            seg_restantes = total_seg - seg_pass
+                        # Bônus somente quando há concordância real entre estratégias.
+                        for cand in candidatos:
+                            concordantes = sum(1 for x in candidatos if x["sinal"] == cand["sinal"] and x["estrategia"] != cand["estrategia"])
+                            cand["concordantes"] = concordantes
+                            cand["prob_final"] = min(98, int(cand["prob"]) + min(5, concordantes * 2))
 
-                            # A janela de decisão fecha 5 segundos antes da virada.
-                            if seg_restantes <= 5:
-                                continue
+                        if candidatos:
+                            melhor_local = max(candidatos, key=lambda x:(x["prob_final"], x["analise"].get("confluencia",0), x["concordantes"]))
+                            ana = dict(melhor_local["analise"])
+                            ana.update({
+                                "ativo": ativo, "direcao": melhor_local["sinal"], "probabilidade": melhor_local["prob_final"],
+                                "estrategia": melhor_local["estrategia"],
+                                "estrategia_fmt": NOME_ESTRATEGIAS_DISPLAY.get(melhor_local["estrategia"], melhor_local["estrategia"]),
+                                "grafico": [float(x) for x in data["close"][-30:]],
+                                "motivos": ana.get("confluencias", []),
+                                "estrategias_concordantes": [NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"]) for x in candidatos if x["sinal"] == melhor_local["sinal"]]
+                            })
+                            candidatos_globais.append({"ativo":ativo,"sinal":melhor_local["sinal"],"probabilidade":int(melhor_local["prob_final"]),"confluencia":float(ana.get("confluencia",0)),"concordantes":int(melhor_local["concordantes"]),"estrategia":melhor_local["estrategia"],"estrategia_fmt":ana["estrategia_fmt"],"analise":ana,"data":data})
+                            chave_diag=(int(melhor_local["prob_final"]),float(ana.get("confluencia",0)),int(melhor_local["concordantes"]))
+                            if chave_diag>melhor_diag_chave:
+                                melhor_diag_chave=chave_diag; diagnostico_melhor=ana
+                        else:
+                            diag=_indicadores_confluencia(data,None)
+                            diag.update({"ativo":ativo,"direcao":None,"probabilidade":0,"estrategia":None,"estrategia_fmt":"Sem sinal validado","grafico":[float(x) for x in data["close"][-30:]],"motivos":diag.get("confluencias",[])})
+                            if diagnostico_melhor is None:
+                                diagnostico_melhor=diag
 
-                            prox_minuto_entrada = agora + timedelta(seconds=seg_restantes)
-                            momento_confirmacao = prox_minuto_entrada - timedelta(seconds=5)
-                            horario_saida = prox_minuto_entrada + timedelta(minutes=tf)
+                    if diagnostico_melhor is not None and (not st.get("aguardando_confirmacao") or st.get("analise_atual") is None):
+                        st["analise_atual"] = diagnostico_melhor
 
-                            # Horário em que o painel/Telegram confirmam a entrada.
-                            str_entrada = momento_confirmacao.strftime("%H:%M:%S")
-                            str_saida = horario_saida.strftime("%H:%M")
+                    # Enquanto há alerta confirmado/pendente, a varredura continua,
+                    # porém só pode substituir o alerta se a oportunidade nova for
+                    # realmente melhor: probabilidade maior; em empate, confluência maior;
+                    # em novo empate, mais estratégias concordando. Nunca por troca aleatória de ativo.
+                    if candidatos_globais and not st.get("aguardando_confirmacao"):
+                        # Ordena todas as oportunidades pela mesma regra usada pelo Vision Pro.
+                        candidatos_ordenados = sorted(
+                            candidatos_globais,
+                            key=lambda x: (x["probabilidade"], x["confluencia"], x["concordantes"]),
+                            reverse=True
+                        )
 
-                            nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
+                        melhor_candidato = candidatos_ordenados[0]
 
-                            # Substituição se houver um sinal com probabilidade superior no mesmo ciclo
-                            if alerta:
-                                if maior_prob > alerta.get("probabilidade", 0):
-                                    msg_antigo_id = alerta.get("msg_id")
-                                    novo_alert_id = str(time.time_ns())
-
-                                    msg_pre_alerta = (
-                                        f"⚡ <b>ALERTA ATUALIZADO: MAIOR PROBABILIDADE DETECTADA!</b> ⚡\n\n"
-                                        f"<b>Ativo:</b> {ativo} ({maior_prob}% de Assertividade)\n"
-                                        f"<b>Timeframe:</b> M{tf}\n"
-                                        f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
-                                        f"<b>Estratégia:</b> {nome_est_formatado}\n"
-                                        f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
-                                        f"👉 <i>Alerta anterior cancelado. Abra o ativo {ativo} na corretora!</i>"
-                                    )
-
-                                    # Troca o alerta no painel imediatamente.
-                                    st["ultima_confirmacao_msg_id"] = None
-                                    st["ultima_confirmacao_alert_id"] = None
-                                    st["alerta_ativo"] = {
-                                        "ativo": ativo,
-                                        "sinal": sinal_encontrado,
-                                        "estrategia": est_nome_encontrada,
-                                        "estrategia_fmt": nome_est_formatado,
-                                        "probabilidade": maior_prob,
-                                        "msg_id": None,
-                                        "str_entrada": str_entrada,
-                                        "str_saida": str_saida,
-                                        "prox_minuto_entrada": prox_minuto_entrada,
-                                        "momento_confirmacao": momento_confirmacao,
-                                        "alert_id": novo_alert_id,
-                                        "tf": tf
-                                    }
-
-                                    # Reagenda a confirmação para o novo alerta.
-                                    if st.get("timer_confirmacao"):
-                                        try:
-                                            st["timer_confirmacao"].cancel()
-                                        except Exception:
-                                            pass
-                                    agora_timer = agora_brasilia()
-                                    atraso_confirmacao = max(
-                                        0.0, (momento_confirmacao - agora_timer).total_seconds()
-                                    )
-                                    timer_confirmacao = threading.Timer(
-                                        atraso_confirmacao,
-                                        confirmar_alerta_agendado,
-                                        args=(user_email, novo_alert_id)
-                                    )
-                                    timer_confirmacao.daemon = True
-                                    st["timer_confirmacao"] = timer_confirmacao
-                                    timer_confirmacao.start()
-
-                                    enviar_telegram_em_background(
-                                        msg_pre_alerta,
-                                        user_email,
-                                        alert_id=novo_alert_id,
-                                        deletar_msg_id=msg_antigo_id,
-                                        st=st
-                                    )
-
-                                    st["ultimo_sinal"] = (
-                                        f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
-                                        f"⚡ <b>ALERTA SUBSTITUÍDO (MAIOR PROBABILIDADE: {maior_prob}%)</b> ⚡<br>"
-                                        f"<b>NOVO ATIVO: {ativo}</b> | <b>DIREÇÃO: <span style='color:{'#10b981' if sinal_encontrado=='CALL' else '#ef4444'}'>{sinal_encontrado}</span></b> | Entrada às <b>{str_entrada}</b> (M{tf})<br>"
-                                        f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span>"
-                                        f"</div>"
-                                    )
-                                    alerta = st["alerta_ativo"]
-
+                        # Proteção contra repetição do mesmo ativo dentro da mesma vela.
+                        # Se existir outra oportunidade forte, ela pode assumir a próxima
+                        # entrada. Se não existir, o ativo anterior continua elegível no
+                        # próximo candle — nunca fabricamos um sinal só para alternar ativos.
+                        tf_seg = max(1, int(tf)) * 60
+                        candle_atual_ts = math.floor(time.time() / tf_seg) * tf_seg
+                        ultimo_ativo = st.get("ultimo_sinal_ativo")
+                        ultimo_candle = float(st.get("ultimo_sinal_candle_ts") or 0.0)
+                        if ultimo_ativo and ultimo_candle == candle_atual_ts and melhor_candidato.get("ativo") == ultimo_ativo:
+                            alternativas = [
+                                c for c in candidatos_ordenados
+                                if c.get("ativo") != ultimo_ativo and int(c.get("probabilidade", 0)) >= 80
+                            ]
+                            if alternativas:
+                                melhor_candidato = alternativas[0]
                             else:
-                                if st["sinais_enviados"].get(ativo) == str_entrada:
-                                    continue
+                                # Nenhuma alternativa forte nesta vela: aguarda o próximo
+                                # candle em vez de gerar novamente o mesmo sinal.
+                                melhor_candidato = None
+                    else:
+                        melhor_candidato = None
 
-                                st["sinais_enviados"][ativo] = str_entrada
+                    # Nenhum alerta/sinal pode ser emitido durante os 5 minutos obrigatórios.
+                    if startup_remaining > 0:
+                        continue
 
-                                msg_pre_alerta = (
-                                    f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n"
-                                    f"<b>Ativo:</b> {ativo}\n"
-                                    f"<b>Timeframe:</b> M{tf}\n"
-                                    f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
-                                    f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
-                                    f"<b>Assertividade Estimada:</b> {maior_prob}%\n"
-                                    f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
-                                    f"👉 <i>Abra o ativo na corretora e prepare-se!</i>"
-                                )
-                                
-                                novo_alert_id = str(time.time_ns())
+                    if melhor_candidato and melhor_candidato["probabilidade"] >= 80 and not st.get("aguardando_confirmacao"):
+                        agora = agora_brasilia()
+                        total_seg = tf * 60
+                        seg_pass = (agora.minute % tf) * 60 + agora.second
+                        seg_restantes = total_seg - seg_pass
+                        if seg_restantes <= 5:
+                            continue
 
-                                st["ultima_confirmacao_msg_id"] = None
-                                st["ultima_confirmacao_alert_id"] = None
-                                st["alerta_ativo"] = {
-                                    "ativo": ativo,
-                                    "sinal": sinal_encontrado,
-                                    "estrategia": est_nome_encontrada,
-                                    "estrategia_fmt": nome_est_formatado,
-                                    "probabilidade": maior_prob,
-                                    "msg_id": None,
-                                    "str_entrada": str_entrada,
-                                    "str_saida": str_saida,
-                                    "prox_minuto_entrada": prox_minuto_entrada,
-                                    "momento_confirmacao": momento_confirmacao,
-                                    "alert_id": novo_alert_id,
-                                    "tf": tf
-                                }
+                        prox_minuto_entrada = agora + timedelta(seconds=seg_restantes)
+                        momento_confirmacao = prox_minuto_entrada - timedelta(seconds=5)
+                        horario_saida = prox_minuto_entrada + timedelta(minutes=tf)
+                        # Entrada é a virada exata do candle; a confirmação é disparada 5s antes.
+                        str_entrada = prox_minuto_entrada.strftime("%H:%M:%S")
+                        str_saida = horario_saida.strftime("%H:%M:%S")
+                        ativo = melhor_candidato["ativo"]
+                        sinal_encontrado = melhor_candidato["sinal"]
+                        maior_prob = melhor_candidato["probabilidade"]
+                        nome_est_formatado = melhor_candidato["estrategia_fmt"]
+                        melhor_analise = melhor_candidato["analise"]
 
-                                # Agenda a confirmação independente da varredura.
-                                agora_timer = agora_brasilia()
-                                atraso_confirmacao = max(
-                                    0.0, (momento_confirmacao - agora_timer).total_seconds()
-                                )
-                                timer_confirmacao = threading.Timer(
-                                    atraso_confirmacao,
-                                    confirmar_alerta_agendado,
-                                    args=(user_email, novo_alert_id)
-                                )
-                                timer_confirmacao.daemon = True
-                                st["timer_confirmacao"] = timer_confirmacao
-                                timer_confirmacao.start()
+                        alerta_atual = st.get("alerta_ativo")
+                        novo_chave = (int(maior_prob), float(melhor_analise.get("confluencia",0)), int(melhor_candidato.get("concordantes",0)))
+                        alerta_chave = None
+                        if alerta_atual:
+                            alerta_chave=(int(alerta_atual.get("probabilidade",0)),float(alerta_atual.get("analise",{}).get("confluencia",0)),int(alerta_atual.get("concordantes",0)))
 
-                                enviar_telegram_em_background(
-                                    msg_pre_alerta,
-                                    user_email,
-                                    alert_id=novo_alert_id,
-                                    st=st
-                                )
-
-                                st["ultimo_sinal"] = (
-                                    f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
-                                    f"⚠️ <b>PREPARE O ATIVO: {ativo} ({maior_prob}%)</b> ⚠️<br>"
-                                    f"<span style='color:#fff;'>DIREÇÃO: <b style='color:{'#10b981' if sinal_encontrado=='CALL' else '#ef4444'}'>{sinal_encontrado}</b> | Entrada às <b>{str_entrada}</b> (M{tf})</span><br>"
-                                    f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span>"
-                                    f"</div>"
-                                )
-
-                                st["notificacao"] = {
-                                    "id": str(time.time()),
-                                    "titulo": f"⚠️ PREPARE-SE: {ativo}",
-                                    "corpo": f"Direção: {sinal_encontrado} | Entrada às {str_entrada} (M{tf}) via {nome_est_formatado} ({maior_prob}%)."
-                                }
-                                alerta = st["alerta_ativo"]
+                        # Só substitui se a nova oportunidade for estritamente melhor.
+                        if alerta_atual is None:
+                            pode_substituir = True
+                        else:
+                            antigo_prob, antigo_conf, antigo_conc = alerta_chave
+                            # Regra pedida: só troca quando houver melhora real de
+                            # probabilidade OU melhora real de confluência. Empates
+                            # completos só mudam com mais estratégias concordando.
+                            pode_substituir = (
+                                novo_chave[0] > antigo_prob
+                                or novo_chave[1] > antigo_conf
+                                or (novo_chave[0] == antigo_prob and novo_chave[1] == antigo_conf and novo_chave[2] > antigo_conc)
+                            )
+                        if pode_substituir:
+                            msg_antigo_id = alerta_atual.get("msg_id") if alerta_atual else None
+                            if alerta_atual:
+                                cancelar_alerta_telegram(st, alerta_atual)
+                            novo_alert_id = str(time.time_ns())
+                            msg_pre_alerta = (
+                                f"⚠️ <b>VISION PRO — PRÉ-ALERTA</b>\n"
+                                f"━━━━━━━━━━━━━━━━━━━━\n"
+                                f"💱 <b>{ativo}</b> • M{tf}\n"
+                                f"↕️ <b>DIREÇÃO:</b> {sinal_encontrado}\n"
+                                f"🔥 <b>PROBABILIDADE ESTIMADA:</b> {maior_prob}%\n"
+                                f"🧠 <b>Estratégia:</b> {nome_est_formatado}\n"
+                                f"📊 <b>Confluência:</b> {melhor_analise.get('confluencia',0):.0f}/100\n"
+                                f"🤝 <b>Concordância:</b> {len(melhor_analise.get('estrategias_concordantes',[]))} estratégia(s)\n"
+                                f"🕐 <b>Entrada prevista:</b> {str_entrada}\n"
+                                f"⏳ <b>Confirmação:</b> 5s antes da entrada\n"
+                                f"━━━━━━━━━━━━━━━━━━━━\n"
+                                f"🛡️ <i>A oportunidade só será substituída por outra leitura realmente superior.</i>"
+                            )
+                            st["alerta_ativo"]={"ativo":ativo,"sinal":sinal_encontrado,"estrategia":melhor_candidato["estrategia"],"estrategia_fmt":nome_est_formatado,"probabilidade":maior_prob,"analise":melhor_analise,"msg_id":None,"str_entrada":str_entrada,"str_saida":str_saida,"prox_minuto_entrada":prox_minuto_entrada,"momento_confirmacao":momento_confirmacao,"alert_id":novo_alert_id,"tf":tf,"concordantes":melhor_candidato.get("concordantes",0)}
+                            if st.get("timer_confirmacao"):
+                                try: st["timer_confirmacao"].cancel()
+                                except Exception: pass
+                            atraso=max(0.0,(momento_confirmacao-agora_brasilia()).total_seconds())
+                            timer_confirmacao=threading.Timer(atraso,confirmar_alerta_agendado,args=(user_email,novo_alert_id)); timer_confirmacao.daemon=True; st["timer_confirmacao"]=timer_confirmacao; timer_confirmacao.start()
+                            enviar_telegram_em_background(msg_pre_alerta,user_email,alert_id=novo_alert_id,deletar_msg_id=msg_antigo_id,st=st)
+                            st["sinais_enviados"][ativo]=str_entrada
+                            st["notificacao"]={"id":str(time.time_ns()),"titulo":f"⚠️ NOVO ALERTA: {ativo} — {sinal_encontrado}","corpo":f"{ativo} | {sinal_encontrado} | Entrada {str_entrada} | {maior_prob}% | Confluência {melhor_analise.get('confluencia',0):.0f}/100"}
+                            cor="#10b981" if sinal_encontrado=="CALL" else "#ef4444"
+                            st["ultimo_sinal"]=f"<div style='text-align:center;line-height:1.6;color:#f59e0b'>⚠️ <b>PRÉ-ALERTA</b><br><b style='font-size:18px;color:{cor}'>{ativo} • {sinal_encontrado}</b><br><span>{maior_prob}% • M{tf} • Entrada {str_entrada}</span><br><span style='color:#00d9ff'>{nome_est_formatado}</span></div>"
 
                 except Exception as e_usr:
+
                     print(f"Erro no loop do usuario {user_email}: {e_usr}")
 
             time.sleep(0.5)
