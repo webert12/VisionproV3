@@ -3,6 +3,7 @@ import time
 import math
 import pytz
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import sys
 import random
@@ -1404,32 +1405,57 @@ NOME_ESTRATEGIAS_DISPLAY = {
 }
 
 # ================= ATIVOS DIVIDIDOS ABERTO E OTC =================
+# Lista ampliada de instrumentos encontrados em fontes públicas relacionadas à Quotex.
+# A disponibilidade pode variar por região, horário e pelo ambiente da própria Quotex.
+# O motor somente gera sinal quando consegue obter candles válidos para o ticker.
 ATIVOS_BASE = {
     "FOREX_ABERTO": [
+        # Principais e cruzamentos
         "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
-        "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCAD", "EURCHF"
+        "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "GBPAUD",
+        "EURCAD", "GBPCAD", "AUDCAD", "CHFJPY", "EURCHF", "GBPCHF",
+        "NZDJPY", "AUDNZD", "EURNZD", "GBPNZD",
+        # Pares adicionais/exóticos listados publicamente
+        "USDSGD", "USDHKD", "USDTRY", "USDMXN", "USDZAR", "USDPLN",
+        "USDNOK", "USDSEK", "USDDKK", "USDINR"
     ],
     "CRIPTO_ABERTO": [
-        "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "AVAXUSD",
-        "LINKUSD", "DOGEUSD", "DOTUSD", "LTCUSD", "TRXUSD"
+        "BTCUSD", "ETHUSD", "LTCUSD", "XRPUSD", "BCHUSD", "EOSUSD", "ADAUSD",
+        "DOTUSD", "LINKUSD", "UNIUSD", "SOLUSD", "AVAXUSD", "MATICUSD",
+        "BNBUSD", "DOGEUSD", "SHIBUSD", "TRXUSD"
     ],
     "FOREX_OTC": [
+        # OTC dos principais pares/cruzamentos
         "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC", "USDCAD-OTC", "USDCHF-OTC", "NZDUSD-OTC",
-        "EURGBP-OTC", "EURJPY-OTC", "GBPJPY-OTC", "AUDJPY-OTC", "EURAUD-OTC", "EURCAD-OTC", "EURCHF-OTC"
+        "EURGBP-OTC", "EURJPY-OTC", "GBPJPY-OTC", "AUDJPY-OTC", "EURAUD-OTC", "GBPAUD-OTC",
+        "EURCAD-OTC", "GBPCAD-OTC", "AUDCAD-OTC", "CHFJPY-OTC", "EURCHF-OTC", "GBPCHF-OTC",
+        "NZDJPY-OTC", "AUDNZD-OTC", "EURNZD-OTC", "GBPNZD-OTC", "NZDCAD-OTC", "CADCHF-OTC", "NZDCHF-OTC",
+        # Exóticos/locais encontrados em listas públicas de OTC da Quotex
+        "USDBDT-OTC", "ARSUSD-OTC", "BRLUSD-OTC", "DZDUSD-OTC", "USDTRY-OTC", "USDMXN-OTC",
+        "USDPKR-OTC", "USDCOP-OTC", "INRUSD-OTC", "EURSGD-OTC"
     ],
     "CRIPTO_OTC": [
-        "BTCUSD-OTC", "ETHUSD-OTC", "SOLUSD-OTC", "BNBUSD-OTC", "XRPUSD-OTC", "AVAXUSD-OTC",
-        "LINKUSD-OTC", "DOGEUSD-OTC", "DOTUSD-OTC", "LTCUSD-OTC", "TRXUSD-OTC"
+        "BTCUSD-OTC", "ETHUSD-OTC", "LTCUSD-OTC", "XRPUSD-OTC", "BCHUSD-OTC", "EOSUSD-OTC",
+        "ADAUSD-OTC", "DOTUSD-OTC", "LINKUSD-OTC", "UNIUSD-OTC", "SOLUSD-OTC", "AVAXUSD-OTC",
+        "MATICUSD-OTC", "BNBUSD-OTC", "DOGEUSD-OTC", "SHIBUSD-OTC", "TRXUSD-OTC"
     ]
 }
 
 # ================= MAPEAMENTO DE TICKERS =================
+# Para Forex aberto, Yahoo Finance usa o padrão XXXYYY=X.
+# Para cripto, usamos o par XXX-USD quando o Yahoo possui esse instrumento.
 MAPA_TICKERS = {}
-for par in ATIVOS_BASE["FOREX_ABERTO"]: MAPA_TICKERS[par] = par + "=X"
-for par in ATIVOS_BASE["CRIPTO_ABERTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
-for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X")
-
-for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
+for par in ATIVOS_BASE["FOREX_ABERTO"]:
+    MAPA_TICKERS[par] = par + "=X"
+for par in ATIVOS_BASE["CRIPTO_ABERTO"]:
+    MAPA_TICKERS[par] = par.replace("USD", "-USD")
+for par in ATIVOS_BASE["FOREX_OTC"]:
+    # A fonte pública de candles usada pelo bot não fornece a série OTC da Quotex.
+    # O símbolo é mantido para aparecer na seleção, mas o motor só sinaliza se
+    # encontrar dados válidos para o ticker correspondente.
+    MAPA_TICKERS[par] = par.replace("-OTC", "=X")
+for par in ATIVOS_BASE["CRIPTO_OTC"]:
+    MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
 def ativos_por_mercado(mkt):
     grupos = {
@@ -3337,6 +3363,58 @@ def confirmar_alerta_agendado(user_email, alert_id):
 
 
 # ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT =================
+
+def _precarregar_dados_paralelo(ativos, tf, ohlc_cache, velas_minimas=30, st=None, etapa="VARREDURA"):
+    """Busca candles dos ativos em paralelo para evitar que um ativo lento bloqueie a varredura inteira.
+
+    O processamento técnico continua no thread principal; somente a obtenção dos dados
+    de mercado é paralelizada. Isso reduz drasticamente o tempo de uma rodada quando
+    há muitos ativos selecionados ou quando algum endpoint demora a responder.
+    """
+    agora = time.time()
+    resultados = {}
+    pendentes = []
+
+    # Primeiro reaproveita tudo que ainda está no cache.
+    for ativo in ativos:
+        ticker = MAPA_TICKERS.get(ativo, ativo)
+        cache_key = f"{ticker}_{tf}"
+        item = ohlc_cache.get(cache_key)
+        if item and agora - item.get("time", 0) < 5 and item.get("data") is not None:
+            resultados[ativo] = item["data"]
+        else:
+            pendentes.append((ativo, ticker, cache_key))
+
+    if not pendentes:
+        if st is not None:
+            st["scan_fetch_status"] = f"CACHE • {len(resultados)}/{len(ativos)} ativos"
+        return resultados
+
+    max_workers = min(8, max(1, len(pendentes)))
+    concluidos = len(resultados)
+
+    def _buscar(item):
+        ativo, ticker, cache_key = item
+        try:
+            data = get_data_v2(ticker, tf, velas_minimas=velas_minimas)
+            return ativo, cache_key, data, None
+        except Exception as exc:
+            return ativo, cache_key, None, str(exc)
+
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="vp-data") as executor:
+        futures = {executor.submit(_buscar, item): item[0] for item in pendentes}
+        for future in as_completed(futures):
+            ativo, cache_key, data, erro = future.result()
+            concluidos += 1
+            if data is not None:
+                resultados[ativo] = data
+                ohlc_cache[cache_key] = {"data": data, "time": time.time()}
+            if st is not None:
+                st["scan_fetch_status"] = f"{etapa} • DADOS {concluidos}/{len(ativos)}"
+
+    return resultados
+
+
 def bot_loop():
     ohlc_cache = {}
 
@@ -3402,16 +3480,12 @@ def bot_loop():
                     if not st.get("warmup_concluido"):
                         warmup_set = st.setdefault("warmup_ativos_analisados", set())
                         st["warmup_status"] = f"ANALISANDO 30 VELAS • {len(warmup_set)}/{len(ativos)} ATIVOS"
-                        for ativo_w in ativos:
-                            if ativo_w in warmup_set:
-                                continue
-                            ticker_w = MAPA_TICKERS.get(ativo_w, ativo_w)
-                            cache_key_w = f"{ticker_w}_{tf}"
-                            data_w = ohlc_cache.get(cache_key_w, {}).get("data") if cache_key_w in ohlc_cache else None
-                            if data_w is None:
-                                data_w = get_data_v2(ticker_w, tf, velas_minimas=30)
-                                if data_w:
-                                    ohlc_cache[cache_key_w] = {"data": data_w, "time": time.time()}
+                        ativos_warmup_pendentes = [a for a in ativos if a not in warmup_set]
+                        dados_warmup = _precarregar_dados_paralelo(
+                            ativos_warmup_pendentes, tf, ohlc_cache, velas_minimas=30,
+                            st=st, etapa="AQUECIMENTO"
+                        )
+                        for ativo_w, data_w in dados_warmup.items():
                             closes_w = data_w.get("close", []) if data_w else []
                             if len(closes_w) >= 30:
                                 # A trava não apenas confere a existência das 30 velas:
@@ -3529,25 +3603,30 @@ def bot_loop():
                     st["scan_calls"] = 0
                     st["scan_puts"] = 0
                     st["scan_sem_sinal"] = 0
-                    st["scan_status"] = f"VARRENDO {len(ativos_scan)} ATIVOS"
+                    st["scan_dados_validos"] = 0
+                    st["scan_fetch_status"] = "INICIANDO CONSULTAS PARALELAS"
+                    st["scan_status"] = f"CARREGANDO DADOS DE {len(ativos_scan)} ATIVOS EM PARALELO"
                     st["scan_atualizado"] = time.time()
+
+                    # Busca os candles de todos os ativos simultaneamente. A análise
+                    # técnica permanece sequencial para preservar o estado e a lógica
+                    # do ensemble, mas nenhuma consulta lenta bloqueia as demais.
+                    dados_scan = _precarregar_dados_paralelo(
+                        ativos_scan, tf, ohlc_cache, velas_minimas=30,
+                        st=st, etapa="VARREDURA"
+                    )
 
                     for ativo in ativos_scan:
                         if not st.get("bot_iniciado") or st.get("bot_pausado"):
                             break
                         st["ativo_atual"] = ativo
-                        ticker = MAPA_TICKERS.get(ativo, ativo)
-                        cache_key = f"{ticker}_{tf}"
-                        data = ohlc_cache.get(cache_key, {}).get("data") if cache_key in ohlc_cache else None
-                        if data is None:
-                            data = get_data_v2(ticker, tf, velas_minimas=30)
-                            if data:
-                                ohlc_cache[cache_key] = {"data": data, "time": time.time()}
+                        data = dados_scan.get(ativo)
                         if not data:
                             st["scan_analisados"] = int(st.get("scan_analisados",0)) + 1
                             continue
 
                         st["scan_analisados"] = int(st.get("scan_analisados",0)) + 1
+                        st["scan_dados_validos"] = int(st.get("scan_dados_validos",0)) + 1
                         st["scan_atual"] = ativo
                         st["scan_status"] = f"ANALISANDO {ativo} • {st['scan_analisados']}/{len(ativos_scan)}"
                         try:
