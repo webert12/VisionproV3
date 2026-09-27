@@ -2186,39 +2186,99 @@ def _selecionar_candidato_diversificado(candidatos, st):
     ))
 
 # ================= WEB PUSH / NOTIFICAÇÕES EM SEGUNDO PLANO =================
-def _vapid_public_key_canonical():
-    """Retorna a VAPID public key no formato Web Push P-256 uncompressed (65 bytes).
-    Se a private key estiver em raw base64url, deriva a pública correspondente.
-    Isso evita erro quando a chave pública do Render foi copiada com formato incorreto.
+def _vapid_private_key_normalized():
+    """Normaliza uma VAPID private key para o formato aceito pelo py_vapid.
+
+    Aceita:
+      - raw 32 bytes em Base64URL (formato recomendado);
+      - Base64 padrão;
+      - 64 caracteres hexadecimais (conveniência);
+      - PEM/DER Base64;
+      - valores copiados com aspas, espaços ou prefixo VAPID_PRIVATE_KEY=.
+    Retorna uma string raw Base64URL de 32 bytes ou ''.
     """
-    raw = (VAPID_PRIVATE_KEY or '').strip()
+    import base64 as _b64
+    import re as _re
+    raw = str(VAPID_PRIVATE_KEY or '').strip()
     if not raw:
+        return ''
+
+    # Remove cópia acidental do nome da variável e aspas externas.
+    raw = _re.sub(r'^VAPID_PRIVATE_KEY\s*=\s*', '', raw, flags=_re.IGNORECASE).strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ('"', "'"):
+        raw = raw[1:-1].strip()
+    raw = raw.replace('\\n', '\n').strip()
+
+    try:
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key, load_der_private_key, Encoding, PrivateFormat, NoEncryption
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        key = None
+        if '-----BEGIN' in raw:
+            key = load_pem_private_key(raw.encode('utf-8'), password=None)
+        elif _re.fullmatch(r'[0-9a-fA-F]{64}', raw):
+            # Conveniência para quem colou uma chave hexadecimal de 32 bytes.
+            private_value = int(raw, 16)
+            if not 1 <= private_value < 2**256:
+                return ''
+            key = ec.derive_private_key(private_value, ec.SECP256R1())
+        else:
+            compact = ''.join(raw.split())
+            # Primeiro tenta Base64URL/Base64 como o py_vapid espera.
+            padded = compact + '=' * ((4 - len(compact) % 4) % 4)
+            try:
+                private_bytes = _b64.urlsafe_b64decode(padded.encode('ascii'))
+            except Exception:
+                private_bytes = _b64.b64decode(padded.encode('ascii'), validate=True)
+            if len(private_bytes) == 32:
+                private_value = int.from_bytes(private_bytes, 'big')
+                if not 1 <= private_value < 2**256:
+                    return ''
+                key = ec.derive_private_key(private_value, ec.SECP256R1())
+            else:
+                # Permite DER/PKCS8 codificado em Base64URL/Base64.
+                try:
+                    der = _b64.urlsafe_b64decode(padded.encode('ascii'))
+                    key = load_der_private_key(der, password=None)
+                except Exception:
+                    return ''
+
+        if not isinstance(key, ec.EllipticCurvePrivateKey):
+            return ''
+        if not isinstance(key.curve, ec.SECP256R1):
+            return ''
+        private_value = key.private_numbers().private_value
+        private_bytes = private_value.to_bytes(32, 'big')
+        return _b64.urlsafe_b64encode(private_bytes).rstrip(b'=').decode('ascii')
+    except Exception as exc:
+        print(f'⚠️ VAPID: não foi possível normalizar a chave privada: {exc}')
+        return ''
+
+
+def _vapid_public_key_canonical():
+    """Deriva a pública P-256 uncompressed de 65 bytes a partir da privada."""
+    import base64 as _b64
+    private_normalized = _vapid_private_key_normalized()
+    if not private_normalized:
         return ''
     try:
         from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_pem_private_key
-        import base64 as _b64
-        if 'BEGIN' in raw:
-            key = load_pem_private_key(raw.encode('utf-8'), password=None)
-        else:
-            padded = raw + '=' * ((4 - len(raw) % 4) % 4)
-            private_bytes = _b64.urlsafe_b64decode(padded)
-            if len(private_bytes) != 32:
-                raise ValueError('A VAPID_PRIVATE_KEY raw deve ter 32 bytes.')
-            private_value = int.from_bytes(private_bytes, 'big')
-            if not 1 <= private_value < 2**256:
-                raise ValueError('VAPID_PRIVATE_KEY inválida.')
-            key = ec.derive_private_key(private_value, ec.SECP256R1())
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        padded = private_normalized + '=' * ((4 - len(private_normalized) % 4) % 4)
+        private_bytes = _b64.urlsafe_b64decode(padded.encode('ascii'))
+        key = ec.derive_private_key(int.from_bytes(private_bytes, 'big'), ec.SECP256R1())
         public = key.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
         if len(public) != 65 or public[0] != 4:
-            raise ValueError('A chave pública derivada não é P-256 uncompressed.')
+            return ''
         return _b64.urlsafe_b64encode(public).rstrip(b'=').decode('ascii')
     except Exception as exc:
-        print(f'⚠️ VAPID: não foi possível derivar a chave pública da privada: {exc}')
+        print(f'⚠️ VAPID: não foi possível derivar a chave pública: {exc}')
         return ''
 
+
 def _push_configurado():
-    return bool(WEBPUSH_DISPONIVEL and VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
+    # A pública é derivada da privada; não exigimos mais VAPID_PUBLIC_KEY no Render.
+    return bool(WEBPUSH_DISPONIVEL and _vapid_private_key_normalized() and _vapid_public_key_canonical())
 
 def salvar_push_subscription(user_email, subscription):
     if not user_email or not isinstance(subscription, dict):
@@ -2265,7 +2325,7 @@ def enviar_web_push(user_email, titulo, corpo, tag=None, url='/'):
             _webpush(
                 subscription_info=sub,
                 data=payload,
-                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_private_key=_vapid_private_key_normalized(),
                 vapid_claims={"sub":VAPID_CLAIMS_EMAIL},
                 ttl=120,
                 content_encoding=encoding or 'aes128gcm'
@@ -2289,9 +2349,10 @@ def push_config():
         return jsonify({"ok":False,"error":"pywebpush não está instalado no servidor. Confira o requirements.txt e faça um novo deploy no Render."}),503
     if not VAPID_PRIVATE_KEY:
         return jsonify({"ok":False,"error":"VAPID_PRIVATE_KEY não está configurada no Render."}),503
+    private_normalized = _vapid_private_key_normalized()
     public_key = _vapid_public_key_canonical()
-    if not public_key:
-        return jsonify({"ok":False,"error":"VAPID_PRIVATE_KEY inválida. Use uma chave P-256 válida de 32 bytes em Base64URL ou PEM."}),503
+    if not private_normalized or not public_key:
+        return jsonify({"ok":False,"error":"VAPID_PRIVATE_KEY inválida. Use uma chave P-256 válida de 32 bytes em Base64URL ou PEM. Não cole o nome VAPID_PRIVATE_KEY= junto do valor."}),503
     # A pública retornada ao Chrome é sempre derivada da privada, garantindo
     # formato P-256 uncompressed de 65 bytes e correspondência entre as chaves.
     return jsonify({"ok":True,"public_key":public_key})
