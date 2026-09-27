@@ -3,7 +3,7 @@ import time
 import math
 import pytz
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import json
 import sys
 import random
@@ -97,7 +97,14 @@ def get_user_state(email):
             # Controle de diversificação: evita repetir o mesmo ativo na mesma vela
             # quando existem outras oportunidades válidas. Não força um ativo sem sinal.
             "ultimo_sinal_ativo": None,
-            "ultimo_sinal_candle_ts": 0.0
+            "ultimo_sinal_candle_ts": 0.0,
+            # Estado da varredura assíncrona: nenhum ativo pode bloquear os demais.
+            "analysis_generation": 0,
+            "analysis_inflight": set(),
+            "analysis_results": {},
+            "analysis_submitted": {},
+            "analysis_last_completed": 0.0,
+            "analysis_completed_count": 0
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -2326,6 +2333,7 @@ def set_assets():
         if ativo in validos and ativo not in selecionados:
             selecionados.append(ativo)
     st["selected_assets"] = selecionados
+    resetar_estado_varredura(st)
     st["warmup_concluido"] = True
     st["warmup_ativos_analisados"] = set()
     st["warmup_analysis"] = {}
@@ -2490,6 +2498,7 @@ def command(cmd):
         st["startup_lock_seconds"] = 0
         st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
         st["inicio_varredura"] = time.time()
+        resetar_estado_varredura(st)
         st["sinais_enviados"].clear() 
         
         st["ativo_atual"] = "INICIANDO VARREDURA..."
@@ -2545,6 +2554,7 @@ def command(cmd):
         # Envia o fechamento ANTES de limpar os resultados da sessão.
         enviar_telegram(mensagem_encerramento_sessao(st), user_solicitante=user)
 
+        resetar_estado_varredura(st)
         st["ativo_atual"] = "DESCONECTADO"
         st["news_guard_status"] = "DESATIVADA"
         st["news_guard_event"] = None
@@ -2566,6 +2576,7 @@ def command(cmd):
 
     elif cmd.startswith("tf_"): 
         st["timeframe"] = int(cmd.split('_')[1])
+        resetar_estado_varredura(st)
         st["warmup_concluido"] = True
         st["warmup_ativos_analisados"] = set()
         st["warmup_ativos_indisponiveis"] = set()
@@ -2576,6 +2587,7 @@ def command(cmd):
         st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
     elif cmd.startswith("mkt_"): 
         st["tipo_mercado"] = cmd.split('_', 1)[1] 
+        resetar_estado_varredura(st)
         st["warmup_concluido"] = True
         st["warmup_ativos_analisados"] = set()
         st["warmup_ativos_indisponiveis"] = set()
@@ -2921,20 +2933,108 @@ def confirmar_alerta_agendado(user_email, alert_id):
 
 
 # ================= VARREDURA DE ATIVOS ISOLADA/SEGURA =================
-def _processar_ativo_scan(ativo, tf, user_est, data_inicial=None):
-    """Analisa um ativo de forma isolada.
+# A análise técnica é assíncrona e persistente. O loop principal apenas agenda
+# trabalhos e coleta resultados já concluídos; ele nunca espera um ativo terminar.
+ANALYSIS_MAX_WORKERS = 16
+ANALYSIS_EXECUTOR = ThreadPoolExecutor(
+    max_workers=ANALYSIS_MAX_WORKERS,
+    thread_name_prefix="analise"
+)
+ANALYSIS_STATE_LOCK = threading.RLock()
 
-    Nenhum erro de um ativo pode interromper a varredura dos demais.
-    A função também pode buscar os candles em paralelo quando o cache não
-    possui dados recentes.
+def _assinatura_dados_analise(data):
+    """Assinatura curta para não recalcular o mesmo candle indefinidamente."""
+    try:
+        tempos = data.get("time", [])
+        ultimo = float(tempos[-1]) if len(tempos) else 0.0
+        return (ultimo, len(data.get("close", [])))
+    except Exception:
+        return (0.0, len(data.get("close", [])) if isinstance(data, dict) else 0)
+
+def _finalizar_analise_background(futuro, user_email, ativo, generation, assinatura):
+    try:
+        resultado = futuro.result()
+    except Exception as exc:
+        resultado = {
+            "ativo": ativo,
+            "data": None,
+            "cache_key": f"{MAPA_TICKERS.get(ativo, ativo)}",
+            "candidatos": [],
+            "diagnostico": None,
+            "erro": str(exc)
+        }
+        print(f"⚠️ Falha isolada na análise assíncrona de {ativo}: {exc}")
+
+    resultado["_assinatura"] = assinatura
+    resultado["_concluido_em"] = time.time()
+
+    with ANALYSIS_STATE_LOCK:
+        st = DADOS_USUARIOS.get(user_email)
+        if not st or int(st.get("analysis_generation", 0)) != int(generation):
+            return
+        st.setdefault("analysis_results", {})[ativo] = resultado
+        st.setdefault("analysis_inflight", set()).discard(ativo)
+        st["analysis_last_completed"] = resultado["_concluido_em"]
+        st["analysis_completed_count"] = len(st.get("analysis_results", {}))
+
+def agendar_analise_background(user_email, st, ativo, tf, user_est, data):
+    """Agenda uma análise CPU sem bloquear o bot_loop."""
+    assinatura = _assinatura_dados_analise(data)
+    generation = int(st.get("analysis_generation", 0))
+
+    with ANALYSIS_STATE_LOCK:
+        inflight = st.setdefault("analysis_inflight", set())
+        submitted = st.setdefault("analysis_submitted", {})
+        results = st.setdefault("analysis_results", {})
+
+        if ativo in inflight:
+            return False
+        if submitted.get(ativo) == assinatura:
+            resultado_existente = results.get(ativo)
+            if resultado_existente and resultado_existente.get("_assinatura") == assinatura:
+                return False
+            return False
+
+        inflight.add(ativo)
+        submitted[ativo] = assinatura
+
+    try:
+        futuro = ANALYSIS_EXECUTOR.submit(
+            _processar_ativo_scan, ativo, tf, user_est, data
+        )
+        futuro.add_done_callback(
+            lambda f, _u=user_email, _a=ativo, _g=generation, _s=assinatura:
+                _finalizar_analise_background(f, _u, _a, _g, _s)
+        )
+        return True
+    except Exception as exc:
+        with ANALYSIS_STATE_LOCK:
+            st.setdefault("analysis_inflight", set()).discard(ativo)
+            st.setdefault("analysis_submitted", {}).pop(ativo, None)
+        print(f"⚠️ Não foi possível agendar análise de {ativo}: {exc}")
+        return False
+
+def resetar_estado_varredura(st):
+    """Inicia uma nova geração e invalida resultados/futuros antigos."""
+    with ANALYSIS_STATE_LOCK:
+        st["analysis_generation"] = int(st.get("analysis_generation", 0)) + 1
+        st["analysis_inflight"] = set()
+        st["analysis_results"] = {}
+        st["analysis_submitted"] = {}
+        st["analysis_last_completed"] = 0.0
+        st["analysis_completed_count"] = 0
+
+def _processar_ativo_scan(ativo, tf, user_est, data_inicial=None):
+    """Analisa um ativo isoladamente e sem qualquer acesso à rede.
+
+    A função foi otimizada para calcular o painel técnico uma única vez por
+    direção. Antes, cada estratégia recalculava EMA/RSI/MACD/ADX etc.; com
+    muitos ativos isso multiplicava o custo da varredura.
     """
     ticker = MAPA_TICKERS.get(ativo, ativo)
     cache_key = f"{ticker}_{tf}"
     data = data_inicial
     try:
-        # CRÍTICO: a varredura é somente CPU. Se o candle não estiver no cache,
-        # o ativo é ignorado nesta rodada e a coleta continua em background.
-        # Nunca faça requests HTTP aqui: um endpoint lento não pode congelar o bot.
         if data is None or len(data.get("close", [])) < 30:
             return {"ativo": ativo, "data": None, "candidatos": [], "diagnostico": None, "erro": None}
 
@@ -2950,23 +3050,63 @@ def _processar_ativo_scan(ativo, tf, user_est, data_inicial=None):
         else:
             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
 
-        candidatos = []
+        # Primeiro encontra os padrões de cada estratégia. Esta etapa é barata.
+        sinais_por_estrategia = []
         for est_nome in estrategias_para_analisar:
             try:
-                sinal_test, prob_test, analise_test = analisar_estrategia_detalhada(data, est_nome)
+                sinal_test, prob_test = analisar_estrategia(data, est_nome)
                 if sinal_test:
-                    candidatos.append({
+                    sinais_por_estrategia.append({
                         "sinal": sinal_test,
                         "prob": int(prob_test),
-                        "estrategia": est_nome,
-                        "analise": analise_test
+                        "estrategia": est_nome
                     })
             except Exception as exc_est:
-                # Uma estratégia quebrada não pode derrubar as outras estratégias
-                # nem interromper a varredura dos demais ativos.
                 print(f"⚠️ Estratégia {est_nome} falhou em {ativo}: {exc_est}")
 
+        # O painel de confluência é calculado no máximo uma vez por direção.
+        indicadores_por_direcao = {}
+        for direcao in {x["sinal"] for x in sinais_por_estrategia}:
+            try:
+                indicadores_por_direcao[direcao] = _indicadores_confluencia(data, direcao)
+            except Exception as exc_ind:
+                print(f"⚠️ Indicadores {direcao} falharam em {ativo}: {exc_ind}")
+                indicadores_por_direcao[direcao] = {
+                    "confluencia": 0.0, "confirmacoes": 0, "conflitos": 99,
+                    "tendencia": "SEM DADOS", "forca_direcional": 0.0,
+                    "confluencias": []
+                }
+
         multi_estrategia = len(estrategias_para_analisar) > 1
+        candidatos = []
+        for item in sinais_por_estrategia:
+            sinal = item["sinal"]
+            indicadores = indicadores_por_direcao.get(sinal) or {}
+            tendencia = indicadores.get("tendencia")
+            confluencia = float(indicadores.get("confluencia", 0))
+            confirmacoes = int(indicadores.get("confirmacoes", 0))
+            conflitos = int(indicadores.get("conflitos", 99))
+            forca = float(indicadores.get("forca_direcional", 0))
+
+            if tendencia not in ("ALTA", "BAIXA"):
+                continue
+            if (sinal == "CALL" and tendencia != "ALTA") or (sinal == "PUT" and tendencia != "BAIXA"):
+                continue
+            if confluencia < 72 or confirmacoes < 6 or conflitos >= 2 or forca < 5.0:
+                continue
+
+            prob = int(round(68 + confluencia * 0.24 + min(5, max(0, item["prob"] - 80) * 0.35)))
+            prob = max(74, min(94, prob))
+            ana = dict(indicadores)
+            ana["estrategia_base_prob"] = int(item["prob"])
+            ana["estrategia"] = item["estrategia"]
+            candidatos.append({
+                "sinal": sinal,
+                "prob": prob,
+                "estrategia": item["estrategia"],
+                "analise": ana
+            })
+
         grupos = {"CALL": [], "PUT": []}
         for cand in candidatos:
             grupos.setdefault(cand["sinal"], []).append(cand)
@@ -2995,9 +3135,7 @@ def _processar_ativo_scan(ativo, tf, user_est, data_inicial=None):
             conflicts = int(ana.get("conflitos", 99))
             tendencia = ana.get("tendencia")
 
-            if tendencia != direcao:
-                continue
-            if conf < 72 or confirms < 6 or conflicts >= 2:
+            if tendencia != direcao or conf < 72 or confirms < 6 or conflicts >= 2:
                 continue
 
             bonus_consenso = min(9, max(0, consenso - 1) * 3)
@@ -3082,7 +3220,6 @@ def _processar_ativo_scan(ativo, tf, user_est, data_inicial=None):
             "erro": None
         }
     except Exception as exc:
-        # Isolamento crítico: um ativo problemático nunca encerra o ciclo inteiro.
         print(f"⚠️ Falha isolada na análise de {ativo}: {exc}")
         return {
             "ativo": ativo,
@@ -3231,11 +3368,10 @@ def bot_loop():
                         )
                         continue
 
-                    # 2. VARREDURA PROFISSIONAL: SOMENTE ATIVOS COM DADOS PRONTOS
-                    #
-                    # A coleta acontece exclusivamente em background. A varredura
-                    # trabalha somente com dados já disponíveis e executa o motor de
-                    # estratégias + confluências sem esperar rede.
+                    # 2. VARREDURA ASSÍNCRONA: nenhum ativo espera outro.
+                    # A coleta de candles continua em background e, assim que um ticker
+                    # está pronto, sua análise CPU é agendada no executor persistente.
+                    # O bot_loop segue livre para atualizar painel, timer e sinais.
                     candidatos_globais = []
                     diagnostico_melhor = None
                     melhor_diag_chave = (-1, -1, -1, -1)
@@ -3249,69 +3385,74 @@ def bot_loop():
                         if data_scan is not None and len(data_scan.get("close", [])) >= 30:
                             dados_para_scan[ativo_scan] = data_scan
                             ohlc_cache[cache_key_scan] = {"data": data_scan, "time": time.time()}
+                            agendar_analise_background(
+                                user_email, st, ativo_scan, tf, user_est, data_scan
+                            )
                         else:
                             solicitar_dados_background(ticker_scan, tf)
 
                     prontos_scan = list(dados_para_scan.keys())
                     aguardando_dados = max(0, total_ativos_scan - len(prontos_scan))
 
-                    # Nenhum dado pronto: não existe "varredura concluída".
-                    # Apenas mantemos a coleta em background e voltamos ao loop.
+                    with ANALYSIS_STATE_LOCK:
+                        resultados_validos = []
+                        for ativo_scan in prontos_scan:
+                            resultado = st.get("analysis_results", {}).get(ativo_scan)
+                            data_scan = dados_para_scan.get(ativo_scan)
+                            if not resultado or data_scan is None:
+                                continue
+                            if resultado.get("_assinatura") != _assinatura_dados_analise(data_scan):
+                                continue
+                            resultados_validos.append(resultado)
+
+                        inflight_count = sum(
+                            1 for a in prontos_scan
+                            if a in st.get("analysis_inflight", set())
+                        )
+
+                    concluidos_reais = len(resultados_validos)
                     if not prontos_scan:
                         st["ativo_atual"] = (
-                            f"ANALISANDO ATIVOS • {len(prontos_scan)}/{total_ativos_scan} COM DADOS PRONTOS"
+                            f"COLETANDO DADOS • 0/{total_ativos_scan} PRONTOS"
                         )
-                        st["warmup_status"] = "ANÁLISE EM TEMPO REAL • AGUARDANDO DADOS DOS ATIVOS"
+                        st["warmup_status"] = "ANÁLISE EM TEMPO REAL • COLETA EM BACKGROUND"
                         st["ultimo_sinal"] = (
                             "<div class='system-console' style='color:#f59e0b;'>"
-                            "⚡ <b>ANÁLISE EM TEMPO REAL</b><br>"
-                            f"Aguardando dados dos {total_ativos_scan} ativos selecionados.<br>"
-                            "A coleta ocorre em segundo plano e a análise de confluências começa automaticamente "
-                            "assim que cada ativo fica disponível."
+                            "⚡ <b>COLETA EM TEMPO REAL</b><br>"
+                            f"Coletando dados dos {total_ativos_scan} ativos em paralelo.<br>"
+                            "A análise começa automaticamente assim que cada ativo estiver pronto."
                             "</div>"
                         )
                         continue
 
-                    # Os ativos prontos são processados um a um de forma determinística.
-                    # _processar_ativo_scan não faz rede, portanto nenhum ativo externo
-                    # pode prender a análise. Um erro fica isolado no próprio ativo.
-                    st["ativo_atual"] = (
-                        f"VARREDURA EM EXECUÇÃO • 0/{len(prontos_scan)} ATIVOS"
-                        + (f" • {aguardando_dados} AGUARDANDO DADOS" if aguardando_dados else "")
-                    )
-
-                    resultados_scan = []
-                    for indice_scan, ativo_scan in enumerate(prontos_scan, start=1):
-                        try:
-                            resultado_scan = _processar_ativo_scan(
-                                ativo_scan, tf, user_est, dados_para_scan[ativo_scan]
-                            )
-                        except Exception as exc_scan:
-                            print(f"⚠️ Worker de {ativo_scan} falhou: {exc_scan}")
-                            resultado_scan = {
-                                "ativo": ativo_scan,
-                                "data": dados_para_scan.get(ativo_scan),
-                                "cache_key": f"{MAPA_TICKERS.get(ativo_scan, ativo_scan)}_{tf}",
-                                "candidatos": [],
-                                "diagnostico": None,
-                                "erro": str(exc_scan)
-                            }
-
-                        resultados_scan.append(resultado_scan)
+                    if not resultados_validos:
                         st["ativo_atual"] = (
-                            f"VARREDURA EM EXECUÇÃO • {indice_scan}/{len(prontos_scan)} ATIVOS"
+                            f"ANÁLISE EM PARALELO • 0/{len(prontos_scan)} CONCLUÍDOS"
                             + (f" • {aguardando_dados} AGUARDANDO DADOS" if aguardando_dados else "")
+                            + (f" • {inflight_count} EM PROCESSAMENTO" if inflight_count else "")
                         )
+                        st["warmup_status"] = "ANÁLISE EM TEMPO REAL • PROCESSANDO EM PARALELO"
+                        continue
 
-                    # Atualiza o cache e consolida candidatos/diagnósticos.
-                    for resultado_scan in resultados_scan:
+                    # Mostra progresso real e não espera os ativos ainda em processamento.
+                    ultimo_resultado = max(
+                        resultados_validos,
+                        key=lambda r: float(r.get("_concluido_em", 0) or 0)
+                    )
+                    st["ativo_atual"] = (
+                        f"ANALISANDO • {ultimo_resultado.get('ativo', '--')} • "
+                        f"{concluidos_reais}/{len(prontos_scan)} CONCLUÍDOS"
+                        + (f" • {aguardando_dados} AGUARDANDO DADOS" if aguardando_dados else "")
+                        + (f" • {inflight_count} EM PROCESSAMENTO" if inflight_count else "")
+                    )
+                    st["warmup_status"] = "ANÁLISE EM TEMPO REAL • MOTOR PARALELO"
+
+                    # Consolida somente resultados da assinatura atual.
+                    for resultado_scan in resultados_validos:
                         data_result = resultado_scan.get("data")
                         cache_key_result = resultado_scan.get("cache_key")
                         if data_result is not None and cache_key_result:
-                            ohlc_cache[cache_key_result] = {
-                                "data": data_result,
-                                "time": time.time()
-                            }
+                            ohlc_cache[cache_key_result] = {"data": data_result, "time": time.time()}
 
                         candidatos_globais.extend(resultado_scan.get("candidatos") or [])
                         diag_result = resultado_scan.get("diagnostico")
@@ -3325,15 +3466,6 @@ def bot_loop():
                             if diagnostico_melhor is None or chave_diag > melhor_diag_chave:
                                 melhor_diag_chave = chave_diag
                                 diagnostico_melhor = diag_result
-
-                    concluidos_reais = sum(
-                        1 for r in resultados_scan
-                        if not r.get("erro") and r.get("data") is not None
-                    )
-                    st["ativo_atual"] = (
-                        f"VARREDURA CONCLUÍDA • {concluidos_reais}/{total_ativos_scan} ANALISADOS"
-                        + (f" • {aguardando_dados} AGUARDANDO DADOS" if aguardando_dados else "")
-                    )
 
                     if diagnostico_melhor is not None and (
                         not st.get("aguardando_confirmacao") or st.get("analise_atual") is None
