@@ -98,6 +98,7 @@ def get_user_state(email):
             "warmup_concluido": False,
             "warmup_ativos_analisados": set(),
             "warmup_analysis": {},
+            "warmup_ativos_indisponiveis": set(),
             "warmup_inicio": 0.0,
             "startup_lock_until": 0.0,
             "startup_lock_seconds": 300,
@@ -2923,6 +2924,7 @@ def command(cmd):
         st["sinais_sessao_total"] = 0
         st["warmup_concluido"] = False
         st["warmup_ativos_analisados"] = set()
+        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["warmup_inicio"] = time.time()
         st["startup_lock_until"] = time.time() + 300
@@ -3474,46 +3476,80 @@ def bot_loop():
                     selecionados_usuario = [a for a in st.get("selected_assets", []) if a in ativos_mercado]
                     ativos = selecionados_usuario if selecionados_usuario else ativos_mercado
 
-                    # Trava de segurança: antes de qualquer alerta, o motor valida
-                    # as últimas 30 velas de todos os ativos selecionados.
-                    ativos = list(dict.fromkeys(ativos))
+                    # Trava de segurança: os candles são carregados e analisados
+                    # DURANTE os 5 minutos iniciais. Um ativo sem fonte pública válida
+                    # não pode bloquear o motor inteiro: ele é marcado como indisponível
+                    # e os demais continuam normalmente.
                     if not st.get("warmup_concluido"):
                         warmup_set = st.setdefault("warmup_ativos_analisados", set())
-                        st["warmup_status"] = f"ANALISANDO 30 VELAS • {len(warmup_set)}/{len(ativos)} ATIVOS"
-                        ativos_warmup_pendentes = [a for a in ativos if a not in warmup_set]
-                        dados_warmup = _precarregar_dados_paralelo(
-                            ativos_warmup_pendentes, tf, ohlc_cache, velas_minimas=30,
-                            st=st, etapa="AQUECIMENTO"
+                        indisponiveis = st.setdefault("warmup_ativos_indisponiveis", set())
+                        pendentes = [a for a in ativos if a not in warmup_set and a not in indisponiveis]
+                        st["warmup_status"] = (
+                            f"ANALISANDO 30 VELAS • {len(warmup_set) + len(indisponiveis)}/{len(ativos)} ATIVOS"
                         )
-                        for ativo_w, data_w in dados_warmup.items():
-                            closes_w = data_w.get("close", []) if data_w else []
-                            if len(closes_w) >= 30:
-                                # A trava não apenas confere a existência das 30 velas:
-                                # executa a leitura técnica sobre o bloco histórico antes
-                                # de liberar o motor para procurar entradas.
-                                try:
-                                    diag_w = _indicadores_confluencia(data_w, None)
-                                    st.setdefault("warmup_analysis", {})[ativo_w] = {
-                                        "confluencia": float(diag_w.get("confluencia",0)),
-                                        "tendencia": diag_w.get("tendencia"),
-                                        "rsi": float(diag_w.get("rsi",50)),
-                                        "timestamp": time.time()
-                                    }
-                                    warmup_set.add(ativo_w)
-                                except Exception:
-                                    pass
-                        if len(warmup_set) >= len(ativos):
+
+                        if pendentes:
+                            dados_warmup = _precarregar_dados_paralelo(
+                                pendentes, tf, ohlc_cache, velas_minimas=30,
+                                st=st, etapa="AQUECIMENTO"
+                            )
+                            for ativo_w, data_w in dados_warmup.items():
+                                closes_w = data_w.get("close", []) if data_w else []
+                                if len(closes_w) >= 30:
+                                    try:
+                                        # A leitura técnica completa já acontece durante
+                                        # o aquecimento; não esperamos 5 minutos para
+                                        # começar a procurar uma oportunidade.
+                                        diag_w = _indicadores_confluencia(data_w, None)
+                                        st.setdefault("warmup_analysis", {})[ativo_w] = {
+                                            "confluencia": float(diag_w.get("confluencia", 0)),
+                                            "tendencia": diag_w.get("tendencia"),
+                                            "regime": diag_w.get("regime", "--"),
+                                            "adx": float(diag_w.get("adx", 0)),
+                                            "rsi": float(diag_w.get("rsi", 50)),
+                                            "grafico": [float(x) for x in data_w["close"][-30:]],
+                                            "timestamp": time.time()
+                                        }
+                                        warmup_set.add(ativo_w)
+                                    except Exception as exc_w:
+                                        # Se os candles existem, o ativo já foi validado;
+                                        # um erro de diagnóstico não deve travar o aquecimento.
+                                        warmup_set.add(ativo_w)
+                                        st.setdefault("warmup_analysis", {})[ativo_w] = {
+                                            "confluencia": 0, "tendencia": "INDEFINIDA",
+                                            "regime": "SEM LEITURA", "adx": 0, "rsi": 50,
+                                            "grafico": [float(x) for x in closes_w[-30:]],
+                                            "timestamp": time.time(), "erro": str(exc_w)
+                                        }
+                                else:
+                                    # Sem 30 candles válidos (comum em alguns OTC):
+                                    # registra indisponível e não bloqueia os outros ativos.
+                                    indisponiveis.add(ativo_w)
+
+                        processados_warmup = len(warmup_set) + len(indisponiveis)
+                        if processados_warmup >= len(ativos):
                             st["warmup_concluido"] = True
-                            st["warmup_status"] = "30 VELAS VALIDADAS • ANÁLISE LIBERADA"
+                            st["warmup_status"] = (
+                                f"30 VELAS PROCESSADAS • {len(warmup_set)} VÁLIDOS • "
+                                f"{len(indisponiveis)} SEM DADOS PÚBLICOS"
+                            )
                         else:
                             st["ativo_atual"] = "AQUECENDO MOTOR — 30 VELAS"
                             st["ultimo_sinal"] = (
                                 f"<div class='system-console' style='color:#f59e0b;'>🛡️ <b>TRAVA DE SEGURANÇA ATIVA</b><br>"
-                                f"Analisando as últimas <b>30 velas</b> antes de liberar sinais.<br>"
-                                f"<span style='color:#00f2fe;'>{len(warmup_set)}/{len(ativos)} ativos validados.</span></div>"
+                                f"Analisando as últimas <b>30 velas</b> enquanto o temporizador inicial corre.<br>"
+                                f"<span style='color:#00f2fe;'>{processados_warmup}/{len(ativos)} ativos processados.</span></div>"
                             )
-                            continue
+                            # Não esperamos uma rodada posterior para começar a análise;
+                            # os dados válidos já entram no ciclo de confluência abaixo.
+                            # Se ainda existem pendentes, o próximo ciclo continua daqui.
+                            if not warmup_set:
+                                continue
 
+                    # Durante os 5 minutos, os dados válidos já estão no cache e o
+                    # bloco de varredura abaixo continua normalmente. Quando a trava
+                    # terminar, a mesma varredura já terá um candidato pronto.
+                    dados_warmup_validos = st.get("warmup_ativos_analisados", set())
                     # Segurança adicional: mesmo com 30 velas disponíveis, o sistema
                     # aguarda obrigatoriamente 5 minutos após o START. Durante essa janela
                     # ele continua analisando os ativos, mas NÃO cria alerta nem sinal.
