@@ -83,25 +83,15 @@ def get_user_state(email):
             "news_blocked_assets": [],
             "news_guard_updated": 0.0,
             "analise_atual": None,
-            "scan_status": "AGUARDANDO VARREDURA",
-            "scan_total": 0,
-            "scan_analisados": 0,
-            "scan_calls": 0,
-            "scan_puts": 0,
-            "scan_sem_sinal": 0,
-            "scan_melhor": None,
-            "scan_atualizado": 0.0,
-            "scan_atual": "AGUARDANDO",
-            "scan_atual_analise": None,
             "sessao_resultados": [],
             "sinais_sessao_total": 0,
             "warmup_concluido": False,
             "warmup_ativos_analisados": set(),
-            "warmup_analysis": {},
             "warmup_ativos_indisponiveis": set(),
+            "warmup_analysis": {},
             "warmup_inicio": 0.0,
             "startup_lock_until": 0.0,
-            "startup_lock_seconds": 300,
+            "startup_lock_seconds": 0,
             "warmup_status": "AGUARDANDO 30 VELAS",
             "selected_assets": [],
             # Controle de diversificação: evita repetir o mesmo ativo na mesma vela
@@ -418,17 +408,6 @@ HTML_INDEX = """
         .tool-btn,.history-btn,.admin-btn{width:100%;padding:10px;border-radius:9px;background:#0b131f;border:1px solid #1c2b3d;color:#8edff0;font-size:9px;font-weight:900;text-transform:uppercase}.tool-btn:hover,.history-btn:hover{border-color:rgba(0,217,255,.35)}.admin-btn{color:#8ab4ff;border-color:rgba(96,165,250,.25)}.tools-content,.history{display:none;margin-top:8px}.tools-content.open,.history.open{display:grid;gap:7px}.tg-btn,.notify-btn{width:100%;padding:9px;border-radius:8px;background:#0a111a;border:1px solid #1d2b3c;color:#94a3b8;font-size:9px;font-weight:900}.history-list{max-height:220px;overflow:auto}.history-item{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);font-family:'JetBrains Mono';font-size:9px}.history-item:last-child{border-bottom:0}.history-result{font-weight:900;padding:4px 7px;border-radius:7px;border:1px solid transparent}.history-win,.history-g1{color:#4ade80;background:rgba(34,197,94,.08);border-color:rgba(34,197,94,.22)}.history-red{color:#fb7185;background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.22)}
         .section{display:none}.section.active{display:block}.section-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.section-head h2{font-size:15px}.section-head p{font-size:9px;color:#69798d}.table-card{overflow:auto}.data-table{width:100%;border-collapse:collapse;min-width:620px}.data-table th{font-size:8px;color:#66758a;text-transform:uppercase;text-align:left;padding:10px;border-bottom:1px solid var(--line)}.data-table td{font-size:9px;padding:10px;border-bottom:1px solid rgba(255,255,255,.045)}
         .asset-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;max-height:290px;overflow:auto;padding:8px;background:#080e16;border:1px solid #182536;border-radius:10px}.asset-check{display:flex;align-items:center;gap:6px;padding:7px 8px;background:#0b121d;border:1px solid #182536;border-radius:8px;color:#aebdcd;font-size:8px;font-weight:800}.asset-check input{accent-color:#00d9ff}.asset-check.selected{border-color:rgba(0,217,255,.35);color:#dffbff;background:rgba(0,217,255,.05)}.picker-actions{display:flex;gap:7px}.picker-actions button{flex:1;padding:9px;border-radius:8px;background:#0b131f;border:1px solid #1c2b3d;color:#9fe7f5;font-size:8px;font-weight:900}.backtest-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.backtest-results{display:grid;gap:10px}.bt-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}.bt-table{width:100%;border-collapse:collapse;min-width:760px}.bt-table th,.bt-table td{padding:9px;border-bottom:1px solid rgba(255,255,255,.05);font-size:8px;text-align:left}.bt-table th{color:#66758a;text-transform:uppercase}.bt-win{color:#4ade80;font-weight:900}.bt-loss{color:#fb7185;font-weight:900}.bt-g1{color:#fbbf24;font-weight:900}.bt-note{font-size:8px;color:#718096;line-height:1.5}.warmup-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 8px;border-radius:8px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:8px;font-weight:900}
-        .calc-top-btn{margin-top:7px;display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:9px;background:rgba(0,217,255,.06);border:1px solid rgba(0,217,255,.2);color:#9fe7f5;font-size:9px;font-weight:900;text-transform:uppercase}
-        .calc-top-btn:hover{border-color:rgba(0,217,255,.45);background:rgba(0,217,255,.1)}
-        .calc-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr);gap:12px}.calc-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.calc-result-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.calc-stat{background:#0b121d;border:1px solid #182536;border-radius:12px;padding:11px;text-align:center}.calc-stat .k{font-size:8px;color:#66758a;font-weight:900;text-transform:uppercase}.calc-stat .v{font-family:'JetBrains Mono';font-size:17px;font-weight:900;margin-top:4px;color:#dce6f2}.calc-profile{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.calc-profile label{cursor:pointer}.calc-profile input{display:none}.calc-profile span{display:block;text-align:center;padding:10px 7px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-profile input:checked+span{border-color:rgba(0,217,255,.45);background:rgba(0,217,255,.08);color:#dffbff}.calc-mode{display:grid;grid-template-columns:1fr 1fr;gap:7px}.calc-mode label{cursor:pointer}.calc-mode input{display:none}.calc-mode span{display:block;text-align:center;padding:10px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-mode input:checked+span{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.07);color:#bbf7d0}.calc-plan{display:grid;gap:7px}.calc-plan-row{display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border-radius:9px;background:#0b121d;border:1px solid #182536;font-size:9px}.calc-plan-row b{color:#dce6f2}.calc-plan-row span{color:#7f8da0;text-align:right}.calc-entry-table{width:100%;border-collapse:separate;border-spacing:0 5px;font-size:9px}.calc-entry-table th{color:#66758a;text-transform:uppercase;font-size:7px;text-align:left;padding:5px 7px}.calc-entry-table td{padding:8px 7px;background:#0b121d;border-top:1px solid #182536;border-bottom:1px solid #182536;color:#b8c4d3}.calc-entry-table td:first-child{border-left:1px solid #182536;border-radius:8px 0 0 8px;color:#dce6f2;font-weight:900}.calc-entry-table td:last-child{border-right:1px solid #182536;border-radius:0 8px 8px 0}.calc-entry-table .entry-value{color:#dffbff;font-family:'JetBrains Mono';font-weight:900}.calc-entry-table .win-next{color:#86efac}.calc-entry-table .loss-next{color:#fca5a5}.calc-entry-note{margin-top:8px;padding:9px;border-radius:9px;background:rgba(0,217,255,.04);border:1px solid rgba(0,217,255,.12);color:#8da0b5;font-size:8px;line-height:1.5}.calc-warning{padding:10px;border-radius:10px;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:9px;line-height:1.5}.calc-ok{padding:10px;border-radius:10px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.18);color:#86efac;font-size:9px;line-height:1.5}.calc-note{font-size:8px;color:#718096;line-height:1.55}
-        .calc-modal{position:fixed!important;inset:0;z-index:200;display:none!important;padding:22px;overflow:auto;background:rgba(2,6,12,.82);backdrop-filter:blur(8px)}
-        .calc-modal.active{display:block!important}
-        .calc-modal-inner{max-width:1180px;margin:0 auto;padding-bottom:40px}
-        .calc-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
-        .calc-close{border:1px solid rgba(239,68,68,.25);background:rgba(239,68,68,.07);color:#fca5a5;border-radius:9px;padding:8px 12px;font-size:10px;font-weight:900;cursor:pointer}
-        @media(max-width:700px){.calc-modal{padding:12px 10px 28px}.calc-modal-inner{width:100%}.calc-modal-head{position:sticky;top:0;z-index:3;padding:4px 0 8px;background:rgba(2,6,12,.92);backdrop-filter:blur(8px)}}
-.calc-section-title{font-size:10px;font-weight:900;color:#dce6f2;margin-bottom:8px}.calc-input-suffix{position:relative}.calc-input-suffix input{padding-right:35px}.calc-input-suffix span{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:9px;color:#66758a;font-weight:900}
-
         .mobile-nav{display:none}.mobile-only{display:none}.desktop-only{display:block}
         .toast{position:fixed;right:20px;bottom:20px;background:#101a28;border:1px solid #24354a;border-radius:10px;padding:10px 13px;font-size:10px;color:#dbe8f5;opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s;z-index:100}.toast.show{opacity:1;transform:none}
         @media(max-width:1100px){.grid-main{grid-template-columns:1fr}.sidebar{width:210px}.main{width:calc(100% - 210px);margin-left:210px}.signal-meta{grid-template-columns:repeat(2,1fr)}}
@@ -438,8 +417,6 @@ HTML_INDEX = """
             .mobile-nav{position:fixed;display:grid;grid-template-columns:repeat(7,1fr);left:8px;right:8px;bottom:8px;height:60px;background:rgba(8,14,22,.96);border:1px solid #203044;border-radius:16px;z-index:60;box-shadow:0 10px 35px rgba(0,0,0,.45);padding:4px}.mobile-nav button{border:0;background:transparent;color:#65758a;font-size:7px;font-weight:900;border-radius:11px;min-width:0}.mobile-nav button.active{background:rgba(0,217,255,.08);color:#dffbff}.mobile-nav span{display:block;font-size:15px;margin-bottom:2px}
             .topbar .top-meta{gap:5px}.topbar{gap:6px}.hero-top .mini{max-width:160px}.locked-btn{padding:11px}.section-head{margin-top:2px}.table-card{border-radius:12px}.asset-picker{grid-template-columns:repeat(2,minmax(0,1fr));max-height:360px}.backtest-grid{grid-template-columns:1fr 1fr}.bt-summary{grid-template-columns:repeat(2,1fr)}
         }
-        @media(max-width:900px){.calc-grid{grid-template-columns:1fr}.calc-result-grid{grid-template-columns:repeat(2,1fr)}}
-        @media(max-width:560px){.calc-fields{grid-template-columns:1fr}.calc-profile{grid-template-columns:1fr}.calc-mode{grid-template-columns:1fr}.calc-top-btn{font-size:8px;padding:6px 8px}}
         @media(min-width:1400px){.main{padding-left:32px;padding-right:32px}.grid-main{grid-template-columns:minmax(0,1.65fr) minmax(350px,.8fr)}}
         @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
     </style>
@@ -462,7 +439,7 @@ HTML_INDEX = """
 
     <main class="main">
         <div class="topbar">
-            <div><div class="page-title">VISION <span>PRO</span></div><div class="mini">Terminal de análise em tempo real</div><button class="calc-top-btn" type="button" onclick="abrirCalculadora()">🧮 CALCULADORA DE GESTÃO DE BANCA</button></div>
+            <div><div class="page-title">VISION <span>PRO</span></div><div class="mini">Terminal de análise em tempo real</div></div>
             <div class="top-meta"><div class="status-pill"><span class="live-dot"></span><span id="top-status">ONLINE</span></div><a class="logout" href="/logout">SAIR</a></div>
         </div>
 
@@ -592,47 +569,6 @@ HTML_INDEX = """
                 <div id="backtest-results" class="backtest-results" style="margin-top:12px"><div class="card"><div class="card-pad empty">Escolha os parâmetros e execute o backtest.</div></div></div>
             </section>
 
-            <section id="view-calculadora" class="view calc-modal" aria-hidden="true">
-                <div class="calc-modal-inner">
-                    <div class="calc-modal-head">
-                        <div class="section-head" style="margin:0"><div><h2>🧮 Calculadora de Gestão de Banca</h2><p>Simule uma trajetória de banca com mão fixa ou Soros usando parâmetros explícitos.</p></div><div class="warmup-badge">⚠️ Simulação, não garantia de resultado</div></div>
-                        <button type="button" class="calc-close" onclick="fecharCalculadora()">✕ FECHAR</button>
-                    </div>
-                <div class="calc-grid">
-                    <div class="card">
-                        <div class="card-head"><div><div class="eyebrow">Planejamento</div><div class="card-title">Defina a meta da banca</div></div></div>
-                        <div class="card-pad">
-                            <div class="calc-fields">
-                                <div class="field"><label>Banca inicial (R$)</label><input class="select" id="calc-bankroll" type="number" min="1" step="0.01" value="100"></div>
-                                <div class="field"><label>Lucro desejado (R$)</label><input class="select" id="calc-target" type="number" min="1" step="0.01" value="1000"></div>
-                                <div class="field"><label>Prazo (dias)</label><input class="select" id="calc-days" type="number" min="1" max="365" step="1" value="30"></div>
-                                <div class="field"><label>Payout líquido por WIN</label><div class="calc-input-suffix"><input class="select" id="calc-payout" type="number" min="1" max="99.99" step="0.1" value="80"><span>%</span></div></div>
-                                <div class="field"><label>Taxa de acerto estimada</label><div class="calc-input-suffix"><input class="select" id="calc-winrate" type="number" min="50" max="99.99" step="0.1" value="70"><span>%</span></div></div>
-                                <div class="field"><label>Níveis de Soros</label><select class="select" id="calc-soros-levels"><option value="1">1 nível (sem progressão)</option><option value="2" selected>2 níveis</option><option value="3">3 níveis</option><option value="4">4 níveis</option></select></div>
-                            </div>
-                            <div class="calc-section-title" style="margin-top:12px">Perfil de risco</div>
-                            <div class="calc-profile">
-                                <label><input type="radio" name="calc-profile" value="conservador" checked onchange="atualizarPerfilCalc()"><span>🟢 CONSERVADOR<br><small>2% por entrada</small></span></label>
-                                <label><input type="radio" name="calc-profile" value="moderado" onchange="atualizarPerfilCalc()"><span>🟡 MODERADO<br><small>5% por entrada</small></span></label>
-                                <label><input type="radio" name="calc-profile" value="agressivo" onchange="atualizarPerfilCalc()"><span>🔴 AGRESSIVO<br><small>9% por entrada</small></span></label>
-                            </div>
-                            <div class="calc-section-title" style="margin-top:12px">Método de entrada</div>
-                            <div class="calc-mode">
-                                <label><input type="radio" name="calc-mode" value="fixa" checked onchange="atualizarPerfilCalc()"><span>💵 MÃO FIXA</span></label>
-                                <label><input type="radio" name="calc-mode" value="soros" onchange="atualizarPerfilCalc()"><span>📈 SOROS</span></label>
-                            </div>
-                            <div id="calc-mode-help" class="calc-note" style="margin-top:8px">Mão fixa: o valor-base permanece igual em cada entrada. O resultado esperado depende da taxa de acerto e do payout informados.</div>
-                            <button class="action start" style="width:100%;margin-top:12px" onclick="calcularGestaoBanca()">🧮 CALCULAR PLANO</button>
-                        </div>
-                    </div>
-                    <div id="calc-results" class="card">
-                        <div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Plano de gestão</div></div><div class="mini">Aguardando cálculo</div></div>
-                        <div class="card-pad"><div class="empty">Preencha os parâmetros e clique em “Calcular plano”.</div></div>
-                    </div>
-                </div>
-                </div>
-            </section>
-
             <section id="view-config" class="view">
                 <div class="section-head"><div><h2>⚙️ Configurações</h2><p>Parâmetros operacionais do motor.</p></div></div>
                 <div class="card"><div class="card-pad controls">
@@ -666,22 +602,6 @@ let lastNotifId=null;
 let latestData=null;
 const NATIVE_NOTIFICATION_COOLDOWN_MS=0;
 
-function abrirCalculadora(){
-    const modal=document.getElementById('view-calculadora');
-    if(!modal)return;
-    modal.classList.add('active');
-    modal.setAttribute('aria-hidden','false');
-    document.body.style.overflow='hidden';
-    atualizarPerfilCalc();
-}
-function fecharCalculadora(){
-    const modal=document.getElementById('view-calculadora');
-    if(!modal)return;
-    modal.classList.remove('active');
-    modal.setAttribute('aria-hidden','true');
-    document.body.style.overflow='';
-}
-window.addEventListener('keydown',e=>{if(e.key==='Escape')fecharCalculadora()});
 function abrirView(name,btn){
     document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
     const el=document.getElementById('view-'+name); if(el) el.classList.add('active');
@@ -693,7 +613,17 @@ function abrirView(name,btn){
 }
 function toggleBox(id){const e=document.getElementById(id); if(e)e.classList.toggle('open')}
 function toast(msg){const e=document.getElementById('toast');if(!e)return;e.innerText=msg;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2200)}
-function sendCommand(cmd){fetch('/command/'+cmd,{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d.redirect)location.href=d.redirect;else if(d.error)toast(d.error);else toast('Comando atualizado');}).catch(()=>toast('Falha de comunicação com o servidor'))}
+async function sendCommand(cmd){
+    try{
+        const r=await fetch('/command/'+encodeURIComponent(cmd),{cache:'no-store',headers:{'Accept':'application/json'}});
+        const ct=r.headers.get('content-type')||'';
+        const d=ct.includes('application/json')?await r.json():{error:'Servidor retornou uma resposta inválida ('+r.status+').'};
+        if(!r.ok){toast(d.error||('Falha no comando ('+r.status+')'));return;}
+        if(d.redirect)location.href=d.redirect;
+        else if(d.error)toast(d.error);
+        else toast('Comando atualizado');
+    }catch(e){toast('Falha de comunicação com o servidor. Tente novamente.');}
+}
 
 let assetsCatalog=[];
 function assetsForMarket(mkt){
@@ -710,249 +640,6 @@ function btLimparAtivos(){document.querySelectorAll('#bt-assets input').forEach(
 function executarBacktest(){const box=document.getElementById('backtest-results');const assets=pickerValues('bt-assets');if(!assets.length){toast('Selecione pelo menos um ativo para o backtest');return}box.innerHTML='<div class="card"><div class="card-pad empty">⏳ Executando backtest histórico...</div></div>';fetch('/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({timeframe:Number(document.getElementById('bt-tf').value),market:document.getElementById('bt-market').value,estrategia:document.getElementById('bt-est').value,g1:document.getElementById('bt-g1').value==='sim',limit:Number(document.getElementById('bt-limit').value),assets})}).then(r=>r.json()).then(d=>{if(!d.ok){box.innerHTML='<div class="card"><div class="card-pad empty">❌ '+(d.error||'Falha no backtest')+'</div></div>';return}renderBacktestResults(d)}).catch(()=>{box.innerHTML='<div class="card"><div class="card-pad empty">❌ Falha de comunicação com o servidor.</div></div>'})}
 function renderBacktestResults(d){const box=document.getElementById('backtest-results');const s=d.summary||{};const cards=[['Entradas',s.entradas||0,''],['Wins',s.wins||0,'bt-win'],['G1',s.g1||0,'bt-g1'],['Loss',s.losses||0,'bt-loss'],['Assertividade',((s.assertividade||0).toFixed? s.assertividade.toFixed(1):s.assertividade)+'%','']];let html='<div class="card"><div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Backtest histórico</div></div><div class="mini">'+(d.meta||'')+'</div></div><div class="card-pad"><div class="bt-summary">'+cards.map(c=>`<div class="stat-box"><div class="stat-k">${c[0]}</div><div class="stat-v ${c[2]}">${c[1]}</div></div>`).join('')+'</div></div></div>';const mk=(arr,key)=>'<div class="card"><div class="card-head"><div><div class="eyebrow">Ranking</div><div class="card-title">'+key+'</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Nome</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(arr||[]).map(x=>`<tr><td><b>${x.nome||x.ativo||x.estrategia||'--'}</b></td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+=mk(d.top_assets,'Melhores ativos');html+=mk(d.top_strategies,'Melhores estratégias');html+='<div class="card"><div class="card-head"><div><div class="eyebrow">Detalhamento</div><div class="card-title">Ativo × estratégia</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Ativo</th><th>Estratégia</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(d.rows||[]).map(x=>`<tr><td><b>${x.ativo}</b></td><td>${x.estrategia}</td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+='<div class="card"><div class="card-pad bt-note">Fonte: '+(d.source||'dados históricos públicos')+'. '+(d.note||'')+'</div></div>';box.innerHTML=html}
 function atualizarAssetPickers(d){assetsCatalog=d.assets_catalog||{};const m=d.mercado||'TODOS';const selected=d.selected_assets||[];const op=document.getElementById('operating-assets');if(op&&!op.dataset.userEditing){renderAssetPicker('operating-assets',m,selected)}const btM=document.getElementById('bt-market');if(btM&&!document.getElementById('bt-assets')?.dataset.initialized){document.getElementById('bt-assets').dataset.initialized='1';renderAssetPicker('bt-assets',btM.value,[])} }
-function atualizarPerfilCalc(){
-    const mode=document.querySelector('input[name="calc-mode"]:checked')?.value||'fixa';
-    const help=document.getElementById('calc-mode-help');
-    if(help) help.innerText=mode==='soros'
-        ? 'Soros: após um WIN, o próximo valor usa o valor da entrada mais o lucro daquele WIN. Um LOSS reinicia no valor-base. O cálculo mostra a exposição máxima e os níveis usados.'
-        : 'Mão fixa: o valor-base permanece igual em cada entrada. O resultado esperado depende da taxa de acerto e do payout informados.';
-}
-function moedaBR(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
-function pctBR(v){return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1})+'%';}
-function calcularGestaoBanca(){
-    // A calculadora roda localmente no navegador. Assim ela não depende de
-    // uma rota Flask, sessão ou chamada de rede para apresentar o resultado.
-    const getNum = id => {
-        const el=document.getElementById(id);
-        if(!el) return NaN;
-        const raw=String(el.value ?? '').trim().replace(',','.');
-        return Number(raw);
-    };
-
-    const banca=getNum('calc-bankroll');
-    const meta=getNum('calc-target');
-    const dias=Math.floor(getNum('calc-days'));
-    const payoutRaw=getNum('calc-payout');
-    const winrateRaw=getNum('calc-winrate');
-    const perfil=document.querySelector('input[name="calc-profile"]:checked')?.value||'conservador';
-    const modo=document.querySelector('input[name="calc-mode"]:checked')?.value||'fixa';
-    const niveis=Math.max(1,Math.min(4,Math.floor(getNum('calc-soros-levels'))||1));
-    const box=document.getElementById('calc-results');
-    if(!box)return;
-
-    if(!Number.isFinite(banca)||banca<=0){
-        mostrarErroCalc('Informe uma banca inicial maior que R$ 0,00.'); return;
-    }
-    if(!Number.isFinite(meta)||meta<=0){
-        mostrarErroCalc('Informe um lucro desejado maior que R$ 0,00.'); return;
-    }
-    if(!Number.isFinite(dias)||dias<1||dias>365){
-        mostrarErroCalc('O prazo deve estar entre 1 e 365 dias.'); return;
-    }
-    if(!Number.isFinite(payoutRaw)||payoutRaw<=0||payoutRaw>=100){
-        mostrarErroCalc('O payout deve ficar entre 1% e 99,99%.'); return;
-    }
-    if(!Number.isFinite(winrateRaw)||winrateRaw<50||winrateRaw>=100){
-        mostrarErroCalc('A taxa de acerto estimada deve ficar entre 50% e 99,99%.'); return;
-    }
-
-    const payout=payoutRaw/100;
-    const winrate=winrateRaw/100;
-    const riscoMap={conservador:0.02,moderado:0.05,agressivo:0.09};
-    const risco=riscoMap[perfil]||0.01;
-    const entradaBase=Math.max(0.01,Math.round(banca*risco*100)/100);
-    const evFator=winrate*payout-(1-winrate);
-    const lucroWinBase=entradaBase*payout;
-
-    let entradasEstimadas=null;
-    let entradasDia=null;
-    let lucroEsperadoPorEntrada=0;
-    let valorEsperadoEntrada=0;
-    let exposicaoMaxima=entradaBase;
-    let plan=[];
-    let ciclosEstimados=null;
-
-    if(modo==='fixa'){
-        valorEsperadoEntrada=entradaBase*evFator;
-        lucroEsperadoPorEntrada=valorEsperadoEntrada;
-        if(valorEsperadoEntrada>0){
-            entradasEstimadas=Math.ceil(meta/valorEsperadoEntrada);
-            entradasDia=Math.ceil(entradasEstimadas/dias);
-        }
-    }else{
-        // Soros: cada nível só é atingido se o nível anterior terminar em WIN.
-        // O lucro de cada ciclo é calculado por probabilidade, sem inventar
-        // uma sequência futura de resultados.
-        let stake=entradaBase;
-        let evCiclo=0;
-        let entradasEsperadasCiclo=0;
-        for(let nivel=1;nivel<=niveis;nivel++){
-            const probAlcance=Math.pow(winrate,nivel-1);
-            entradasEsperadasCiclo+=probAlcance;
-            // Se chegar a este nível, o resultado líquido esperado desta entrada.
-            evCiclo += probAlcance*stake*evFator;
-            exposicaoMaxima=Math.max(exposicaoMaxima,stake);
-            stake*=1+payout;
-        }
-        if(evCiclo>0){
-            ciclosEstimados=Math.ceil(meta/evCiclo);
-            entradasEstimadas=Math.ceil(ciclosEstimados*entradasEsperadasCiclo);
-            entradasDia=Math.ceil(entradasEstimadas/dias);
-            valorEsperadoEntrada=evCiclo/entradasEsperadasCiclo;
-            lucroEsperadoPorEntrada=valorEsperadoEntrada;
-        }
-    }
-
-    const winsSemLoss=lucroWinBase>0?Math.ceil(meta/lucroWinBase):null;
-    if(entradasEstimadas){
-        let restante=entradasEstimadas;
-        for(let dia=1;dia<=dias;dia++){
-            const restantesDias=dias-dia+1;
-            const hoje=Math.ceil(restante/restantesDias);
-            plan.push({dia:dia,entradas:hoje,entrada_base:entradaBase,nivel_maximo:modo==='soros'?exposicaoMaxima:null});
-            restante-=hoje;
-        }
-    }
-
-    const viavel=Number.isFinite(entradasEstimadas)&&entradasEstimadas>0&&valorEsperadoEntrada>0;
-    let mensagem='';
-    if(!viavel){
-        mensagem='Com os parâmetros informados, o valor esperado por entrada não é positivo. Para tornar a simulação matematicamente positiva, altere o payout ou a taxa de acerto estimada.';
-    }else if(entradasDia>50){
-        mensagem='A simulação é matematicamente positiva, mas exige um volume elevado de entradas por dia para a meta e o prazo informados.';
-    }else if(modo==='soros'&&exposicaoMaxima>banca*0.15){
-        mensagem='A simulação do Soros concentra mais de 15% da banca em uma única entrada nos níveis altos. Avalie essa exposição antes de utilizar o plano.';
-    }else{
-        mensagem='Simulação matemática baseada exclusivamente na banca, payout, taxa de acerto e perfil informados. Isso não é garantia de resultado futuro.';
-    }
-
-    const nota=(
-        'Perfil '+perfil+': '+(risco*100).toFixed(0)+'% da banca por entrada-base ('+moedaBR(entradaBase)+'). '+
-        'Payout: '+pctBR(payoutRaw)+' • Taxa de acerto usada: '+pctBR(winrateRaw)+'. '+
-        (modo==='soros'
-            ? 'Soros com '+niveis+' nível(is): após WIN o lucro é incorporado à próxima entrada; após LOSS retorna ao valor-base.'
-            : 'Mão fixa: cada entrada mantém o mesmo valor-base.')
-    );
-
-    // Roteiro condicional de entradas: mostra exatamente quanto usar e para onde
-    // ir depois de WIN/LOSS. Isso evita inventar uma sequência futura de resultados.
-    const entrySteps=[];
-    let roteiroStake=entradaBase;
-    let roteiroNivel=1;
-    const totalRoteiro=modo==='soros' ? Math.max(12, Math.min(30, niveis*6)) : Math.min(30, Math.max(12, entradasEstimadas||12));
-    for(let i=1;i<=totalRoteiro;i++){
-        let winNext=entradaBase, lossNext=entradaBase, levelLabel='Mão fixa';
-        if(modo==='soros'){
-            levelLabel='Nível '+roteiroNivel;
-            if(roteiroNivel<niveis){
-                winNext=Math.round(roteiroStake*(1+payout)*100)/100;
-            }else{
-                winNext=entradaBase;
-            }
-            lossNext=entradaBase;
-        }else{
-            winNext=entradaBase;
-            lossNext=entradaBase;
-        }
-        entrySteps.push({numero:i,valor:Math.round(roteiroStake*100)/100,nivel:levelLabel,win_proxima:Math.round(winNext*100)/100,loss_proxima:Math.round(lossNext*100)/100});
-        if(modo==='soros'){
-            if(roteiroNivel<niveis){
-                roteiroStake=winNext;
-                roteiroNivel++;
-            }else{
-                roteiroStake=entradaBase;
-                roteiroNivel=1;
-            }
-        }else roteiroStake=entradaBase;
-    }
-
-    const sorosLevels=[];
-    if(modo==='soros'){
-        let st=entradaBase;
-        for(let n=1;n<=niveis;n++){
-            const lucro=st*payout;
-            const prox=n<niveis?st+lucro:entradaBase;
-            sorosLevels.push({nivel:n,valor:Math.round(st*100)/100,lucro_win:Math.round(lucro*100)/100,proxima_win:Math.round(prox*100)/100,proxima_loss:entradaBase});
-            st=prox;
-        }
-    }
-
-    renderCalculadora({
-        ok:true,
-        parameters:{bankroll:banca,target_profit:meta,days:dias,payout:payout,winrate:winrate,profile:perfil,mode:modo,soros_levels:niveis},
-        summary:{
-            entrada_base:entradaBase,
-            entradas_estimadas:entradasEstimadas,
-            entradas_por_dia:entradasDia,
-            lucro_esperado_por_entrada:lucroEsperadoPorEntrada,
-            valor_esperado_entrada:valorEsperadoEntrada,
-            exposicao_maxima:exposicaoMaxima,
-            wins_sem_loss:winsSemLoss,
-            viavel:viavel
-        },
-        plan:plan,
-        entry_steps:entrySteps,
-        soros_levels_detail:sorosLevels,
-        message:mensagem,
-        note:nota
-    });
-}
-function mostrarErroCalc(msg){
-    const box=document.getElementById('calc-results');
-    if(!box)return;
-    box.innerHTML='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Verifique os parâmetros</div></div></div><div class="card-pad"><div class="calc-warning">❌ '+String(msg)+'</div></div>';
-}
-
-function renderCalculadora(d){
-    const box=document.getElementById('calc-results');
-    if(!box)return;
-    const s=d.summary||{}, p=d.parameters||{}, plan=Array.isArray(d.plan)?d.plan:[], steps=Array.isArray(d.entry_steps)?d.entry_steps:[], levels=Array.isArray(d.soros_levels_detail)?d.soros_levels_detail:[];
-    const cards=[
-        ['Entrada base',moedaBR(s.entrada_base)],
-        ['Entradas estimadas',s.entradas_estimadas||'--'],
-        ['Entradas/dia',s.entradas_por_dia||'--'],
-        ['Lucro esperado/entrada',moedaBR(s.lucro_esperado_por_entrada)],
-        ['Meta total',moedaBR(p.target_profit)],
-        ['Banca final alvo',moedaBR((Number(p.bankroll)||0)+(Number(p.target_profit)||0))],
-        ['Máx. exposição',moedaBR(s.exposicao_maxima)],
-        ['EV por entrada',moedaBR(s.valor_esperado_entrada)]
-    ];
-    let html='';
-    html+='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Plano '+String(p.profile||'').toUpperCase()+' • '+(p.mode==='soros'?'SOROS':'MÃO FIXA')+'</div></div><div class="mini">'+(p.days||0)+' dia(s)</div></div>';
-    html+='<div class="card-pad">';
-    html+='<div class="calc-result-grid">';
-    cards.forEach(function(c){html+='<div class="calc-stat"><div class="k">'+c[0]+'</div><div class="v">'+c[1]+'</div></div>';});
-    html+='</div>';
-
-    html+='<div style="margin-top:14px" class="calc-section-title">📋 Roteiro das entradas</div>';
-    html+='<div class="calc-entry-note">'+(p.mode==='soros'
-        ? 'Use a linha correspondente ao resultado da entrada anterior: <b>WIN</b> leva para o próximo nível; <b>LOSS</b> reinicia no valor-base. O roteiro é condicional e não presume que você terá WINs consecutivos.'
-        : 'Na mão fixa, cada entrada mantém o mesmo valor. Se der WIN ou LOSS, a próxima entrada continua no valor-base definido pelo perfil.')+'</div>';
-    html+='<div style="overflow-x:auto;margin-top:7px"><table class="calc-entry-table"><thead><tr><th>Entrada</th><th>Valor</th><th>Nível</th><th>Se WIN → próxima</th><th>Se LOSS → próxima</th></tr></thead><tbody>';
-    if(steps.length){
-        steps.forEach(function(x){html+='<tr><td>#'+x.numero+'</td><td class="entry-value">'+moedaBR(x.valor)+'</td><td>'+x.nivel+'</td><td class="win-next">'+moedaBR(x.win_proxima)+'</td><td class="loss-next">'+moedaBR(x.loss_proxima)+'</td></tr>';});
-    }else html+='<tr><td colspan="5" class="empty">Nenhuma entrada calculada.</td></tr>';
-    html+='</tbody></table></div>';
-
-    if(p.mode==='soros'&&levels.length){
-        html+='<div style="margin-top:14px" class="calc-section-title">📈 Ciclo Soros por nível</div>';
-        html+='<div style="overflow-x:auto;margin-top:7px"><table class="calc-entry-table"><thead><tr><th>Nível</th><th>Entrada</th><th>Lucro se WIN</th><th>Próxima se WIN</th><th>Próxima se LOSS</th></tr></thead><tbody>';
-        levels.forEach(function(x){html+='<tr><td>Nível '+x.nivel+'</td><td class="entry-value">'+moedaBR(x.valor)+'</td><td class="win-next">+'+moedaBR(x.lucro_win)+'</td><td class="win-next">'+moedaBR(x.proxima_win)+'</td><td class="loss-next">'+moedaBR(x.proxima_loss)+'</td></tr>';});
-        html+='</tbody></table></div>';
-    }
-
-    html+='<div style="margin-top:14px" class="calc-section-title">📅 Distribuição por dia</div><div class="calc-plan">';
-    if(plan.length){
-        plan.forEach(function(x){html+='<div class="calc-plan-row"><b>Dia '+(x.dia||'--')+'</b><span>'+(x.entradas||0)+' entrada(s) • base '+moedaBR(x.entrada_base)+(x.nivel_maximo?' • exposição máx. '+moedaBR(x.nivel_maximo):'')+'</span></div>';});
-    }else{
-        html+='<div class="empty">Nenhum plano diário calculado.</div>';
-    }
-    html+='</div>';
-    html+='<div style="margin-top:10px" class="'+(s.viavel?'calc-ok':'calc-warning')+'">'+(d.message||'')+'</div>';
-    html+='<div style="margin-top:9px" class="calc-note">'+(d.note||'')+'</div>';
-    html+='</div>';
-    box.innerHTML=html;
-}
 function registrarResultado(res){fetch('/resultado/'+res,{cache:'no-store'}).then(()=>toast('Resultado registrado')).catch(()=>toast('Falha ao registrar resultado'))}
 function toggleTelegram(){fetch('/command/telegram_toggle',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d.ok){const b=document.getElementById('btn-telegram-toggle');if(b)b.innerText=d.telegram_ativo?'🟢 ENVIO TELEGRAM ATIVADO':'🔴 ENVIO TELEGRAM DESATIVADO';}})}
 function solicitarPermissaoNotificacao(){if(!('Notification'in window)){alert('Este navegador não suporta notificações.');return}Notification.requestPermission().then(p=>{const b=document.getElementById('btn-enable-notify');if(p==='granted'){if(b)b.innerText='✅ NOTIFICAÇÕES NATIVAS ATIVADAS';toast('Notificações ativadas')}else alert('Permissão de notificação recusada.')})}
@@ -971,17 +658,15 @@ function renderSignal(d){
     // Prioridade: confirmado > alerta > análise corrente. Assim outro ativo analisado
     // pelo bot nunca substitui o ativo da entrada confirmada.
     const fonte=confirmado||alerta||a;
-    const scan=d.scan_atual_analise||a||{};
     const dir=(fonte.direcao||fonte.sinal||null);
     const prob=Number(fonte.probabilidade||0);
     const ativo=fonte.ativo||d.ativo_atual||'AGUARDANDO';
-    const ativoScan=d.scan_atual||scan.ativo||ativo||'AGUARDANDO';
     const tf=Number(fonte.tf||d.timeframe||5);
     const entrada=fonte.str_entrada||fonte.entrada||d.entry_time||'--:--:--';
     const expiracao=fonte.str_saida||fonte.expiracao||'--:--';
     const est=fonte.estrategia_fmt||a.estrategia_fmt||'Motor aguardando análise';
     const conf=fonte.confluencia!=null?fonte.confluencia:a.confluencia;
-    const analise=scan;
+    const analise=fonte.analise||a;
 
     const panel=document.getElementById('panel-text');
     if(panel){
@@ -991,17 +676,15 @@ function renderSignal(d){
         }else if(alerta){
             const corAlerta=dir==='CALL'?'#34d399':dir==='PUT'?'#fb7185':'#fbbf24';
             panel.innerHTML=`<div style=\"text-align:center;line-height:1.6\"><b style=\"color:#fbbf24\">⚠️ PRÉ-ALERTA</b><br><b style=\"font-size:15px;color:${corAlerta}\">${ativo} • ${dir||'--'}</b><br><span style=\"color:#cbd5e1\">Probabilidade: ${prob||'--'}% • M${tf}</span><br><span style=\"color:#94a3b8\">Entrada prevista: ${entrada} • Expiração: ${expiracao}</span></div>`;
-        }else if(d.rodando && Number(d.startup_lock_remaining||0)>0){
-            panel.innerHTML=`<div style=\"text-align:center;color:#f59e0b;line-height:1.6\">🛡️ <b>TRAVA DE SEGURANÇA</b><br>30 VELAS VALIDADAS • AGUARDANDO 5 MINUTOS<br><span style=\"color:#00d9ff\">LIBERAÇÃO EM ${Math.ceil(Number(d.startup_lock_remaining))}s</span></div>`;
         }else if(!d.warmup_concluido && d.rodando){
-            panel.innerHTML=`<div style=\"text-align:center;color:#f59e0b;line-height:1.6\">🛡️ <b>TRAVA DE SEGURANÇA</b><br>ANALISANDO AS ÚLTIMAS 30 VELAS<br><span style=\"color:#00d9ff\">${d.warmup_ativos_analisados||0} ATIVOS VALIDADOS</span></div>`;
+            panel.innerHTML=`<div style=\"text-align:center;color:#f59e0b;line-height:1.6\">⚡ <b>PRÉ-ANÁLISE RÁPIDA</b><br>CARREGANDO AS ÚLTIMAS 30 VELAS EM PARALELO<br><span style=\"color:#00d9ff\">${d.warmup_ativos_analisados||0} ATIVOS VALIDADOS</span></div>`;
         }else{
             panel.innerHTML=d.html||'Aguardando Comando...';
         }
     }
 
-    setText('asset-tag',confirmado||alerta?ativo:ativoScan);
-    setText('analysis-asset',ativoScan);
+    setText('asset-tag',ativo);
+    setText('analysis-asset',ativo);
     setText('signal-asset-2',ativo);
     setText('signal-tf','M'+tf);
     setText('signal-tf-2','M'+tf);
@@ -1016,9 +699,8 @@ function renderSignal(d){
     renderProbability(prob);
     renderProbability(prob,'prob-value-3','prob-fill-3');
     setText('prob-value-2',prob?prob+'%':'--%');
-    const confScan=scan.confluencia!=null?scan.confluencia:conf;
-    setText('confluence-overall',confScan!=null?'Confluência técnica: '+Number(confScan).toFixed(0)+'/100':'Confluência técnica: --/100');
-    setText('confluence-overall-2',confScan!=null?'Confluência '+Number(confScan).toFixed(0)+'/100':'Confluência --/100');
+    setText('confluence-overall',conf!=null?'Confluência técnica: '+Number(conf).toFixed(0)+'/100':'Confluência técnica: --/100');
+    setText('confluence-overall-2',conf!=null?'Confluência '+Number(conf).toFixed(0)+'/100':'Confluência --/100');
     setText('signal-strategy',est);
     setText('signal-strategy-2',est);
     setText('analysis-direction',dir||'Sem sinal');
@@ -1053,7 +735,7 @@ function renderResumoHistorico(r){const make=(arr)=>arr&&arr.length?arr.map(x=>`
 function atualizarSessao(d){setText('win-count',d.wins||0);setText('loss-count',d.reds||0);setText('wr-text',(d.winrate||0)+'%');setText('g1-count',d.g1_sessao||0);setText('session-count',(d.sinais_sessao_total||0)+' operações');const f=document.getElementById('wr-fill');if(f)f.style.width=Math.max(0,Math.min(100,Number(d.winrate)||0))+'%'}
 function formatarTempo(seg){seg=Math.max(0,Math.floor(Number(seg)||0));const h=Math.floor(seg/3600),m=Math.floor((seg%3600)/60),s=seg%60;return h>0?String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'):String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')}
 function formatarHora(ts){if(!ts)return'--:--:--';return new Date(Number(ts)*1000).toLocaleTimeString('pt-BR',{hour12:false})}
-function atualizarTimerMercado(d){const end=Number(d.candle_end_ts||0),start=Number(d.candle_start_ts||0),server=Number(d.server_now||Date.now()/1000),now=server+((Date.now()/1000)-server);const remaining=Math.max(0,end-now);const elapsed=Math.max(0,Math.min(end-start,now-start));const total=Math.max(1,Number(d.candle_total||((d.timeframe||5)*60)));const pct=Math.max(0,Math.min(100,(elapsed/total)*100));setText('candle-countdown',formatarTempo(remaining));const fill=document.getElementById('candle-fill');if(fill)fill.style.width=pct+'%';setText('candle-window',formatarHora(start)+' → '+formatarHora(end));const entryTs=Number(d.entry_end_ts||0);const entryRemaining=entryTs?Math.max(0,entryTs-now):0;const confirmTs=Number(d.confirmation_ts||0);const confirmRemaining=confirmTs?Math.max(0,confirmTs-now):0;const entrada=d.entry_time||'--:--:--';setText('entry-countdown',entryTs?(entrada+' • '+formatarTempo(entryRemaining)):(entrada==='--:--:--'?'--:--:--':entrada));const note=document.getElementById('timer-note');if(note){if(d.sinal_confirmado){note.innerText='🎯 Entrada confirmada • expiração: '+((d.sinal_confirmado||{}).str_saida||'--:--:--');note.className='timer-note timer-confirm'}else if(d.alerta){note.innerText=confirmRemaining<=5&&confirmRemaining>0?'⚡ CONFIRMAÇÃO EM '+Math.ceil(confirmRemaining)+'s':'⚠️ Confirmação programada 5s antes da virada • entrada '+entrada;note.className='timer-note '+(confirmRemaining<=5&&confirmRemaining>0?'timer-alert':'')}else if(Number(d.startup_lock_remaining||0)>0){note.innerText='🛡️ Trava inicial: '+Math.ceil(Number(d.startup_lock_remaining))+'s restantes • analisando mercado';note.className='timer-note timer-alert'}else{note.innerText='Aguardando uma confluência válida para programar a entrada.';note.className='timer-note'}}}
+function atualizarTimerMercado(d){const end=Number(d.candle_end_ts||0),start=Number(d.candle_start_ts||0),server=Number(d.server_now||Date.now()/1000),now=server+((Date.now()/1000)-server);const remaining=Math.max(0,end-now);const elapsed=Math.max(0,Math.min(end-start,now-start));const total=Math.max(1,Number(d.candle_total||((d.timeframe||5)*60)));const pct=Math.max(0,Math.min(100,(elapsed/total)*100));setText('candle-countdown',formatarTempo(remaining));const fill=document.getElementById('candle-fill');if(fill)fill.style.width=pct+'%';setText('candle-window',formatarHora(start)+' → '+formatarHora(end));const entryTs=Number(d.entry_end_ts||0);const entryRemaining=entryTs?Math.max(0,entryTs-now):0;const confirmTs=Number(d.confirmation_ts||0);const confirmRemaining=confirmTs?Math.max(0,confirmTs-now):0;const entrada=d.entry_time||'--:--:--';setText('entry-countdown',entryTs?(entrada+' • '+formatarTempo(entryRemaining)):(entrada==='--:--:--'?'--:--:--':entrada));const note=document.getElementById('timer-note');if(note){if(d.sinal_confirmado){note.innerText='🎯 Entrada confirmada • expiração: '+((d.sinal_confirmado||{}).str_saida||'--:--:--');note.className='timer-note timer-confirm'}else if(d.alerta){note.innerText=confirmRemaining<=5&&confirmRemaining>0?'⚡ CONFIRMAÇÃO EM '+Math.ceil(confirmRemaining)+'s':'⚠️ Confirmação programada 5s antes da virada • entrada '+entrada;note.className='timer-note '+(confirmRemaining<=5&&confirmRemaining>0?'timer-alert':'')}else{note.innerText='Aguardando uma confluência válida para programar a entrada.';note.className='timer-note'}}}
 async function atualizarPainel(){try{const r=await fetch('/status',{cache:'no-store'});const d=await r.json();if(d.redirect){location.href=d.redirect;return}latestData=d;atualizarAssetPickers(d);renderSignal(d);atualizarSessao(d);atualizarTimerMercado(d);atualizarAtivosBloqueados(d.news_blocked_assets||[]);const ng=d.news_guard_status||'AGUARDANDO CALENDÁRIO';setText('news-guard-status',ng);setText('guard-detail-status',ng);const blocked=(d.news_blocked_assets||[]).length;const color=blocked?'#fb7185':ng.includes('INDISPONÍVEL')?'#fbbf24':'#86efac';['news-guard-status','guard-detail-status'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.color=color});const b=document.getElementById('guard-badge');if(b)b.innerText=blocked?'● PROTEGENDO':'● ATIVO';const b2=document.getElementById('guard-badge-2');if(b2)b2.innerText=blocked?'● PROTEGENDO':'● ATIVO';const result=document.getElementById('result-area');if(result)result.style.display=d.aguardando?'grid':'none';renderHistory(d.historico||[]);renderResumoHistorico(d.historico_resumo||{});if(d.notificacao&&d.notificacao.id!==lastNotifId){lastNotifId=d.notificacao.id;dispararNotificacaoNativa(d.notificacao.titulo,d.notificacao.corpo,d.notificacao.id)}}catch(e){setText('top-status','REDE');}finally{setTimeout(atualizarPainel,1000)}}
 window.addEventListener('resize',()=>{if(latestData){const f=latestData.sinal_confirmado||latestData.alerta||latestData.analise_atual||{};drawChart((f.analise||f).grafico||[],'market-chart');drawChart((f.analise||f).grafico||[],'market-chart-2')}});
 document.getElementById('bt-market')?.addEventListener('change',e=>renderAssetPicker('bt-assets',e.target.value,[]));
@@ -1399,64 +1081,39 @@ LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
 
 NOME_ESTRATEGIAS_DISPLAY = {
     "LOGICA_DO_PRECO": "Lógica do Preço",
-    "RSI_MACD_MA": "RSI + Cruzamento MACD + MA",
+    "RSI_MACD_MA": "RSI + MACD + MA 9/21/50/100",
     "MHI1": "MHI 1 (+ Filtro Tendência)",
     "REVERSAO": "Reversão de Bandas",
     "TODAS": "Análise Dinâmica Múltipla"
 }
 
 # ================= ATIVOS DIVIDIDOS ABERTO E OTC =================
-# Lista ampliada de instrumentos encontrados em fontes públicas relacionadas à Quotex.
-# A disponibilidade pode variar por região, horário e pelo ambiente da própria Quotex.
-# O motor somente gera sinal quando consegue obter candles válidos para o ticker.
 ATIVOS_BASE = {
     "FOREX_ABERTO": [
-        # Principais e cruzamentos
         "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
-        "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "GBPAUD",
-        "EURCAD", "GBPCAD", "AUDCAD", "CHFJPY", "EURCHF", "GBPCHF",
-        "NZDJPY", "AUDNZD", "EURNZD", "GBPNZD",
-        # Pares adicionais/exóticos listados publicamente
-        "USDSGD", "USDHKD", "USDTRY", "USDMXN", "USDZAR", "USDPLN",
-        "USDNOK", "USDSEK", "USDDKK", "USDINR"
+        "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCAD", "EURCHF"
     ],
     "CRIPTO_ABERTO": [
-        "BTCUSD", "ETHUSD", "LTCUSD", "XRPUSD", "BCHUSD", "EOSUSD", "ADAUSD",
-        "DOTUSD", "LINKUSD", "UNIUSD", "SOLUSD", "AVAXUSD", "MATICUSD",
-        "BNBUSD", "DOGEUSD", "SHIBUSD", "TRXUSD"
+        "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "AVAXUSD",
+        "LINKUSD", "DOGEUSD", "DOTUSD", "LTCUSD", "TRXUSD"
     ],
     "FOREX_OTC": [
-        # OTC dos principais pares/cruzamentos
         "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC", "USDCAD-OTC", "USDCHF-OTC", "NZDUSD-OTC",
-        "EURGBP-OTC", "EURJPY-OTC", "GBPJPY-OTC", "AUDJPY-OTC", "EURAUD-OTC", "GBPAUD-OTC",
-        "EURCAD-OTC", "GBPCAD-OTC", "AUDCAD-OTC", "CHFJPY-OTC", "EURCHF-OTC", "GBPCHF-OTC",
-        "NZDJPY-OTC", "AUDNZD-OTC", "EURNZD-OTC", "GBPNZD-OTC", "NZDCAD-OTC", "CADCHF-OTC", "NZDCHF-OTC",
-        # Exóticos/locais encontrados em listas públicas de OTC da Quotex
-        "USDBDT-OTC", "ARSUSD-OTC", "BRLUSD-OTC", "DZDUSD-OTC", "USDTRY-OTC", "USDMXN-OTC",
-        "USDPKR-OTC", "USDCOP-OTC", "INRUSD-OTC", "EURSGD-OTC"
+        "EURGBP-OTC", "EURJPY-OTC", "GBPJPY-OTC", "AUDJPY-OTC", "EURAUD-OTC", "EURCAD-OTC", "EURCHF-OTC"
     ],
     "CRIPTO_OTC": [
-        "BTCUSD-OTC", "ETHUSD-OTC", "LTCUSD-OTC", "XRPUSD-OTC", "BCHUSD-OTC", "EOSUSD-OTC",
-        "ADAUSD-OTC", "DOTUSD-OTC", "LINKUSD-OTC", "UNIUSD-OTC", "SOLUSD-OTC", "AVAXUSD-OTC",
-        "MATICUSD-OTC", "BNBUSD-OTC", "DOGEUSD-OTC", "SHIBUSD-OTC", "TRXUSD-OTC"
+        "BTCUSD-OTC", "ETHUSD-OTC", "SOLUSD-OTC", "BNBUSD-OTC", "XRPUSD-OTC", "AVAXUSD-OTC",
+        "LINKUSD-OTC", "DOGEUSD-OTC", "DOTUSD-OTC", "LTCUSD-OTC", "TRXUSD-OTC"
     ]
 }
 
 # ================= MAPEAMENTO DE TICKERS =================
-# Para Forex aberto, Yahoo Finance usa o padrão XXXYYY=X.
-# Para cripto, usamos o par XXX-USD quando o Yahoo possui esse instrumento.
 MAPA_TICKERS = {}
-for par in ATIVOS_BASE["FOREX_ABERTO"]:
-    MAPA_TICKERS[par] = par + "=X"
-for par in ATIVOS_BASE["CRIPTO_ABERTO"]:
-    MAPA_TICKERS[par] = par.replace("USD", "-USD")
-for par in ATIVOS_BASE["FOREX_OTC"]:
-    # A fonte pública de candles usada pelo bot não fornece a série OTC da Quotex.
-    # O símbolo é mantido para aparecer na seleção, mas o motor só sinaliza se
-    # encontrar dados válidos para o ticker correspondente.
-    MAPA_TICKERS[par] = par.replace("-OTC", "=X")
-for par in ATIVOS_BASE["CRIPTO_OTC"]:
-    MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
+for par in ATIVOS_BASE["FOREX_ABERTO"]: MAPA_TICKERS[par] = par + "=X"
+for par in ATIVOS_BASE["CRIPTO_ABERTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
+for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X")
+
+for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
 def ativos_por_mercado(mkt):
     grupos = {
@@ -1921,448 +1578,365 @@ def _macd_atual(c):
     sinal = calcular_ema(linha, 9)
     return float(linha[-1]), float(sinal[-1]), float(linha[-1] - sinal[-1])
 
-def _atr_atual(h, l, c, periodo=14):
-    """ATR simples usando somente candles fechados disponíveis."""
-    if len(c) < 2:
+def _sma(c, periodo):
+    c = np.asarray(c, dtype=float)
+    if len(c) == 0:
         return 0.0
-    tr = np.maximum(
-        h[1:] - l[1:],
-        np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1]))
-    )
-    janela = tr[-periodo:] if len(tr) >= periodo else tr
-    return float(np.mean(janela)) if len(janela) else 0.0
+    n = min(int(periodo), len(c))
+    return float(np.mean(c[-n:]))
 
-def _adx_atual(h, l, c, periodo=14):
-    """ADX aproximado e estável para medir força de tendência."""
-    if len(c) < periodo * 2 + 2:
+
+def _adx_detalhado(h, l, c, periodo=14):
+    """ADX/+DI/-DI simplificado, sem dependência externa."""
+    if len(c) < periodo + 2:
         return 0.0, 0.0, 0.0
-    up = np.diff(h)
-    down = -np.diff(l)
+    h = np.asarray(h, dtype=float)
+    l = np.asarray(l, dtype=float)
+    c = np.asarray(c, dtype=float)
+    up = h[1:] - h[:-1]
+    down = l[:-1] - l[1:]
     plus_dm = np.where((up > down) & (up > 0), up, 0.0)
     minus_dm = np.where((down > up) & (down > 0), down, 0.0)
     tr = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
-    atr = np.convolve(tr, np.ones(periodo) / periodo, mode='valid')
-    p = np.convolve(plus_dm, np.ones(periodo) / periodo, mode='valid')
-    m = np.convolve(minus_dm, np.ones(periodo) / periodo, mode='valid')
-    n = min(len(atr), len(p), len(m))
-    if n < periodo:
-        return 0.0, 0.0, 0.0
-    atr = np.maximum(atr[-n:], 1e-12)
-    pdi = 100 * p[-n:] / atr
-    mdi = 100 * m[-n:] / atr
-    dx = 100 * np.abs(pdi - mdi) / np.maximum(pdi + mdi, 1e-12)
+    tr_n = np.convolve(tr, np.ones(periodo) / periodo, mode='valid')
+    plus_n = np.convolve(plus_dm, np.ones(periodo) / periodo, mode='valid')
+    minus_n = np.convolve(minus_dm, np.ones(periodo) / periodo, mode='valid')
+    tr_n = np.maximum(tr_n, 1e-12)
+    plus_di = 100.0 * plus_n / tr_n
+    minus_di = 100.0 * minus_n / tr_n
+    dx = 100.0 * np.abs(plus_di - minus_di) / np.maximum(plus_di + minus_di, 1e-12)
     adx = float(np.mean(dx[-periodo:])) if len(dx) else 0.0
-    return adx, float(pdi[-1]), float(mdi[-1])
+    return adx, float(plus_di[-1]), float(minus_di[-1])
 
-def _estocastico_atual(h, l, c, periodo=14, suavizacao=3):
+
+def _estocastico_detalhado(h, l, c, periodo=14):
     if len(c) < periodo:
         return 50.0, 50.0
-    lowest = float(np.min(l[-periodo:]))
-    highest = float(np.max(h[-periodo:]))
-    k = 50.0 if highest - lowest <= 1e-12 else 100 * (float(c[-1]) - lowest) / (highest - lowest)
-    # Para manter a leitura robusta com poucos dados, usa uma média curta dos %K.
+    hh = float(np.max(h[-periodo:]))
+    ll = float(np.min(l[-periodo:]))
+    k = 50.0 if hh <= ll else float((c[-1] - ll) / (hh - ll) * 100.0)
+    # D simples com os últimos valores de K.
     ks = []
-    inicio = max(periodo, len(c) - suavizacao)
-    for i in range(inicio, len(c) + 1):
-        lo = float(np.min(l[i-periodo:i])); hi = float(np.max(h[i-periodo:i]))
-        ks.append(50.0 if hi-lo <= 1e-12 else 100 * (float(c[i-1])-lo)/(hi-lo))
-    d = float(np.mean(ks)) if ks else k
-    return float(k), d
+    inicio = max(periodo - 1, len(c) - 5)
+    for i in range(inicio, len(c)):
+        janela_h = h[max(0, i-periodo+1):i+1]
+        janela_l = l[max(0, i-periodo+1):i+1]
+        den = float(np.max(janela_h) - np.min(janela_l))
+        ks.append(50.0 if den <= 0 else float((c[i] - np.min(janela_l)) / den * 100.0))
+    d = float(np.mean(ks[-3:])) if ks else k
+    return k, d
+
 
 def _indicadores_confluencia(data, direcao=None):
-    """Camada técnica comum às estratégias. Não cria sinal sozinha.
+    """Motor central de confluência.
 
-    A função mede tendência, momentum, volatilidade, estrutura e price action.
-    A porcentagem exibida continua sendo uma estimativa heurística; ela não é
-    tratada como probabilidade estatística calibrada.
-    """
-    c = np.asarray(data['close'], dtype=float)
-    o = np.asarray(data['open'], dtype=float)
-    h = np.asarray(data['high'], dtype=float)
-    l = np.asarray(data['low'], dtype=float)
-    if len(c) < 30:
-        return {'confluencia': 0.0, 'confluencias': []}
-
-    ema9 = calcular_ema(c, 9); ema21 = calcular_ema(c, 21); ema50 = calcular_ema(c, 50) if len(c) >= 50 else ema21
-    rsi = _rsi_atual(c, 14)
-    macd, macd_signal, macd_hist = _macd_atual(c)
-    atr = _atr_atual(h, l, c, 14)
-    preco = float(c[-1])
-    atr_pct = (atr / preco * 100) if preco else 0.0
-    atr_series = []
-    if len(c) >= 30:
-        tr_all = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
-        if len(tr_all) >= 14:
-            atr_series = np.convolve(tr_all, np.ones(14) / 14, mode='valid')
-    atr_med = float(np.median(atr_series[-30:])) if len(atr_series) else atr
-    atr_ratio = float(atr / max(atr_med, 1e-12))
-    candle_range = max(float(h[-1] - l[-1]), 1e-12)
-    recent_ranges = np.asarray(h[-21:-1] - l[-21:-1], dtype=float) if len(c) >= 22 else np.asarray([candle_range])
-    median_range = float(np.median(recent_ranges)) if len(recent_ranges) else candle_range
-    candle_range_ratio = float(candle_range / max(median_range, 1e-12))
-    ema_spread_pct = abs(float(ema9[-1] - ema21[-1])) / max(preco, 1e-12) * 100
-    adx, pdi, mdi = _adx_atual(h, l, c, 14)
-    stoch_k, stoch_d = _estocastico_atual(h, l, c, 14, 3)
-
-    ma20 = float(np.mean(c[-20:])); std20 = max(float(np.std(c[-20:])), 1e-12)
-    bb_sup, bb_inf = ma20 + 2*std20, ma20 - 2*std20
-    suporte = float(np.min(l[-20:-1])); resistencia = float(np.max(h[-20:-1]))
-    amplitude = max(float(h[-1]-l[-1]), 1e-12)
-    corpo = abs(float(c[-1]-o[-1]))
-    pavio_sup = float(h[-1]-max(o[-1], c[-1])); pavio_inf = float(min(o[-1], c[-1])-l[-1])
-    bullish = c[-1] > o[-1]; bearish = c[-1] < o[-1]
-    tendencia = 'ALTA' if ema9[-1] > ema21[-1] and ema21[-1] >= ema21[-4] else ('BAIXA' if ema9[-1] < ema21[-1] and ema21[-1] <= ema21[-4] else 'LATERAL')
-    if atr_ratio >= 1.80 or candle_range_ratio >= 2.20:
-        regime = 'VOLATILIDADE_ALTA'
-    elif adx < 16 or ema_spread_pct < max(0.015, atr_pct * 0.18):
-        regime = 'LATERAL'
-    else:
-        regime = 'TENDÊNCIA'
-    impulso = 'CALL' if pdi > mdi and macd_hist > 0 else 'PUT' if mdi > pdi and macd_hist < 0 else 'NEUTRO'
-
-    itens=[]
-    def add(nome, pontos, detalhe, status):
-        itens.append({'nome':nome,'pontos':int(max(0,min(10,pontos))), 'detalhe':detalhe, 'status':status})
-
-    # Cada bloco vale até 10 pontos. Isso evita que um único indicador domine.
-    if direcao == 'CALL':
-        trend_ok = ema9[-1] > ema21[-1] and (len(c)<50 or ema21[-1] >= ema50[-1])
-        trend_partial = ema9[-1] > ema21[-1] or tendencia == 'ALTA'
-    elif direcao == 'PUT':
-        trend_ok = ema9[-1] < ema21[-1] and (len(c)<50 or ema21[-1] <= ema50[-1])
-        trend_partial = ema9[-1] < ema21[-1] or tendencia == 'BAIXA'
-    else:
-        trend_ok = tendencia in ('ALTA','BAIXA'); trend_partial = tendencia != 'LATERAL'
-    add('Tendência', 10 if trend_ok else 6 if trend_partial else 2, f'EMA9/21/50 • {tendencia} • ADX {adx:.1f}', 'ok' if trend_ok else 'warn' if trend_partial else 'bad')
-
-    if direcao == 'CALL':
-        rsi_ok = 45 <= rsi <= 68
-    elif direcao == 'PUT':
-        rsi_ok = 32 <= rsi <= 55
-    else:
-        rsi_ok = 45 <= rsi <= 55
-    add('RSI', 10 if rsi_ok else 5, f'RSI {rsi:.1f}', 'ok' if rsi_ok else 'warn')
-
-    macd_ok = macd_hist > 0 if direcao == 'CALL' else macd_hist < 0 if direcao == 'PUT' else False
-    add('MACD', 10 if macd_ok else 4, f'Histograma {"positivo" if macd_hist>0 else "negativo"}', 'ok' if macd_ok else 'warn')
-
-    if direcao == 'CALL':
-        st_ok = stoch_k > stoch_d and stoch_k < 80
-    elif direcao == 'PUT':
-        st_ok = stoch_k < stoch_d and stoch_k > 20
-    else:
-        st_ok = False
-    add('Estocástico', 10 if st_ok else 4, f'%K {stoch_k:.1f} • %D {stoch_d:.1f}', 'ok' if st_ok else 'warn')
-
-    # ADX é filtro de força, não direção. +DI/-DI dão a direção.
-    if direcao == 'CALL':
-        adx_ok = adx >= 18 and pdi > mdi
-    elif direcao == 'PUT':
-        adx_ok = adx >= 18 and mdi > pdi
-    else:
-        adx_ok = adx >= 18
-    add('ADX', 10 if adx_ok else 3 if adx < 15 else 6, f'ADX {adx:.1f} • +DI {pdi:.1f} • -DI {mdi:.1f}', 'ok' if adx_ok else 'warn')
-
-    # Price Action: corpo/rejeição, mas sem deixar um único candle decidir tudo.
-    if direcao == 'CALL':
-        pa_ok = bullish or pavio_inf/amplitude >= .35
-    elif direcao == 'PUT':
-        pa_ok = bearish or pavio_sup/amplitude >= .35
-    else:
-        pa_ok = False
-    add('Price Action', 10 if pa_ok else 4, f'Corpo {corpo/amplitude*100:.0f}% • pavios {pavio_sup/amplitude*100:.0f}/{pavio_inf/amplitude*100:.0f}%', 'ok' if pa_ok else 'warn')
-
-    # Estrutura: aproximação de suporte/resistência.
-    dist_sup = abs(preco-suporte)/(preco or 1)*100
-    dist_res = abs(resistencia-preco)/(preco or 1)*100
-    lim_sr = max(0.08, atr_pct*1.35)
-    sr_ok = dist_sup <= lim_sr if direcao == 'CALL' else dist_res <= lim_sr if direcao == 'PUT' else False
-    add('Suporte/Resist.', 10 if sr_ok else 4, f'Sup {dist_sup:.3f}% • Res {dist_res:.3f}%', 'ok' if sr_ok else 'warn')
-
-    # Bollinger: usado como contexto, não como gatilho isolado.
-    bb_ok = (preco <= bb_inf + atr*0.30) if direcao == 'CALL' else (preco >= bb_sup - atr*0.30) if direcao == 'PUT' else False
-    add('Bollinger', 10 if bb_ok else 4, f'Preço {"perto da banda inferior" if preco<=bb_inf else "perto da banda superior" if preco>=bb_sup else "dentro das bandas"}', 'ok' if bb_ok else 'warn')
-
-    vol_ok = 0.015 <= atr_pct <= 1.8
-    add('Volatilidade', 10 if vol_ok else 4, f'ATR {atr_pct:.3f}% do preço', 'ok' if vol_ok else 'warn')
-
-    # Padrão simples de candle anterior + atual para reduzir entradas contra impulso.
-    if len(c) >= 2:
-        prev_bull = c[-2] > o[-2]; prev_bear = c[-2] < o[-2]
-        engulf_call = prev_bear and bullish and c[-1] >= o[-2] and o[-1] <= c[-2]
-        engulf_put = prev_bull and bearish and c[-1] <= o[-2] and o[-1] >= c[-2]
-    else:
-        engulf_call = engulf_put = False
-    pattern_ok = engulf_call if direcao == 'CALL' else engulf_put if direcao == 'PUT' else False
-    add('Padrão', 10 if pattern_ok else 4, 'Engolfo confirmado' if pattern_ok else 'Sem padrão forte', 'ok' if pattern_ok else 'warn')
-
-    regime_pontos = 10 if regime == 'TENDÊNCIA' else 5 if regime == 'LATERAL' else 0
-    add('Regime', regime_pontos, f'{regime} • ATR relativo {atr_ratio:.2f}x • faixa {candle_range_ratio:.2f}x', 'ok' if regime=='TENDÊNCIA' else 'warn' if regime=='LATERAL' else 'bad')
-
-    soma = sum(x['pontos'] for x in itens); maximo = len(itens)*10
-    confluencia = round((soma/maximo)*100,1) if maximo else 0.0
-    conflitos = 0
-    if direcao == 'CALL':
-        conflitos = int(macd_hist < 0) + int(mdi > pdi and adx >= 18) + int(rsi > 72)
-    elif direcao == 'PUT':
-        conflitos = int(macd_hist > 0) + int(pdi > mdi and adx >= 18) + int(rsi < 28)
-
-    return {
-        'rsi':rsi,'ema9':float(ema9[-1]),'ema21':float(ema21[-1]),'ema50':float(ema50[-1]),
-        'macd':macd,'macd_signal':macd_signal,'macd_hist':macd_hist,'atr':atr,'atr_pct':atr_pct,
-        'adx':adx,'plus_di':pdi,'minus_di':mdi,'stoch_k':stoch_k,'stoch_d':stoch_d,
-        'tendencia':tendencia,'suporte':suporte,'resistencia':resistencia,
-        'atr_ratio':atr_ratio,'candle_range_ratio':candle_range_ratio,'ema_spread_pct':ema_spread_pct,
-        'regime':regime,'impulso':impulso,
-        'conflitos':conflitos,'confluencia':confluencia,'confluencias':itens
-    }
-
-def analisar_estrategia(data, estrategia, i=-1):
-    """Motor independente das estratégias.
-
-    Cada estratégia precisa produzir o próprio sinal a partir de regras
-    específicas. A opção TODAS não transforma todas as estratégias em
-    Price Action: ela executa cada motor separadamente e o ensemble compara
-    os candidatos gerados por cada um.
+    A leitura não depende da estratégia que encontrou o primeiro padrão.
+    Todas as estratégias usam este mesmo painel técnico para confirmar:
+    tendência, EMA9/21/50/100, MA20/50/100, RSI, MACD, ADX/DI,
+    Estocástico, price action, Bollinger, suporte/resistência e momentum.
     """
     c = np.asarray(data["close"], dtype=float)
     o = np.asarray(data["open"], dtype=float)
     h = np.asarray(data["high"], dtype=float)
     l = np.asarray(data["low"], dtype=float)
     if len(c) < 30:
+        return {
+            "confluencia": 0.0, "confluencias": [], "confirmacoes": 0,
+            "conflitos": 99, "tendencia": "SEM DADOS", "regime": "SEM DADOS",
+            "forca_direcional": 0.0
+        }
+
+    ema9 = calcular_ema(c, 9)
+    ema21 = calcular_ema(c, 21)
+    ema50 = calcular_ema(c, 50)
+    ema100 = calcular_ema(c, 100)
+    ma20 = _sma(c, 20)
+    ma50 = _sma(c, 50)
+    ma100 = _sma(c, 100)
+    rsi = _rsi_atual(c, 14)
+    macd, macd_signal, macd_hist = _macd_atual(c)
+    adx, plus_di, minus_di = _adx_detalhado(h, l, c, 14)
+    stoch_k, stoch_d = _estocastico_detalhado(h, l, c, 14)
+
+    std20 = float(np.std(c[-20:]))
+    bb_sup = ma20 + 2.0 * std20
+    bb_inf = ma20 - 2.0 * std20
+    preco = float(c[-1])
+    corpo = abs(float(c[-1] - o[-1]))
+    amplitude = max(float(h[-1] - l[-1]), 1e-12)
+    pavio_sup = float(h[-1] - max(o[-1], c[-1]))
+    pavio_inf = float(min(o[-1], c[-1]) - l[-1])
+
+    suporte = float(np.min(l[-20:-1]))
+    resistencia = float(np.max(h[-20:-1]))
+    tr = np.maximum(h[-20:] - l[-20:], np.maximum(np.abs(h[-20:] - c[-21:-1]), np.abs(l[-20:] - c[-21:-1]))) if len(c) >= 21 else h[-20:] - l[-20:]
+    atr = float(np.mean(tr)) if len(tr) else 0.0
+    atr_pct = (atr / preco * 100.0) if preco else 0.0
+
+    # Tendência exige alinhamento das quatro EMAs, não apenas EMA9/21.
+    subida = ema21[-1] > ema21[-4] and ema50[-1] >= ema50[-4]
+    descida = ema21[-1] < ema21[-4] and ema50[-1] <= ema50[-4]
+    stack_alta = ema9[-1] > ema21[-1] > ema50[-1] > ema100[-1]
+    stack_baixa = ema9[-1] < ema21[-1] < ema50[-1] < ema100[-1]
+    if stack_alta and subida and preco >= ema50[-1]:
+        tendencia = "ALTA"
+    elif stack_baixa and descida and preco <= ema50[-1]:
+        tendencia = "BAIXA"
+    else:
+        tendencia = "LATERAL"
+
+    if adx >= 25:
+        regime = "TENDÊNCIA_FORTE"
+    elif adx >= 18:
+        regime = "TENDÊNCIA_MODERADA"
+    elif atr_pct > 1.8:
+        regime = "VOLATILIDADE_ALTA"
+    else:
+        regime = "LATERAL"
+
+    itens = []
+    def add(nome, pontos, detalhe, status, peso=10):
+        itens.append({
+            "nome": nome,
+            "pontos": int(max(0, min(peso, pontos))),
+            "detalhe": detalhe,
+            "status": status,
+            "peso": peso
+        })
+
+    # 1) Direção macro — bloqueia contra-tendência.
+    if direcao == "CALL":
+        ok = tendencia == "ALTA"
+        pontos = 15 if ok else 0
+    elif direcao == "PUT":
+        ok = tendencia == "BAIXA"
+        pontos = 15 if ok else 0
+    else:
+        ok = tendencia in ("ALTA", "BAIXA")
+        pontos = 15 if ok else 6
+    add("Tendência", pontos, f"Estrutura EMA9/21/50/100 • {tendencia}", "ok" if ok else "bad", 15)
+
+    # 2) Alinhamento das quatro médias + preço.
+    if direcao == "CALL":
+        ok = stack_alta and preco >= ema21[-1]
+        detalhe = f"EMA9 {ema9[-1]:.5g} > EMA21 {ema21[-1]:.5g} > EMA50 {ema50[-1]:.5g} > EMA100 {ema100[-1]:.5g}"
+    elif direcao == "PUT":
+        ok = stack_baixa and preco <= ema21[-1]
+        detalhe = f"EMA9 {ema9[-1]:.5g} < EMA21 {ema21[-1]:.5g} < EMA50 {ema50[-1]:.5g} < EMA100 {ema100[-1]:.5g}"
+    else:
+        ok = stack_alta or stack_baixa
+        detalhe = "EMA9/21/50/100 alinhadas" if ok else "Médias sem alinhamento"
+    add("MA/EMA 9•21•50•100", 15 if ok else 0, detalhe, "ok" if ok else "bad", 15)
+
+    # 3) MA20/50/100 como segunda confirmação independente da EMA.
+    if direcao == "CALL":
+        ok = ma20 > ma50 > ma100 and preco >= ma20
+    elif direcao == "PUT":
+        ok = ma20 < ma50 < ma100 and preco <= ma20
+    else:
+        ok = (ma20 > ma50 > ma100) or (ma20 < ma50 < ma100)
+    add("MA 20•50•100", 10 if ok else 0, f"MA20 {ma20:.5g} • MA50 {ma50:.5g} • MA100 {ma100:.5g}", "ok" if ok else "bad", 10)
+
+    # 4) RSI: confirma momentum sem exigir extremo artificial.
+    if direcao == "CALL":
+        ok = 50 <= rsi <= 68
+    elif direcao == "PUT":
+        ok = 32 <= rsi <= 50
+    else:
+        ok = False
+    add("RSI 14", 10 if ok else 0, f"RSI {rsi:.1f}", "ok" if ok else "warn", 10)
+
+    # 5) MACD.
+    if direcao == "CALL":
+        ok = macd_hist > 0 and macd >= macd_signal
+    elif direcao == "PUT":
+        ok = macd_hist < 0 and macd <= macd_signal
+    else:
+        ok = False
+    add("MACD", 12 if ok else 0, f"Hist. {'positivo' if macd_hist > 0 else 'negativo'}", "ok" if ok else "warn", 12)
+
+    # 6) ADX + DI: mede força e direção, não apenas volatilidade.
+    if direcao == "CALL":
+        ok = adx >= 18 and plus_di > minus_di
+    elif direcao == "PUT":
+        ok = adx >= 18 and minus_di > plus_di
+    else:
+        ok = adx >= 18
+    add("ADX / +DI / -DI", 10 if ok else 0, f"ADX {adx:.1f} • +DI {plus_di:.1f} • -DI {minus_di:.1f}", "ok" if ok else "warn", 10)
+
+    # 7) Estocástico.
+    if direcao == "CALL":
+        ok = stoch_k >= stoch_d and stoch_k >= 35 and stoch_k <= 85
+    elif direcao == "PUT":
+        ok = stoch_k <= stoch_d and stoch_k >= 15 and stoch_k <= 65
+    else:
+        ok = False
+    add("Estocástico", 8 if ok else 0, f"K {stoch_k:.1f} • D {stoch_d:.1f}", "ok" if ok else "warn", 8)
+
+    # 8) Price action.
+    bullish = c[-1] > o[-1]
+    bearish = c[-1] < o[-1]
+    rejeicao_call = pavio_inf / amplitude >= .35
+    rejeicao_put = pavio_sup / amplitude >= .35
+    if direcao == "CALL":
+        ok = bullish or rejeicao_call
+    elif direcao == "PUT":
+        ok = bearish or rejeicao_put
+    else:
+        ok = False
+    add("Price Action", 10 if ok else 0, f"Corpo {corpo/amplitude*100:.0f}% • {'rejeição' if (rejeicao_call or rejeicao_put) else 'candle'}", "ok" if ok else "warn", 10)
+
+    # 9) Bollinger: usada como localização, não como sinal isolado.
+    if direcao == "CALL":
+        ok = preco <= bb_sup and preco >= bb_inf * 0.995
+    elif direcao == "PUT":
+        ok = preco >= bb_inf and preco <= bb_sup * 1.005
+    else:
+        ok = False
+    add("Bollinger", 8 if ok else 0, f"Preço {preco:.5g} • faixa [{bb_inf:.5g}, {bb_sup:.5g}]", "ok" if ok else "warn", 8)
+
+    # 10) Suporte/resistência.
+    dist_sup = abs(preco - suporte) / max(abs(preco), 1e-12) * 100
+    dist_res = abs(resistencia - preco) / max(abs(preco), 1e-12) * 100
+    if direcao == "CALL":
+        ok = dist_sup <= max(0.15, atr_pct * 1.6)
+        detalhe = f"Suporte {dist_sup:.3f}% • Resistência {dist_res:.3f}%"
+    elif direcao == "PUT":
+        ok = dist_res <= max(0.15, atr_pct * 1.6)
+        detalhe = f"Suporte {dist_sup:.3f}% • Resistência {dist_res:.3f}%"
+    else:
+        ok = False
+        detalhe = f"Suporte {dist_sup:.3f}% • Resistência {dist_res:.3f}%"
+    add("Suporte/Resist.", 7 if ok else 0, detalhe, "ok" if ok else "warn", 7)
+
+    # 11) Momentum curto.
+    roc = ((preco / c[-6]) - 1.0) * 100.0 if len(c) >= 7 and c[-6] else 0.0
+    if direcao == "CALL":
+        ok = roc > 0
+    elif direcao == "PUT":
+        ok = roc < 0
+    else:
+        ok = False
+    add("Momentum 6", 5 if ok else 0, f"ROC {roc:.3f}%", "ok" if ok else "warn", 5)
+
+    peso_total = sum(x["peso"] for x in itens)
+    pontos_total = sum(x["pontos"] for x in itens)
+    confluencia = round((pontos_total / peso_total) * 100, 1) if peso_total else 0.0
+    confirmacoes = sum(1 for x in itens if x["status"] == "ok")
+
+    # Conflitos explícitos: tendência/médias/DI contra a direção escolhida.
+    conflitos = 0
+    if direcao == "CALL":
+        conflitos += int(tendencia == "BAIXA") + int(stack_baixa) + int(minus_di > plus_di and adx >= 18)
+    elif direcao == "PUT":
+        conflitos += int(tendencia == "ALTA") + int(stack_alta) + int(plus_di > minus_di and adx >= 18)
+
+    forca_direcional = min(10.0, max(0.0, (adx / 4.0) + (abs(plus_di - minus_di) / 8.0)))
+    if direcao == "CALL" and plus_di <= minus_di:
+        forca_direcional *= 0.55
+    if direcao == "PUT" and minus_di <= plus_di:
+        forca_direcional *= 0.55
+
+    return {
+        "rsi": float(rsi),
+        "ema9": float(ema9[-1]), "ema21": float(ema21[-1]),
+        "ema50": float(ema50[-1]), "ema100": float(ema100[-1]),
+        "ma20": float(ma20), "ma50": float(ma50), "ma100": float(ma100),
+        "macd": float(macd), "macd_signal": float(macd_signal), "macd_hist": float(macd_hist),
+        "adx": float(adx), "plus_di": float(plus_di), "minus_di": float(minus_di),
+        "stoch_k": float(stoch_k), "stoch_d": float(stoch_d),
+        "atr_pct": float(atr_pct), "tendencia": tendencia, "regime": regime,
+        "suporte": suporte, "resistencia": resistencia,
+        "confluencia": float(confluencia), "confirmacoes": int(confirmacoes),
+        "conflitos": int(conflitos), "forca_direcional": float(forca_direcional),
+        "confluencias": itens
+    }
+
+
+def analisar_estrategia(data, estrategia, i=-1):
+    """Gera a leitura própria de cada estratégia; a confirmação final é feita pelo motor central."""
+    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
+    if len(c) < 30:
         return None, 0
-
-    idx = i if i >= 0 else len(c) - 1
-    if idx >= len(c):
-        idx = len(c) - 1
-
     sinal = None
-    probabilidade = 0
+    base_prob = 0
 
-    # -------------------------------------------------------------
-    # 1) LÓGICA DO PREÇO / PRICE ACTION
-    # -------------------------------------------------------------
     if estrategia == "LOGICA_DO_PRECO":
-        tamanho = abs(c[idx] - o[idx])
-        amplitude = max(h[idx] - l[idx], 1e-12)
-        if tamanho > 0:
-            cor = 'G' if c[idx] > o[idx] else 'R'
-            p_sup = h[idx] - max(o[idx], c[idx])
-            p_inf = min(o[idx], c[idx]) - l[idx]
-            wick_inf = p_inf / amplitude
-            wick_sup = p_sup / amplitude
+        tamanho = abs(c[i] - o[i]); amplitude = h[i] - l[i]
+        if amplitude > 0 and tamanho > 0:
+            cor = 'G' if c[i] > o[i] else 'R'
+            p_sup = h[i] - max(o[i], c[i]); p_inf = min(o[i], c[i]) - l[i]
+            if cor == 'G' and p_inf >= amplitude*.45 and p_sup <= amplitude*.20:
+                sinal = 'CALL'; base_prob = 82
+            elif cor == 'R' and p_sup >= amplitude*.45 and p_inf <= amplitude*.20:
+                sinal = 'PUT'; base_prob = 82
+            elif cor == 'G' and p_sup >= amplitude*.50 and tamanho <= amplitude*.35:
+                sinal = 'PUT'; base_prob = 80
+            elif cor == 'R' and p_inf >= amplitude*.50 and tamanho <= amplitude*.35:
+                sinal = 'CALL'; base_prob = 80
 
-            if cor == 'G' and wick_inf >= .45 and wick_sup <= .20:
-                sinal = 'CALL'
-                probabilidade = int(82 + min(10, wick_inf * 12))
-            elif cor == 'R' and wick_sup >= .45 and wick_inf <= .20:
-                sinal = 'PUT'
-                probabilidade = int(82 + min(10, wick_sup * 12))
-            elif cor == 'G' and wick_sup >= .50 and tamanho <= amplitude * .35:
-                sinal = 'PUT'
-                probabilidade = int(80 + min(9, wick_sup * 11))
-            elif cor == 'R' and wick_inf >= .50 and tamanho <= amplitude * .35:
-                sinal = 'CALL'
-                probabilidade = int(80 + min(9, wick_inf * 11))
-
-    # -------------------------------------------------------------
-    # 2) RSI + MACD + MÉDIAS
-    # -------------------------------------------------------------
     elif estrategia == "RSI_MACD_MA":
         rsi = _rsi_atual(c, 14)
-        ema9 = calcular_ema(c, 9)
-        ema21 = calcular_ema(c, 21)
-        macd_line, macd_signal, macd_hist = _macd_atual(c)
-        hist_prev = float(macd_hist)
-        if len(c) >= 3:
-            macd_prev_line = calcular_ema(c, 12)[-2] - calcular_ema(c, 26)[-2]
-            macd_prev_signal = calcular_ema(calcular_ema(c, 12) - calcular_ema(c, 26), 9)[-2]
-            hist_prev = float(macd_prev_line - macd_prev_signal)
+        macd_line, signal_line, hist = _macd_atual(c)
+        ema9 = calcular_ema(c, 9); ema21 = calcular_ema(c, 21); ema50 = calcular_ema(c, 50); ema100 = calcular_ema(c, 100)
+        if rsi >= 50 and rsi <= 68 and macd_line > signal_line and hist > 0 and ema9[-1] > ema21[-1] > ema50[-1] > ema100[-1]:
+            sinal = 'CALL'; base_prob = 84
+        elif rsi <= 50 and rsi >= 32 and macd_line < signal_line and hist < 0 and ema9[-1] < ema21[-1] < ema50[-1] < ema100[-1]:
+            sinal = 'PUT'; base_prob = 84
 
-        tendencia_alta = ema9[-1] > ema21[-1]
-        tendencia_baixa = ema9[-1] < ema21[-1]
-        cruzou_alta = hist_prev <= 0 < macd_hist
-        cruzou_baixa = hist_prev >= 0 > macd_hist
-
-        # Não exige RSI extremo de 30/70. O objetivo é identificar
-        # momentum + tendência + região de RSI de forma independente do PA.
-        call_score = 0
-        put_score = 0
-        if 38 <= rsi <= 55: call_score += 2
-        if 45 <= rsi <= 62: put_score += 2
-        if macd_hist > 0: call_score += 2
-        if macd_hist < 0: put_score += 2
-        if tendencia_alta: call_score += 2
-        if tendencia_baixa: put_score += 2
-        if cruzou_alta: call_score += 2
-        if cruzou_baixa: put_score += 2
-
-        if call_score >= 5 and call_score > put_score:
-            sinal = 'CALL'
-            probabilidade = 79 + call_score * 2
-            if cruzou_alta: probabilidade += 3
-        elif put_score >= 5 and put_score > call_score:
-            sinal = 'PUT'
-            probabilidade = 79 + put_score * 2
-            if cruzou_baixa: probabilidade += 3
-
-    # -------------------------------------------------------------
-    # 3) MHI 1 + FILTRO DE TENDÊNCIA
-    # -------------------------------------------------------------
     elif estrategia == "MHI1":
-        # Usa as três velas mais recentes já disponíveis e não depende da
-        # lógica de pavio do Price Action.
         cores = []
-        for j in range(max(0, idx - 2), idx + 1):
-            if c[j] > o[j]:
-                cores.append('G')
-            elif c[j] < o[j]:
-                cores.append('R')
-            else:
-                cores.append('D')
+        for j in range(i-2, i+1):
+            cores.append('G' if c[j] > o[j] else 'R' if c[j] < o[j] else 'D')
+        ema21 = calcular_ema(c, 21); ema50 = calcular_ema(c, 50); ema100 = calcular_ema(c, 100)
+        if 'D' not in cores:
+            qtd_g = cores.count('G'); qtd_r = cores.count('R')
+            if qtd_r >= 2 and c[i] >= ema21[-1] and ema21[-1] > ema50[-1] > ema100[-1]:
+                sinal = 'CALL'; base_prob = 83
+            elif qtd_g >= 2 and c[i] <= ema21[-1] and ema21[-1] < ema50[-1] < ema100[-1]:
+                sinal = 'PUT'; base_prob = 83
 
-        if len(cores) == 3 and 'D' not in cores:
-            qtd_g = cores.count('G')
-            qtd_r = cores.count('R')
-            ema20 = np.mean(c[-20:])
-            tendencia = 'ALTA' if c[-1] >= ema20 else 'BAIXA'
+    elif estrategia in ['REVERSAO', 'RETRACAO']:
+        std = np.std(c[-20:]); ma = np.mean(c[-20:]); bs = ma + 2*std; bi = ma - 2*std
+        ema21 = calcular_ema(c, 21); ema50 = calcular_ema(c, 50); ema100 = calcular_ema(c, 100)
+        # Reversão contra tendência é bloqueada: só aceitamos pullback/rejeição
+        # na direção da tendência maior.
+        if c[i] <= bi and c[i] >= ema21[-1] and ema21[-1] > ema50[-1] > ema100[-1]:
+            sinal = 'CALL'; base_prob = 84
+        elif c[i] >= bs and c[i] <= ema21[-1] and ema21[-1] < ema50[-1] < ema100[-1]:
+            sinal = 'PUT'; base_prob = 84
 
-            # MHI contraria a maioria das três velas; o filtro de tendência
-            # evita aceitar qualquer sequência isolada.
-            if qtd_g == 3:
-                sinal = 'PUT'
-                probabilidade = 84 if tendencia == 'BAIXA' else 80
-            elif qtd_r == 3:
-                sinal = 'CALL'
-                probabilidade = 84 if tendencia == 'ALTA' else 80
-            elif qtd_g == 2 and qtd_r == 1 and c[idx] <= ema20:
-                sinal = 'PUT'
-                probabilidade = 82
-            elif qtd_r == 2 and qtd_g == 1 and c[idx] >= ema20:
-                sinal = 'CALL'
-                probabilidade = 82
+    return sinal, base_prob
 
-    # -------------------------------------------------------------
-    # 4) REVERSÃO DE BANDAS
-    # -------------------------------------------------------------
-    elif estrategia in ('REVERSAO', 'RETRACAO'):
-        ma20 = np.mean(c[-20:])
-        std = max(float(np.std(c[-20:])), 1e-12)
-        banda_sup = ma20 + 2 * std
-        banda_inf = ma20 - 2 * std
-        rsi = _rsi_atual(c, 14)
-        atr = float(np.mean(np.maximum(
-            h[-20:] - l[-20:],
-            np.maximum(np.abs(h[-20:] - c[-21:-1]), np.abs(l[-20:] - c[-21:-1]))
-        ))) if len(c) >= 21 else float(np.mean(h[-20:] - l[-20:]))
-        atr = max(atr, 1e-12)
-        preco = float(c[idx])
-        distancia_inf = abs(preco - banda_inf)
-        distancia_sup = abs(preco - banda_sup)
-        perto_inf = preco <= banda_inf + atr * 0.35
-        perto_sup = preco >= banda_sup - atr * 0.35
-
-        if perto_inf and rsi <= 45:
-            sinal = 'CALL'
-            probabilidade = 82 + (3 if rsi <= 35 else 0) + (2 if preco <= banda_inf else 0)
-        elif perto_sup and rsi >= 55:
-            sinal = 'PUT'
-            probabilidade = 82 + (3 if rsi >= 65 else 0) + (2 if preco >= banda_sup else 0)
-
-    probabilidade = int(min(96, max(75, probabilidade))) if sinal else 0
-    return sinal, probabilidade
 
 def analisar_estrategia_detalhada(data, estrategia):
-    """Valida um sinal em camadas, com filtros de regime e direção.
-
-    O objetivo aqui não é aumentar artificialmente a porcentagem. O motor fica
-    mais seletivo: evita lateralização, picos anormais de volatilidade e sinais
-    em que a direção escolhida não possui vantagem clara sobre a direção oposta.
-    """
+    """Executa uma estratégia isoladamente e depois exige confirmação do motor técnico."""
     sinal, base_prob = analisar_estrategia(data, estrategia)
     if not sinal:
         return None, 0, _indicadores_confluencia(data, None)
 
     indicadores = _indicadores_confluencia(data, sinal)
-    conf = float(indicadores.get('confluencia', 0))
-    conflitos = int(indicadores.get('conflitos', 0))
-    adx = float(indicadores.get('adx', 0))
-    rsi = float(indicadores.get('rsi', 50))
-    atr_pct = float(indicadores.get('atr_pct', 0))
+    tendencia = indicadores.get("tendencia")
+    confluencia = float(indicadores.get("confluencia", 0))
+    confirmacoes = int(indicadores.get("confirmacoes", 0))
+    conflitos = int(indicadores.get("conflitos", 99))
+    forca = float(indicadores.get("forca_direcional", 0))
 
-    # Leitura neutra para saber se a direção do sinal realmente se destaca.
-    neutro = _indicadores_confluencia(data, None)
-    call_conf = float(_indicadores_confluencia(data, 'CALL').get('confluencia', 0))
-    put_conf = float(_indicadores_confluencia(data, 'PUT').get('confluencia', 0))
-    vantagem = (call_conf - put_conf) if sinal == 'CALL' else (put_conf - call_conf)
-
-    regime = str(indicadores.get('regime', 'LATERAL'))
-    impulso = str(indicadores.get('impulso', 'NEUTRO'))
-    candle_ratio = float(indicadores.get('candle_range_ratio', 1.0))
-
-    # Filtros duros: são os principais responsáveis por tirar sinais ruins.
-    # Pico de volatilidade: candle atual muito acima da faixa média recente.
-    if regime == 'VOLATILIDADE_ALTA' or candle_ratio >= 2.20:
+    # Regras duras: nunca operar contra a tendência e nunca transformar um
+    # padrão isolado em sinal só porque a estratégia atribuiu 80%+.
+    if tendencia not in ("ALTA", "BAIXA"):
+        return None, 0, indicadores
+    if (sinal == "CALL" and tendencia != "ALTA") or (sinal == "PUT" and tendencia != "BAIXA"):
+        return None, 0, indicadores
+    if confluencia < 72 or confirmacoes < 6 or conflitos >= 2 or forca < 5.0:
         return None, 0, indicadores
 
-    # Em lateralização, só aceitamos REVERSAO/RETRACAO quando existe vantagem
-    # direcional e contexto de extremo. As demais estratégias são descartadas.
-    if regime == 'LATERAL' and estrategia not in ('REVERSAO', 'RETRACAO'):
-        return None, 0, indicadores
-
-    # A direção precisa vencer a direção oposta por uma margem mínima.
-    margem_minima = 7.0 if estrategia in ('REVERSAO', 'RETRACAO') else 10.0
-    if vantagem < margem_minima:
-        return None, 0, indicadores
-
-    # ADX baixo significa ausência de tendência. Não permitimos sinais de
-    # continuação nesse cenário; reversão precisa de extremo + vantagem.
-    if adx < 15 and estrategia not in ('REVERSAO', 'RETRACAO'):
-        return None, 0, indicadores
-
-    if conflitos >= 2:
-        return None, 0, indicadores
-
-    # Cálculo conservador da estimativa. Continua sendo heurístico, não uma
-    # probabilidade estatística calibrada.
-    ajuste = (conf - 65.0) * 0.22
-    bonus = 0.0
-    if conf >= 78: bonus += 4
-    elif conf >= 72: bonus += 2
-    if adx >= 25: bonus += 3
-    elif adx >= 20: bonus += 1
-    if vantagem >= 18: bonus += 3
-    elif vantagem >= 13: bonus += 2
-    if impulso == sinal: bonus += 2
-    if conflitos: bonus -= conflitos * 5
-
-    c = np.asarray(data['close'], dtype=float)
-    o = np.asarray(data['open'], dtype=float)
-    if estrategia == 'RSI_MACD_MA':
-        ema9 = calcular_ema(c,9)[-1]; ema21 = calcular_ema(c,21)[-1]
-        if sinal == 'CALL' and indicadores.get('macd_hist',0) > 0 and ema9 > ema21 and 45 <= rsi <= 65: bonus += 3
-        if sinal == 'PUT' and indicadores.get('macd_hist',0) < 0 and ema9 < ema21 and 35 <= rsi <= 55: bonus += 3
-    elif estrategia == 'MHI1':
-        if len(c) >= 3:
-            cores=['G' if c[j]>o[j] else 'R' if c[j]<o[j] else 'D' for j in range(len(c)-3,len(c))]
-            if len(cores)==3 and 'D' not in cores:
-                if sinal=='CALL' and cores.count('R')>=2: bonus += 2
-                if sinal=='PUT' and cores.count('G')>=2: bonus += 2
-    elif estrategia in ('REVERSAO','RETRACAO'):
-        ma20=float(np.mean(c[-20:])); std20=max(float(np.std(c[-20:])),1e-12)
-        if sinal=='CALL' and c[-1] <= ma20-1.5*std20: bonus += 4
-        if sinal=='PUT' and c[-1] >= ma20+1.5*std20: bonus += 4
-
-    prob = int(max(76, min(96, round(base_prob + ajuste + bonus))))
-    indicadores['confluencia_call'] = round(call_conf, 1)
-    indicadores['confluencia_put'] = round(put_conf, 1)
-    indicadores['vantagem_direcional'] = round(vantagem, 1)
-    indicadores['estrategia_base_probabilidade'] = int(base_prob)
-    indicadores['estrategia_bonus'] = int(round(bonus))
-    indicadores['estrategia'] = estrategia
-    indicadores['direcao'] = sinal
-    indicadores['qualidade_minima'] = 70.0
-    indicadores['regime'] = regime
+    # A probabilidade exibida nasce da confluência técnica; a pontuação da
+    # estratégia é apenas um pequeno componente, não o fator dominante.
+    prob = int(round(68 + confluencia * 0.24 + min(5, max(0, base_prob - 80) * 0.35)))
+    prob = max(74, min(94, prob))
+    indicadores["estrategia_base_prob"] = int(base_prob)
+    indicadores["estrategia"] = estrategia
     return sinal, prob, indicadores
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
@@ -2577,16 +2151,6 @@ def status():
         "news_guard_event": st.get("news_guard_event"),
         "news_blocked_assets": st.get("news_blocked_assets", []),
         "analise_atual": st.get("analise_atual"),
-        "scan_status": st.get("scan_status", "AGUARDANDO VARREDURA"),
-        "scan_total": st.get("scan_total", 0),
-        "scan_analisados": st.get("scan_analisados", 0),
-        "scan_calls": st.get("scan_calls", 0),
-        "scan_puts": st.get("scan_puts", 0),
-        "scan_sem_sinal": st.get("scan_sem_sinal", 0),
-        "scan_melhor": st.get("scan_melhor"),
-        "scan_atual": st.get("scan_atual", "AGUARDANDO"),
-        "scan_atual_analise": st.get("scan_atual_analise"),
-        "scan_atualizado": st.get("scan_atualizado", 0),
         "alerta": st.get("alerta_ativo"),
         "sinal_confirmado": st.get("sinal_confirmado"),
         "sinais_sessao_total": st.get("sinais_sessao_total", 0),
@@ -2597,7 +2161,7 @@ def status():
         "timeframe": st["timeframe"],
         "selected_assets": st.get("selected_assets", []),
         "assets_catalog": ATIVOS_BASE,
-        "startup_lock_remaining": max(0.0, st.get("startup_lock_until", 0.0) - time.time()),
+        "startup_lock_remaining": 0.0,
         "server_now": time.time(),
         "candle_start_ts": math.floor(time.time() / (st["timeframe"] * 60)) * (st["timeframe"] * 60),
         "candle_end_ts": (math.floor(time.time() / (st["timeframe"] * 60)) + 1) * (st["timeframe"] * 60),
@@ -2637,12 +2201,11 @@ def set_assets():
     st["selected_assets"] = selecionados
     st["warmup_concluido"] = False
     st["warmup_ativos_analisados"] = set()
-    st["warmup_ativos_indisponiveis"] = set()
     st["warmup_analysis"] = {}
     st["warmup_inicio"] = time.time()
     if st.get("bot_iniciado"):
-        st["startup_lock_until"] = time.time() + 300
-        st["warmup_status"] = "NOVA SELEÇÃO • ANALISANDO 30 VELAS + 5 MINUTOS"
+        st["startup_lock_until"] = 0.0
+        st["warmup_status"] = "NOVA SELEÇÃO • ANALISANDO 30 VELAS RAPIDAMENTE"
     return jsonify({"ok": True, "assets": selecionados})
 
 @app.route('/backtest', methods=['POST'])
@@ -2718,146 +2281,17 @@ def backtest():
         print(f"⚠️ Backtest: {e}")
         return jsonify({"ok":False,"error":"Não foi possível concluir o backtest com os dados disponíveis agora."}), 500
 
-@app.route('/calculadora', methods=['POST'])
-def calculadora_gestao():
-    """Calculadora matemática de gestão de banca.
+@app.errorhandler(500)
+def handle_server_error(error):
+    # Comandos do painel devem sempre receber JSON, mesmo se alguma dependência
+    # externa falhar. Isso evita o toast genérico de comunicação causado por uma
+    # página HTML de erro 500. O erro continua registrado no log do servidor.
+    path = request.path or ""
+    if path.startswith("/command/"):
+        print(f"❌ Erro interno em {path}: {error}")
+        return jsonify({"ok": False, "error": "O servidor encontrou um erro ao processar este comando. Tente novamente."}), 500
+    return "Erro interno do servidor.", 500
 
-    Não usa histórico do bot nem promete resultados. Todos os parâmetros de
-    payout e taxa de acerto são explícitos para evitar transformar uma hipótese
-    em uma suposta garantia. O Soros é calculado por valor esperado por ciclo,
-    com reinício no valor-base após um loss.
-    """
-    try:
-        payload = request.get_json(silent=True) or {}
-        banca = float(payload.get('bankroll', 0))
-        meta = float(payload.get('target_profit', 0))
-        dias = int(payload.get('days', 0))
-        payout = float(payload.get('payout', 0))
-        winrate = float(payload.get('winrate', 0))
-
-        # Compatibilidade: a interface trabalha com porcentagens (80 = 80%),
-        # enquanto o motor matemático usa frações (0.80). Aceitamos os dois
-        # formatos para evitar erro caso o navegador esteja com uma versão
-        # anterior do JavaScript em cache.
-        if payout > 1:
-            payout /= 100.0
-        if winrate > 1:
-            winrate /= 100.0
-
-        perfil = str(payload.get('profile', 'conservador')).lower()
-        modo = str(payload.get('mode', 'fixa')).lower()
-        niveis = int(payload.get('soros_levels', 1))
-
-        if banca <= 0 or meta <= 0:
-            return jsonify({'ok': False, 'error': 'Banca inicial e lucro desejado precisam ser maiores que zero.'}), 400
-        if not 1 <= dias <= 365:
-            return jsonify({'ok': False, 'error': 'O prazo deve estar entre 1 e 365 dias.'}), 400
-        if not 0 < payout < 1:
-            return jsonify({'ok': False, 'error': 'O payout deve ficar entre 1% e 99,99%.'}), 400
-        if not 0.5 <= winrate <= 0.9999:
-            return jsonify({'ok': False, 'error': 'A taxa de acerto estimada deve ficar entre 50% e 99,99%.'}), 400
-        if perfil not in ('conservador', 'moderado', 'agressivo'):
-            perfil = 'conservador'
-        if modo not in ('fixa', 'soros'):
-            modo = 'fixa'
-        niveis = max(1, min(niveis, 4))
-
-        risco = {'conservador': 0.02, 'moderado': 0.05, 'agressivo': 0.09}[perfil]
-        entrada_base = round(banca * risco, 2)
-        if entrada_base < 0.01:
-            entrada_base = 0.01
-
-        # Valor esperado líquido de uma entrada com mão fixa.
-        ev_unit = entrada_base * (winrate * payout - (1.0 - winrate))
-        lucro_win_base = entrada_base * payout
-        wins_sem_loss = math.ceil(meta / lucro_win_base) if lucro_win_base > 0 else None
-
-        if modo == 'fixa':
-            ev_per_entry = ev_unit
-            entradas = math.ceil(meta / ev_per_entry) if ev_per_entry > 0 else None
-            exposicao_max = entrada_base
-            lucro_esperado = ev_per_entry
-            max_level = 1
-        else:
-            # Soros: stake do nível l = base * (1+payout)^l.
-            # Um ciclo termina no primeiro loss ou ao concluir todos os níveis.
-            # O EV do ciclo é calculado exatamente pelas probabilidades fornecidas,
-            # sem escolher uma sequência aleatória de wins/losses.
-            ev_cycle = 0.0
-            expected_entries_cycle = 0.0
-            max_level = niveis
-            stake = entrada_base
-            exposicao_max = entrada_base
-            for level in range(1, niveis + 1):
-                prob_reach = winrate ** (level - 1)
-                expected_entries_cycle += prob_reach
-                ev_cycle += prob_reach * stake * (winrate * payout - (1.0 - winrate))
-                exposicao_max = max(exposicao_max, stake)
-                stake *= (1.0 + payout)
-            ev_per_entry = ev_cycle / expected_entries_cycle if expected_entries_cycle else 0.0
-            entradas = math.ceil(meta / ev_per_entry) if ev_per_entry > 0 else None
-            lucro_esperado = ev_per_entry
-
-        entradas_dia = math.ceil(entradas / dias) if entradas else None
-        # Plano diário é apenas uma distribuição matemática das entradas; não força
-        # o usuário a operar nem trata a meta como garantia.
-        plan = []
-        if entradas:
-            restante = entradas
-            for dia in range(1, dias + 1):
-                dias_restantes = dias - dia + 1
-                hoje = math.ceil(restante / dias_restantes)
-                plan.append({
-                    'dia': dia,
-                    'entradas': hoje,
-                    'entrada_base': round(entrada_base, 2),
-                    'nivel_maximo': round(exposicao_max, 2) if modo == 'soros' else None
-                })
-                restante -= hoje
-        else:
-            plan = [{'dia': i, 'entradas': 0, 'entrada_base': round(entrada_base, 2), 'nivel_maximo': round(exposicao_max, 2) if modo == 'soros' else None} for i in range(1, min(dias, 30)+1)]
-
-        viavel = bool(ev_per_entry > 0 and entradas is not None)
-        if not viavel:
-            mensagem = 'Com os parâmetros informados, o valor esperado por entrada não é positivo. A meta não pode ser projetada matematicamente sem alterar os parâmetros.'
-        elif entradas_dia > 50:
-            mensagem = f'Plano matematicamente positivo, mas exige cerca de {entradas_dia} entradas por dia; isso é um volume elevado para o prazo escolhido.'
-        elif modo == 'soros' and exposicao_max > banca * 0.15:
-            mensagem = 'O Soros escolhido pode concentrar mais de 15% da banca em uma única entrada nos níveis altos. A exposição máxima está destacada para você avaliar antes de usar.'
-        else:
-            mensagem = 'Plano matematicamente positivo sob as hipóteses informadas. A taxa de acerto e o payout são estimativas e não garantem o resultado real.'
-
-        note = (
-            f'Perfil {perfil}: risco-base de {risco*100:.0f}% da banca ({moeda := "R$"} {entrada_base:,.2f}). '
-            f'Payout informado: {payout*100:.1f}%. Taxa de acerto usada na projeção: {winrate*100:.1f}%. '
-            f'Para mão fixa, o valor por entrada permanece em {entrada_base:.2f}. '
-            + (f'No Soros, o valor cresce apenas após WIN e reinicia no valor-base após LOSS; nível máximo calculado: {niveis}.' if modo == 'soros' else 'Sem progressão: cada entrada usa o mesmo valor-base.')
-        ).replace(',', 'X').replace('.', ',').replace('X', '.')
-
-        def br(v):
-            return round(float(v), 2)
-
-        summary = {
-            'entrada_base': br(entrada_base),
-            'entradas_estimadas': entradas,
-            'entradas_por_dia': entradas_dia,
-            'lucro_esperado_por_entrada': br(lucro_esperado),
-            'valor_esperado_entrada': br(ev_per_entry),
-            'exposicao_maxima': br(exposicao_max),
-            'wins_sem_loss': wins_sem_loss,
-            'viavel': viavel
-        }
-        return jsonify({
-            'ok': True,
-            'parameters': {'bankroll': br(banca), 'target_profit': br(meta), 'days': dias, 'payout': payout, 'winrate': winrate, 'profile': perfil, 'mode': modo, 'soros_levels': niveis},
-            'summary': summary,
-            'plan': plan,
-            'message': mensagem,
-            'note': note
-        })
-    except Exception as e:
-        print(f'⚠️ Calculadora de banca: {e}')
-        return jsonify({'ok': False, 'error': 'Não foi possível concluir o cálculo com os parâmetros informados.'}), 400
 
 @app.route('/command/<cmd>')
 def command(cmd):
@@ -2896,9 +2330,6 @@ def command(cmd):
         # Guarda o ativo da última operação e a vela em que ela foi encerrada.
         # Isso impede que o mesmo ativo seja escolhido repetidamente na mesma vela
         # quando houver outro candidato válido. Não cria sinais artificiais.
-        # Recupera somente estados pertencentes ao usuário atual.
-        # `alerta_atual` não é uma variável local definida neste endpoint;
-        # referenciá-la aqui causava NameError e retornava HTTP 500 no START.
         ultimo_confirmado = st.get("sinal_confirmado") or st.get("alerta_ativo") or {}
         st["ultimo_sinal_ativo"] = ultimo_confirmado.get("ativo")
         st["ultimo_sinal_candle_ts"] = math.floor(time.time() / (max(1, int(st.get("timeframe", 5))) * 60)) * (max(1, int(st.get("timeframe", 5))) * 60)
@@ -2928,9 +2359,9 @@ def command(cmd):
         st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["warmup_inicio"] = time.time()
-        st["startup_lock_until"] = time.time() + 300
-        st["startup_lock_seconds"] = 300
-        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS • AGUARDANDO 5 MINUTOS"
+        st["startup_lock_until"] = 0.0
+        st["startup_lock_seconds"] = 0
+        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS EM PARALELO"
         st["inicio_varredura"] = time.time() + 0.5 
         st["sinais_enviados"].clear() 
         
@@ -2946,27 +2377,20 @@ def command(cmd):
             f"⚙️ <b>Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(st['estrategia'], st['estrategia'])}\n\n"
             f"<i>Varrendo gráficos em tempo real...</i>"
         )
-        # NÃO bloqueia a resposta HTTP do botão START esperando a API do Telegram.
-        # Em hospedagens como Render, uma chamada síncrona ao Telegram pode demorar
-        # e fazer o navegador exibir "Falha de comunicação com o servidor", mesmo
-        # com o bot já iniciado. O envio é desacoplado do comando.
-        def _enviar_inicio_telegram_background(_msg=msg_inicio_telegram, _user=user):
+        # O comando START não pode ficar esperando a API do Telegram. Em hospedagens
+        # como Render isso pode fazer o fetch do painel atingir timeout mesmo com o
+        # motor já iniciado. O envio fica desacoplado da resposta HTTP.
+        def _start_telegram_background(_msg=msg_inicio_telegram, _user=user):
             try:
                 msg_id = enviar_telegram(_msg, user_solicitante=_user)
                 if msg_id:
-                    print(f"✅ Telegram: mensagem de START enviada (ID {msg_id}).")
+                    print(f"✅ Telegram: START enviado em background (ID {msg_id}).")
                 else:
-                    print("⚠️ Telegram: START foi iniciado, mas a mensagem não pôde ser enviada.")
+                    print("ℹ️ Telegram: START sem envio (trava desativada ou configuração indisponível).")
             except Exception as e:
-                print(f"⚠️ Erro ao enviar mensagem de START ao Telegram: {e}")
+                print(f"⚠️ Erro no Telegram durante START: {e}")
 
-        threading.Thread(
-            target=_enviar_inicio_telegram_background,
-            daemon=True,
-            name="telegram-start"
-        ).start()
-
-        # Responde imediatamente ao painel. O motor já está iniciado acima.
+        threading.Thread(target=_start_telegram_background, daemon=True, name="telegram-start").start()
         return jsonify({"ok": True, "telegram_enviado_em_background": True})
 
     elif cmd == "pause_bot":
@@ -3020,9 +2444,9 @@ def command(cmd):
         st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["warmup_inicio"] = time.time()
-        st["startup_lock_until"] = time.time() + 300
-        st["startup_lock_seconds"] = 300
-        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS • AGUARDANDO 5 MINUTOS"
+        st["startup_lock_until"] = 0.0
+        st["startup_lock_seconds"] = 0
+        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS EM PARALELO"
     elif cmd.startswith("mkt_"): 
         st["tipo_mercado"] = cmd.split('_', 1)[1] 
         st["warmup_concluido"] = False
@@ -3030,9 +2454,9 @@ def command(cmd):
         st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["warmup_inicio"] = time.time()
-        st["startup_lock_until"] = time.time() + 300
-        st["startup_lock_seconds"] = 300
-        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS • AGUARDANDO 5 MINUTOS"
+        st["startup_lock_until"] = 0.0
+        st["startup_lock_seconds"] = 0
+        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS EM PARALELO"
     elif cmd.startswith("set_est_"): 
         st["estrategia"] = cmd.replace("set_est_", "")
     
@@ -3369,58 +2793,6 @@ def confirmar_alerta_agendado(user_email, alert_id):
 
 
 # ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT =================
-
-def _precarregar_dados_paralelo(ativos, tf, ohlc_cache, velas_minimas=30, st=None, etapa="VARREDURA"):
-    """Busca candles dos ativos em paralelo para evitar que um ativo lento bloqueie a varredura inteira.
-
-    O processamento técnico continua no thread principal; somente a obtenção dos dados
-    de mercado é paralelizada. Isso reduz drasticamente o tempo de uma rodada quando
-    há muitos ativos selecionados ou quando algum endpoint demora a responder.
-    """
-    agora = time.time()
-    resultados = {}
-    pendentes = []
-
-    # Primeiro reaproveita tudo que ainda está no cache.
-    for ativo in ativos:
-        ticker = MAPA_TICKERS.get(ativo, ativo)
-        cache_key = f"{ticker}_{tf}"
-        item = ohlc_cache.get(cache_key)
-        if item and agora - item.get("time", 0) < 5 and item.get("data") is not None:
-            resultados[ativo] = item["data"]
-        else:
-            pendentes.append((ativo, ticker, cache_key))
-
-    if not pendentes:
-        if st is not None:
-            st["scan_fetch_status"] = f"CACHE • {len(resultados)}/{len(ativos)} ativos"
-        return resultados
-
-    max_workers = min(8, max(1, len(pendentes)))
-    concluidos = len(resultados)
-
-    def _buscar(item):
-        ativo, ticker, cache_key = item
-        try:
-            data = get_data_v2(ticker, tf, velas_minimas=velas_minimas)
-            return ativo, cache_key, data, None
-        except Exception as exc:
-            return ativo, cache_key, None, str(exc)
-
-    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="vp-data") as executor:
-        futures = {executor.submit(_buscar, item): item[0] for item in pendentes}
-        for future in as_completed(futures):
-            ativo, cache_key, data, erro = future.result()
-            concluidos += 1
-            if data is not None:
-                resultados[ativo] = data
-                ohlc_cache[cache_key] = {"data": data, "time": time.time()}
-            if st is not None:
-                st["scan_fetch_status"] = f"{etapa} • DADOS {concluidos}/{len(ativos)}"
-
-    return resultados
-
-
 def bot_loop():
     ohlc_cache = {}
 
@@ -3480,99 +2852,85 @@ def bot_loop():
                     selecionados_usuario = [a for a in st.get("selected_assets", []) if a in ativos_mercado]
                     ativos = selecionados_usuario if selecionados_usuario else ativos_mercado
 
-                    # Trava de segurança: os candles são carregados e analisados
-                    # DURANTE os 5 minutos iniciais. Um ativo sem fonte pública válida
-                    # não pode bloquear o motor inteiro: ele é marcado como indisponível
-                    # e os demais continuam normalmente.
+                    # PRÉ-CARGA RÁPIDA: valida as últimas 30 velas de todos os ativos
+                    # simultaneamente. Não existe mais uma espera fixa de 5 minutos.
+                    # Os dados válidos ficam no cache e são reutilizados imediatamente
+                    # pela varredura de confluência abaixo.
+                    ativos = list(dict.fromkeys(ativos))
                     if not st.get("warmup_concluido"):
                         warmup_set = st.setdefault("warmup_ativos_analisados", set())
                         indisponiveis = st.setdefault("warmup_ativos_indisponiveis", set())
-                        pendentes = [a for a in ativos if a not in warmup_set and a not in indisponiveis]
-                        st["warmup_status"] = (
-                            f"ANALISANDO 30 VELAS • {len(warmup_set) + len(indisponiveis)}/{len(ativos)} ATIVOS"
-                        )
+                        warmup_analysis = st.setdefault("warmup_analysis", {})
 
-                        if pendentes:
-                            dados_warmup = _precarregar_dados_paralelo(
-                                pendentes, tf, ohlc_cache, velas_minimas=30,
-                                st=st, etapa="AQUECIMENTO"
-                            )
-                            # IMPORTANTE: _precarregar_dados_paralelo() só devolve no
-                            # dicionário os ativos que realmente receberam dados. Se um
-                            # ativo falhar/retornar None, ele não aparece em
-                            # dados_warmup.items(). Antes isso fazia o contador parar, por
-                            # exemplo, em 51/53 para sempre. Aqui percorremos TODOS os
-                            # pendentes e classificamos explicitamente os que não vieram.
-                            for ativo_w in pendentes:
-                                data_w = dados_warmup.get(ativo_w)
-                                closes_w = data_w.get("close", []) if data_w else []
-                                if len(closes_w) >= 30:
+                        def _carregar_30_velas(ativo_w):
+                            ticker_w = MAPA_TICKERS.get(ativo_w, ativo_w)
+                            cache_key_w = f"{ticker_w}_{tf}"
+                            cached_w = ohlc_cache.get(cache_key_w)
+                            if cached_w and cached_w.get("data"):
+                                return ativo_w, ticker_w, cache_key_w, cached_w.get("data"), None
+                            try:
+                                data_w = get_data_v2(ticker_w, tf, velas_minimas=30)
+                                return ativo_w, ticker_w, cache_key_w, data_w, None
+                            except Exception as exc_w:
+                                return ativo_w, ticker_w, cache_key_w, None, exc_w
+
+                        # A quantidade de workers acompanha a quantidade de ativos,
+                        # limitada para não saturar a hospedagem nem as fontes públicas.
+                        workers_w = max(1, min(12, len(ativos)))
+                        with ThreadPoolExecutor(max_workers=workers_w, thread_name_prefix="warmup") as pool_w:
+                            futuros_w = [pool_w.submit(_carregar_30_velas, ativo_w) for ativo_w in ativos
+                                         if ativo_w not in warmup_set and ativo_w not in indisponiveis]
+                            for futuro_w in as_completed(futuros_w):
+                                ativo_w, ticker_w, cache_key_w, data_w, exc_w = futuro_w.result()
+                                if data_w and len(data_w.get("close", [])) >= 30:
                                     try:
-                                        # A leitura técnica completa já acontece durante
-                                        # o aquecimento; não esperamos 5 minutos para
-                                        # começar a procurar uma oportunidade.
+                                        ohlc_cache[cache_key_w] = {"data": data_w, "time": time.time()}
                                         diag_w = _indicadores_confluencia(data_w, None)
-                                        st.setdefault("warmup_analysis", {})[ativo_w] = {
+                                        warmup_analysis[ativo_w] = {
                                             "confluencia": float(diag_w.get("confluencia", 0)),
                                             "tendencia": diag_w.get("tendencia"),
-                                            "regime": diag_w.get("regime", "--"),
-                                            "adx": float(diag_w.get("adx", 0)),
                                             "rsi": float(diag_w.get("rsi", 50)),
-                                            "grafico": [float(x) for x in data_w["close"][-30:]],
                                             "timestamp": time.time()
                                         }
                                         warmup_set.add(ativo_w)
-                                    except Exception as exc_w:
-                                        # Se os candles existem, o ativo já foi validado;
-                                        # um erro de diagnóstico não deve travar o aquecimento.
-                                        warmup_set.add(ativo_w)
-                                        st.setdefault("warmup_analysis", {})[ativo_w] = {
-                                            "confluencia": 0, "tendencia": "INDEFINIDA",
-                                            "regime": "SEM LEITURA", "adx": 0, "rsi": 50,
-                                            "grafico": [float(x) for x in closes_w[-30:]],
-                                            "timestamp": time.time(), "erro": str(exc_w)
-                                        }
+                                    except Exception as exc_diag:
+                                        print(f"⚠️ Warmup diagnóstico {ativo_w}: {exc_diag}")
+                                        indisponiveis.add(ativo_w)
                                 else:
-                                    # Sem 30 candles válidos (comum em alguns OTC):
-                                    # registra indisponível e não bloqueia os outros ativos.
+                                    # Algumas fontes não fornecem histórico para certos
+                                    # OTC/ativos. Isso não pode travar os ativos disponíveis.
                                     indisponiveis.add(ativo_w)
+                                    if exc_w:
+                                        print(f"⚠️ Warmup {ativo_w}: {exc_w}")
 
-                        processados_warmup = len(warmup_set) + len(indisponiveis)
-                        if processados_warmup >= len(ativos):
+                        processados_w = len(warmup_set) + len(indisponiveis)
+                        st["warmup_status"] = (
+                            f"30 VELAS VALIDADAS • {len(warmup_set)} DISPONÍVEIS"
+                            + (f" • {len(indisponiveis)} SEM HISTÓRICO PÚBLICO" if indisponiveis else "")
+                        )
+                        if processados_w >= len(ativos):
                             st["warmup_concluido"] = True
                             st["warmup_status"] = (
-                                f"30 VELAS PROCESSADAS • {len(warmup_set)} VÁLIDOS • "
-                                f"{len(indisponiveis)} SEM DADOS PÚBLICOS"
+                                f"30 VELAS VALIDADAS • {len(warmup_set)} DISPONÍVEIS"
+                                + (f" • {len(indisponiveis)} SEM HISTÓRICO PÚBLICO" if indisponiveis else "")
                             )
-                        else:
-                            st["ativo_atual"] = "AQUECENDO MOTOR — 30 VELAS"
-                            st["ultimo_sinal"] = (
-                                f"<div class='system-console' style='color:#f59e0b;'>🛡️ <b>TRAVA DE SEGURANÇA ATIVA</b><br>"
-                                f"Analisando as últimas <b>30 velas</b> enquanto o temporizador inicial corre.<br>"
-                                f"<span style='color:#00f2fe;'>{processados_warmup}/{len(ativos)} ativos processados.</span></div>"
-                            )
-                            # Não esperamos uma rodada posterior para começar a análise;
-                            # os dados válidos já entram no ciclo de confluência abaixo.
-                            # Se ainda existem pendentes, o próximo ciclo continua daqui.
-                            if not warmup_set:
-                                continue
 
-                    # Durante os 5 minutos, os dados válidos já estão no cache e o
-                    # bloco de varredura abaixo continua normalmente. Quando a trava
-                    # terminar, a mesma varredura já terá um candidato pronto.
-                    dados_warmup_validos = st.get("warmup_ativos_analisados", set())
-                    # Segurança adicional: mesmo com 30 velas disponíveis, o sistema
-                    # aguarda obrigatoriamente 5 minutos após o START. Durante essa janela
-                    # ele continua analisando os ativos, mas NÃO cria alerta nem sinal.
-                    startup_remaining = max(0.0, st.get("startup_lock_until", 0.0) - time.time())
-                    if startup_remaining > 0:
-                        st["warmup_status"] = f"ANALISANDO 30 VELAS • AGUARDANDO {int(math.ceil(startup_remaining))}s PARA LIBERAR SINAIS"
-                        st["ultimo_sinal"] = (
-                            f"<div class='system-console' style='color:#f59e0b;'>🛡️ <b>TRAVA DE SEGURANÇA ATIVA</b><br>"
-                            f"30 velas validadas. O motor continuará procurando a melhor confluência por mais <b>{int(math.ceil(startup_remaining))}s</b>.<br>"
-                            f"<span style='color:#00f2fe;'>Nenhum alerta ou sinal será enviado antes do fim dos 5 minutos.</span></div>"
-                        )
-                        # Mantém a análise de mercado abaixo, mas bloqueia a emissão de alertas.
+                        # Mesmo se alguma fonte não responder, o motor não fica parado:
+                        # basta existir pelo menos um ativo com 30 velas válidas para
+                        # a análise de confluência começar imediatamente.
+                        if not warmup_set:
+                            st["ativo_atual"] = "CARREGANDO 30 VELAS EM PARALELO"
+                            st["ultimo_sinal"] = (
+                                f"<div class='system-console' style='color:#f59e0b;'>⚡ <b>PRÉ-ANÁLISE RÁPIDA</b><br>"
+                                f"Carregando as últimas <b>30 velas</b> simultaneamente...<br>"
+                                f"<span style='color:#00f2fe;'>{processados_w}/{len(ativos)} ativos processados.</span></div>"
+                            )
+                            continue
+
+                    # Sem trava temporal: assim que a pré-análise paralela termina (ou
+                    # existe pelo menos um ativo válido), a varredura de confluência pode
+                    # selecionar e programar um sinal imediatamente.
+                    st["startup_lock_until"] = 0.0
 
                     # 🛡️ CONSULTA DO CALENDÁRIO ANTES DA VARREDURA
                     # A consulta é feita uma vez por ciclo, e não uma vez por ativo.
@@ -3641,52 +2999,21 @@ def bot_loop():
                     # de alertas aleatórios observada quando o loop encontrava vários sinais.
                     candidatos_globais = []
                     diagnostico_melhor = None
-                    melhor_diag_chave = (-1, -1, -1)
-                    scan_calls = 0
-                    scan_puts = 0
-                    scan_sem_sinal = 0
-                    st["scan_total"] = len(ativos_scan)
-                    st["scan_analisados"] = 0
-                    st["scan_calls"] = 0
-                    st["scan_puts"] = 0
-                    st["scan_sem_sinal"] = 0
-                    st["scan_dados_validos"] = 0
-                    st["scan_fetch_status"] = "INICIANDO CONSULTAS PARALELAS"
-                    st["scan_status"] = f"CARREGANDO DADOS DE {len(ativos_scan)} ATIVOS EM PARALELO"
-                    st["scan_atualizado"] = time.time()
-
-                    # Busca os candles de todos os ativos simultaneamente. A análise
-                    # técnica permanece sequencial para preservar o estado e a lógica
-                    # do ensemble, mas nenhuma consulta lenta bloqueia as demais.
-                    dados_scan = _precarregar_dados_paralelo(
-                        ativos_scan, tf, ohlc_cache, velas_minimas=30,
-                        st=st, etapa="VARREDURA"
-                    )
+                    melhor_diag_chave = (-1, -1, -1, -1)
 
                     for ativo in ativos_scan:
                         if not st.get("bot_iniciado") or st.get("bot_pausado"):
                             break
                         st["ativo_atual"] = ativo
-                        data = dados_scan.get(ativo)
+                        ticker = MAPA_TICKERS.get(ativo, ativo)
+                        cache_key = f"{ticker}_{tf}"
+                        data = ohlc_cache.get(cache_key, {}).get("data") if cache_key in ohlc_cache else None
+                        if data is None:
+                            data = get_data_v2(ticker, tf, velas_minimas=30)
+                            if data:
+                                ohlc_cache[cache_key] = {"data": data, "time": time.time()}
                         if not data:
-                            st["scan_analisados"] = int(st.get("scan_analisados",0)) + 1
                             continue
-
-                        st["scan_analisados"] = int(st.get("scan_analisados",0)) + 1
-                        st["scan_dados_validos"] = int(st.get("scan_dados_validos",0)) + 1
-                        st["scan_atual"] = ativo
-                        st["scan_status"] = f"ANALISANDO {ativo} • {st['scan_analisados']}/{len(ativos_scan)}"
-                        try:
-                            scan_diag = _indicadores_confluencia(data, None)
-                            scan_diag.update({
-                                "ativo": ativo, "direcao": None, "probabilidade": 0,
-                                "estrategia": None, "estrategia_fmt": "Leitura em andamento",
-                                "grafico": [float(x) for x in data["close"][-30:]],
-                                "motivos": scan_diag.get("confluencias", [])
-                            })
-                            st["scan_atual_analise"] = scan_diag
-                        except Exception:
-                            pass
 
                         if user_est == "TODAS":
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
@@ -3701,85 +3028,127 @@ def bot_loop():
                         for est_nome in estrategias_para_analisar:
                             sinal_test, prob_test, analise_test = analisar_estrategia_detalhada(data, est_nome)
                             if sinal_test:
-                                candidatos.append({"sinal": sinal_test, "prob": int(prob_test), "estrategia": est_nome, "analise": analise_test})
+                                candidatos.append({
+                                    "sinal": sinal_test,
+                                    "prob": int(prob_test),
+                                    "estrategia": est_nome,
+                                    "analise": analise_test
+                                })
 
-                        # Ensemble: consenso entre estratégias + qualidade técnica.
-                        # Um sinal isolado com probabilidade alta não vence automaticamente
-                        # um conjunto com múltiplas evidências concordantes.
-                        candidatos_filtrados = []
+                        # =========================================================
+                        # COMPARAÇÃO REAL ENTRE ESTRATÉGIAS
+                        # =========================================================
+                        # TODAS não significa escolher a estratégia que pontuou mais.
+                        # Todas são executadas separadamente e agrupadas por direção.
+                        # Um sinal só existe quando pelo menos duas estratégias
+                        # independentes concordam na mesma direção.
+                        multi_estrategia = len(estrategias_para_analisar) > 1
+                        grupos = {"CALL": [], "PUT": []}
                         for cand in candidatos:
-                            conf = float(cand["analise"].get("confluencia", 0))
-                            conflitos = int(cand["analise"].get("conflitos", 0))
-                            concordantes = sum(1 for x in candidatos if x["sinal"] == cand["sinal"] and x["estrategia"] != cand["estrategia"])
-                            discordantes = sum(1 for x in candidatos if x["sinal"] != cand["sinal"] and x["estrategia"] != cand["estrategia"])
-                            cand["concordantes"] = concordantes
-                            cand["discordantes"] = discordantes
-                            regime_cand = str(cand["analise"].get("regime", "LATERAL"))
-                            vantagem_cand = float(cand["analise"].get("vantagem_direcional", 0))
-                            # Em TODAS, uma única estratégia não é suficiente para gerar entrada.
-                            # O objetivo é reduzir G1 por exigir confirmação independente.
-                            if conf < 70 or conflitos >= 2:
-                                continue
-                            if regime_cand == 'VOLATILIDADE_ALTA':
-                                continue
-                            if regime_cand == 'LATERAL' and cand["estrategia"] not in ('REVERSAO','RETRACAO'):
-                                continue
-                            if vantagem_cand < (7 if cand["estrategia"] in ('REVERSAO','RETRACAO') else 10):
-                                continue
-                            if user_est == "TODAS" and concordantes < 1:
-                                continue
-                            consenso_bonus = min(10, concordantes * 4)
-                            conflito_penal = min(8, discordantes * 2)
-                            # Em mercado muito lateral, exigimos mais confluência.
-                            adx = float(cand["analise"].get("adx", 0))
-                            if adx < 16 and cand["estrategia"] not in ('REVERSAO','RETRACAO'):
-                                conflito_penal += 4
-                            cand["prob_final"] = max(76, min(96, int(cand["prob"]) + consenso_bonus - conflito_penal))
-                            cand["qualidade_ensemble"] = round(conf + consenso_bonus - conflito_penal + min(6, vantagem_cand * 0.25), 1)
-                            candidatos_filtrados.append(cand)
-                        candidatos = candidatos_filtrados
-                        if candidatos:
-                            scan_calls += sum(1 for x in candidatos if x["sinal"] == "CALL")
-                            scan_puts += sum(1 for x in candidatos if x["sinal"] == "PUT")
-                        else:
-                            scan_sem_sinal += 1
-                        st["scan_calls"] = scan_calls
-                        st["scan_puts"] = scan_puts
-                        st["scan_sem_sinal"] = scan_sem_sinal
+                            grupos.setdefault(cand["sinal"], []).append(cand)
 
-                        if candidatos:
-                            melhor_local = max(candidatos, key=lambda x:(x["qualidade_ensemble"], x["prob_final"], x["concordantes"]))
+                        candidatos_consensuais = []
+                        for direcao, grupo in grupos.items():
+                            if not grupo:
+                                continue
+                            consenso = len(grupo)
+                            if multi_estrategia and consenso < 2:
+                                continue
+
+                            grupo = sorted(
+                                grupo,
+                                key=lambda x: (
+                                    float(x["analise"].get("confluencia", 0)),
+                                    int(x["analise"].get("confirmacoes", 0)),
+                                    int(x["prob"])
+                                ),
+                                reverse=True
+                            )
+                            principal = dict(grupo[0])
+                            ana = dict(principal["analise"])
+                            conf = float(ana.get("confluencia", 0))
+                            confirms = int(ana.get("confirmacoes", 0))
+                            conflicts = int(ana.get("conflitos", 99))
+                            tendencia = ana.get("tendencia")
+
+                            # Dupla trava: consenso entre estratégias + consenso
+                            # entre indicadores. A tendência também precisa bater.
+                            if tendencia != direcao:
+                                continue
+                            if conf < 72 or confirms < 6 or conflicts >= 2:
+                                continue
+
+                            bonus_consenso = min(9, max(0, consenso - 1) * 3)
+                            prob_final = min(96, int(principal["prob"]) + bonus_consenso)
+                            if prob_final < 82:
+                                continue
+
+                            nomes_concordantes = [
+                                NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"])
+                                for x in grupo
+                            ]
+                            principal["concordantes"] = consenso - 1
+                            principal["consenso"] = consenso
+                            principal["prob_final"] = prob_final
+                            principal["analise"] = ana
+                            principal["analise"]["consenso_estrategias"] = consenso
+                            principal["analise"]["estrategias_concordantes"] = nomes_concordantes
+                            principal["analise"]["motivos"] = ana.get("confluencias", [])
+                            candidatos_consensuais.append(principal)
+
+                        if candidatos_consensuais:
+                            melhor_local = max(
+                                candidatos_consensuais,
+                                key=lambda x: (
+                                    int(x["consenso"]),
+                                    float(x["analise"].get("confluencia", 0)),
+                                    int(x["analise"].get("confirmacoes", 0)),
+                                    int(x["prob_final"])
+                                )
+                            )
                             ana = dict(melhor_local["analise"])
                             ana.update({
-                                "ativo": ativo, "direcao": melhor_local["sinal"], "probabilidade": melhor_local["prob_final"],
+                                "ativo": ativo,
+                                "direcao": melhor_local["sinal"],
+                                "probabilidade": melhor_local["prob_final"],
                                 "estrategia": melhor_local["estrategia"],
-                                "estrategia_fmt": NOME_ESTRATEGIAS_DISPLAY.get(melhor_local["estrategia"], melhor_local["estrategia"]),
+                                "estrategia_fmt": (
+                                    f"{NOME_ESTRATEGIAS_DISPLAY.get(melhor_local['estrategia'], melhor_local['estrategia'])} • "
+                                    f"{melhor_local['consenso']} estratégias em acordo"
+                                ),
                                 "grafico": [float(x) for x in data["close"][-30:]],
                                 "motivos": ana.get("confluencias", []),
-                                "estrategias_concordantes": [NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"]) for x in candidatos if x["sinal"] == melhor_local["sinal"]]
+                                "estrategias_concordantes": ana.get("estrategias_concordantes", [])
                             })
-                            candidatos_globais.append({"ativo":ativo,"sinal":melhor_local["sinal"],"probabilidade":int(melhor_local["prob_final"]),"confluencia":float(ana.get("confluencia",0)),"qualidade_ensemble":float(melhor_local.get("qualidade_ensemble", ana.get("confluencia",0))),"concordantes":int(melhor_local["concordantes"]),"estrategia":melhor_local["estrategia"],"estrategia_fmt":ana["estrategia_fmt"],"analise":ana,"data":data})
-                            chave_diag=(float(melhor_local.get("qualidade_ensemble",0)),int(melhor_local["prob_final"]),int(melhor_local["concordantes"]))
-                            if chave_diag>melhor_diag_chave:
-                                melhor_diag_chave=chave_diag; diagnostico_melhor=ana
+                            candidatos_globais.append({
+                                "ativo": ativo,
+                                "sinal": melhor_local["sinal"],
+                                "probabilidade": int(melhor_local["prob_final"]),
+                                "confluencia": float(ana.get("confluencia", 0)),
+                                "concordantes": int(melhor_local.get("concordantes", 0)),
+                                "consenso": int(melhor_local.get("consenso", 1)),
+                                "estrategia": melhor_local["estrategia"],
+                                "estrategia_fmt": ana["estrategia_fmt"],
+                                "analise": ana,
+                                "data": data
+                            })
+                            chave_diag = (
+                                int(melhor_local["consenso"]),
+                                float(ana.get("confluencia", 0)),
+                                int(ana.get("confirmacoes", 0)),
+                                int(melhor_local["prob_final"])
+                            )
+                            if chave_diag > melhor_diag_chave:
+                                melhor_diag_chave = chave_diag
+                                diagnostico_melhor = ana
                         else:
                             diag=_indicadores_confluencia(data,None)
                             diag.update({"ativo":ativo,"direcao":None,"probabilidade":0,"estrategia":None,"estrategia_fmt":"Sem sinal validado","grafico":[float(x) for x in data["close"][-30:]],"motivos":diag.get("confluencias",[])})
                             if diagnostico_melhor is None:
                                 diagnostico_melhor=diag
 
-                    if diagnostico_melhor is not None:
+                    if diagnostico_melhor is not None and (not st.get("aguardando_confirmacao") or st.get("analise_atual") is None):
                         st["analise_atual"] = diagnostico_melhor
-                        st["scan_melhor"] = {
-                            "ativo": diagnostico_melhor.get("ativo"),
-                            "direcao": diagnostico_melhor.get("direcao"),
-                            "probabilidade": diagnostico_melhor.get("probabilidade", 0),
-                            "confluencia": diagnostico_melhor.get("confluencia", 0),
-                            "regime": diagnostico_melhor.get("regime", "--"),
-                            "vantagem_direcional": diagnostico_melhor.get("vantagem_direcional", 0)
-                        }
-                    st["scan_status"] = f"VARREDURA CONCLUÍDA • {len(ativos_scan)} ativos • CALL {scan_calls} • PUT {scan_puts}"
-                    st["scan_atualizado"] = time.time()
 
                     # Enquanto há alerta confirmado/pendente, a varredura continua,
                     # porém só pode substituir o alerta se a oportunidade nova for
@@ -3789,7 +3158,7 @@ def bot_loop():
                         # Ordena todas as oportunidades pela mesma regra usada pelo Vision Pro.
                         candidatos_ordenados = sorted(
                             candidatos_globais,
-                            key=lambda x: (x.get("qualidade_ensemble", x["confluencia"]), x["probabilidade"], x["concordantes"]),
+                            key=lambda x: (x.get("consenso", 1), x["confluencia"], x["concordantes"], x["probabilidade"]),
                             reverse=True
                         )
 
@@ -3821,7 +3190,7 @@ def bot_loop():
                     if startup_remaining > 0:
                         continue
 
-                    if melhor_candidato and melhor_candidato["probabilidade"] >= 80 and not st.get("aguardando_confirmacao"):
+                    if melhor_candidato and melhor_candidato["probabilidade"] >= 82 and int(melhor_candidato.get("consenso", 1)) >= (2 if len(estrategias_para_analisar) > 1 else 1) and float(melhor_candidato.get("confluencia", 0)) >= 72 and not st.get("aguardando_confirmacao"):
                         agora = agora_brasilia()
                         total_seg = tf * 60
                         seg_pass = (agora.minute % tf) * 60 + agora.second
