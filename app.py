@@ -98,7 +98,13 @@ def get_user_state(email):
             # Controle de diversificação: evita repetir o mesmo ativo na mesma vela
             # quando existem outras oportunidades válidas. Não força um ativo sem sinal.
             "ultimo_sinal_ativo": None,
-            "ultimo_sinal_candle_ts": 0.0
+            "ultimo_sinal_direcao": None,
+            "ultimo_sinal_candle_ts": 0.0,
+            # Pipeline paralelo: enquanto uma entrada confirmada está em execução,
+            # o motor continua procurando a próxima oportunidade sem substituir a
+            # entrada atual. O melhor candidato fica preparado para a próxima entrada.
+            "proximo_sinal_candidato": None,
+            "proximo_sinal_atualizado": 0.0
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -1674,6 +1680,36 @@ def _macd_atual(c):
     sinal = calcular_ema(linha, 9)
     return float(linha[-1]), float(sinal[-1]), float(linha[-1] - sinal[-1])
 
+def _microtendencia_curta(c, o=None):
+    """Analisa o fluxo dos últimos candles fechados para melhorar o timing,
+    especialmente em M1. Uma microtendência forte contra a direção bloqueia o setup."""
+    try:
+        c=np.asarray(c,dtype=float); c=c[np.isfinite(c)]
+        if len(c)<6:
+            return {"direcao":"INDEFINIDA","score":50.0,"forca":"NEUTRA","impulso":False,"detalhe":"Histórico curto para microtendência."}
+        ult=c[-6:]; diffs=np.diff(ult); sinais=np.sign(diffs)
+        altas=int(np.sum(sinais>0)); baixas=int(np.sum(sinais<0)); total=max(1,altas+baixas)
+        ema5=calcular_ema(c,5); ema9=calcular_ema(c,9)
+        slope5=float(ema5[-1]-ema5[-4]); slope9=float(ema9[-1]-ema9[-4])
+        alinh_alta=ema5[-1]>ema9[-1] and slope5>0 and slope9>=0
+        alinh_baixa=ema5[-1]<ema9[-1] and slope5<0 and slope9<=0
+        estrutura_alta=altas>=3 and ult[-1]>ult[-3]
+        estrutura_baixa=baixas>=3 and ult[-1]<ult[-3]
+        score_alta=min(100.0,(altas/total)*60+(20 if alinh_alta else 0)+(20 if estrutura_alta else 0))
+        score_baixa=min(100.0,(baixas/total)*60+(20 if alinh_baixa else 0)+(20 if estrutura_baixa else 0))
+        if score_alta>=70 and score_alta>score_baixa+10: direcao,score="ALTA",score_alta
+        elif score_baixa>=70 and score_baixa>score_alta+10: direcao,score="BAIXA",score_baixa
+        elif score_alta>=55 and score_alta>score_baixa+8: direcao,score="ALTA",score_alta
+        elif score_baixa>=55 and score_baixa>score_alta+8: direcao,score="BAIXA",score_baixa
+        else: direcao,score="NEUTRA",max(score_alta,score_baixa,50.0)
+        impulso=bool((direcao=="ALTA" and altas>=3 and diffs[-1]>0 and diffs[-2]>=0) or (direcao=="BAIXA" and baixas>=3 and diffs[-1]<0 and diffs[-2]<=0))
+        forca="FORTE" if score>=70 else "MODERADA" if score>=55 else "NEUTRA"
+        detalhe=f"Últimos 5 movimentos: {altas} alta(s) / {baixas} baixa(s) • EMA5/9 {'alta' if alinh_alta else 'baixa' if alinh_baixa else 'mista'}"
+        return {"direcao":direcao,"score":round(float(score),1),"forca":forca,"impulso":impulso,"altas":altas,"baixas":baixas,"ema5":float(ema5[-1]),"ema9":float(ema9[-1]),"slope5":slope5,"slope9":slope9,"detalhe":detalhe}
+    except Exception as exc:
+        return {"direcao":"INDEFINIDA","score":50.0,"forca":"NEUTRA","impulso":False,"detalhe":f"Microtendência indisponível: {exc}"}
+
+
 def _indicadores_confluencia(data, direcao=None):
     """Confluência técnica em tempo real: MAs, tendência, volatilidade, volume e momentum."""
     c=np.asarray(data.get("close",[]),dtype=float); o=np.asarray(data.get("open",[]),dtype=float)
@@ -1693,6 +1729,11 @@ def _indicadores_confluencia(data, direcao=None):
     alta=ema9[-1]>ema21[-1] and c[-1]>ma20 and (ma20>=ma50 if len(c)>=50 else ema21[-1]>=ema21[-5])
     baixa=ema9[-1]<ema21[-1] and c[-1]<ma20 and (ma20<=ma50 if len(c)>=50 else ema21[-1]<=ema21[-5])
     tendencia="ALTA" if alta else "BAIXA" if baixa else "LATERAL"
+    micro=_microtendencia_curta(c,o)
+    micro_dir=micro.get("direcao","INDEFINIDA")
+    micro_score=float(micro.get("score",50.0) or 50.0)
+    micro_contra_forte=bool((direcao=="CALL" and micro_dir=="BAIXA" and micro_score>=70) or (direcao=="PUT" and micro_dir=="ALTA" and micro_score>=70))
+    micro_a_favor=bool((direcao=="CALL" and micro_dir=="ALTA") or (direcao=="PUT" and micro_dir=="BAIXA"))
     volume=np.asarray(data.get("volume",[]),dtype=float)
     volume_disponivel=False; volume_ratio=0.0
     if len(volume)==len(c):
@@ -1705,7 +1746,13 @@ def _indicadores_confluencia(data, direcao=None):
     # 1) Tendência / não contra-tendência
     trend_ok=(direcao=="CALL" and tendencia=="ALTA") or (direcao=="PUT" and tendencia=="BAIXA") if direcao else tendencia!="LATERAL"
     add("Tendência",20 if trend_ok else 2,f"EMA9/21 + MA20/50 • {tendencia}","ok" if trend_ok else "bad")
-    # 2) Médias móveis
+    # Microtendência: filtro de timing para evitar operar contra o movimento curto.
+    if direcao:
+        micro_pts, micro_status = ((2,"bad") if micro_contra_forte else (16,"ok") if micro_a_favor else (6,"warn"))
+    else:
+        micro_pts, micro_status = ((16,"ok") if micro_dir in ("ALTA","BAIXA") and micro_score>=70 else (8,"warn"))
+    add("Microtendência",micro_pts,f"{micro_dir} • {micro.get('forca','NEUTRA')} • score {micro_score:.0f}/100",micro_status)
+    # 3) Médias móveis
     ma_ok=(direcao=="CALL" and c[-1]>ma20 and ma20>=ma50) or (direcao=="PUT" and c[-1]<ma20 and ma20<=ma50) if direcao else False
     add("MAs",18 if ma_ok else 5,f"Preço {preco:.5g} • MA20 {ma20:.5g} • MA50 {ma50:.5g}","ok" if ma_ok else "warn")
     # 3) RSI em zona de continuação, evitando extremos contra o fluxo
@@ -1737,12 +1784,15 @@ def _indicadores_confluencia(data, direcao=None):
     return {"rsi":float(rsi),"ema9":float(ema9[-1]),"ema21":float(ema21[-1]),"ma20":ma20,"ma50":ma50,"ma100":ma100,
             "macd":macd,"macd_signal":macd_signal,"macd_hist":macd_hist,"atr_pct":atr_pct,"volume_ratio":volume_ratio,
             "volume_disponivel":volume_disponivel,"tendencia":tendencia,"suporte":suporte,"resistencia":resistencia,
+            "microtendencia":micro_dir,"microtendencia_score":micro_score,"microtendencia_forca":micro.get("forca","NEUTRA"),
+            "microtendencia_impulso":bool(micro.get("impulso",False)),"microtendencia_detalhe":micro.get("detalhe",""),
+            "microtendencia_contra_forte":micro_contra_forte,
             "confluencia":confluencia,"confluencias":itens}
 
 def _resumo_confluencias_direcionais(diag):
     """Conta confirmações direcionais reais, sem transformar volatilidade neutra em sinal."""
     itens = diag.get("confluencias", []) if isinstance(diag, dict) else []
-    nomes_direcionais = {"MAs", "RSI", "MACD", "Volume", "Price Action", "Zona técnica"}
+    nomes_direcionais = {"Microtendência", "MAs", "RSI", "MACD", "Volume", "Price Action", "Zona técnica"}
     fortes = [x for x in itens if x.get("nome") in nomes_direcionais and x.get("status") == "ok" and int(x.get("pontos", 0)) >= 10]
     return fortes
 
@@ -1773,8 +1823,10 @@ def _painel_decisao(data):
     # ela não conta como confirmação direcional.
     call_tend_ok=tendencia=="ALTA"
     put_tend_ok=tendencia=="BAIXA"
-    call_apto=call_tend_ok and call_n>=2
-    put_apto=put_tend_ok and put_n>=2
+    call_micro_ok=not bool(call.get("microtendencia_contra_forte"))
+    put_micro_ok=not bool(put.get("microtendencia_contra_forte"))
+    call_apto=call_tend_ok and call_micro_ok and call_n>=2
+    put_apto=put_tend_ok and put_micro_ok and put_n>=2
 
     # Score mínimo baixo o suficiente para permitir 2 confirmações, mas evita
     # validar combinações muito fracas. A contagem de confirmações é o gatilho principal.
@@ -1814,16 +1866,26 @@ def _painel_decisao(data):
             explicacao="Mercado lateral: sem direção estrutural para liberar entrada."
             gate="BLOQUEADO • tendência sem direção clara."
         elif tendencia=="ALTA":
-            explicacao=f"CALL em tendência de alta, mas encontrou apenas {call_n} confirmação(ões) direcional(is); mínimo: 2."
-            gate="AGUARDAR • falta confirmação."
+            if not call_micro_ok:
+                explicacao=f"CALL alinhado à tendência principal, mas a microtendência está BAIXA ({float(call.get('microtendencia_score',50) or 50):.0f}/100)."
+                gate="BLOQUEADO • microtendência curta contra o CALL."
+            else:
+                explicacao=f"CALL em tendência de alta, mas encontrou apenas {call_n} confirmação(ões) direcional(is); mínimo: 2."
+                gate="AGUARDAR • falta confirmação."
         elif tendencia=="BAIXA":
-            explicacao=f"PUT em tendência de baixa, mas encontrou apenas {put_n} confirmação(ões) direcional(is); mínimo: 2."
-            gate="AGUARDAR • falta confirmação."
+            if not put_micro_ok:
+                explicacao=f"PUT alinhado à tendência principal, mas a microtendência está ALTA ({float(put.get('microtendencia_score',50) or 50):.0f}/100)."
+                gate="BLOQUEADO • microtendência curta contra o PUT."
+            else:
+                explicacao=f"PUT em tendência de baixa, mas encontrou apenas {put_n} confirmação(ões) direcional(is); mínimo: 2."
+                gate="AGUARDAR • falta confirmação."
         else:
             explicacao="Dados insuficientes para definir uma direção segura."
             gate="AGUARDAR • dados insuficientes."
 
     motivos=[]
+    micro_text=f"Microtendência: {call.get('microtendencia','--')} • {float(call.get('microtendencia_score',50) or 50):.0f}/100 • {'impulso ativo' if call.get('microtendencia_impulso') else 'sem impulso forte'}"
+    motivos.append({"tipo":"Microtendência","texto":micro_text})
     if tendencia=="ALTA":
         motivos.append({"tipo":"Tendência","texto":"Fluxo principal favorece alta; PUT contra-tendência permanece bloqueado."})
     elif tendencia=="BAIXA":
@@ -1898,6 +1960,10 @@ def analisar_estrategia_detalhada(data, estrategia):
 
     tendencia=indicadores.get("tendencia")
     if (sinal=="CALL" and tendencia!="ALTA") or (sinal=="PUT" and tendencia!="BAIXA"):
+        return None, 0, indicadores
+
+    # Reforço de timing: microtendência forte contra o setup bloqueia a entrada.
+    if bool(indicadores.get("microtendencia_contra_forte")):
         return None, 0, indicadores
 
     fortes=_resumo_confluencias_direcionais(indicadores)
@@ -2136,6 +2202,8 @@ def status():
         "analise_ativo_atual": st.get("analise_ativo_atual"),
         "alerta": st.get("alerta_ativo"),
         "sinal_confirmado": st.get("sinal_confirmado"),
+        "proximo_sinal": st.get("proximo_sinal_candidato"),
+        "proximo_sinal_atualizado": st.get("proximo_sinal_atualizado", 0.0),
         "sinais_sessao_total": st.get("sinais_sessao_total", 0),
         "g1_sessao": sum(1 for r in st.get("sessao_resultados", []) if r == "g1"),
         "mercado": st["tipo_mercado"],
@@ -2302,6 +2370,7 @@ def command(cmd):
         # quando houver outro candidato válido. Não cria sinais artificiais.
         ultimo_confirmado = st.get("sinal_confirmado") or st.get("alerta_ativo") or {}
         st["ultimo_sinal_ativo"] = ultimo_confirmado.get("ativo")
+        st["ultimo_sinal_direcao"] = ultimo_confirmado.get("sinal") or ultimo_confirmado.get("direcao")
         st["ultimo_sinal_candle_ts"] = math.floor(time.time() / (max(1, int(st.get("timeframe", 5))) * 60)) * (max(1, int(st.get("timeframe", 5))) * 60)
 
         st["aguardando_confirmacao"] = False
@@ -2314,6 +2383,8 @@ def command(cmd):
                 pass
         st["timer_confirmacao"] = None
         st["alerta_ativo"] = None
+        st["proximo_sinal_candidato"] = None
+        st["proximo_sinal_atualizado"] = 0.0
         st["telegram_alert_status"] = {}
         st["ultima_confirmacao_msg_id"] = None
         st["ultima_confirmacao_alert_id"] = None
@@ -2374,6 +2445,8 @@ def command(cmd):
         st["timer_confirmacao"] = None
         cancelar_alerta_telegram(st, st.get("alerta_ativo"))
         st["alerta_ativo"] = None
+        st["proximo_sinal_candidato"] = None
+        st["proximo_sinal_atualizado"] = 0.0
         # Envia o fechamento ANTES de limpar os resultados da sessão.
         enviar_telegram(mensagem_encerramento_sessao(st), user_solicitante=user)
 
@@ -2577,6 +2650,10 @@ def resultado(res):
                 pass
         st["timer_confirmacao"] = None
         st["alerta_ativo"] = None
+        # O candidato da próxima entrada permanece no pipeline. A próxima
+        # varredura o revalida/atualiza antes de programá-lo, evitando que a
+        # sala fique parada após o resultado da entrada anterior.
+        st["proximo_sinal_atualizado"] = st.get("proximo_sinal_atualizado", 0.0)
         st["analise_atual"] = None
         st["dados_grafico_atual"] = None
         st["analise_ativo_atual"] = None
@@ -2680,10 +2757,14 @@ def confirmar_alerta_agendado(user_email, alert_id):
             f"<div style='font-size:24px;font-weight:900;color:{cor_direcao};margin:6px 0;'>{ativo} • {sinal}</div>"
             f"<div style='font-size:11px;color:#cbd5e1;'>Probabilidade estimada: <b style='color:#4ade80'>{prob}%</b> • M{tf}</div>"
             f"<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>{est_fmt} • Entrada {str_entrada} • Expiração {str_saida}</div>"
+            f"<div style='font-size:10px;color:#4ade80;margin-top:8px;'>🔄 Motor continua analisando os demais ativos em segundo plano</div>"
             f"</div>"
         )
         # Congela o sinal confirmado. O bot pode continuar varrendo outros ativos,
         # mas a interface continuará mostrando este ativo até WIN/G1/RED/PULAR.
+        st["ultimo_sinal_ativo"] = ativo
+        st["ultimo_sinal_direcao"] = sinal
+        st["ultimo_sinal_candle_ts"] = math.floor(time.time() / (max(1, int(tf)) * 60)) * (max(1, int(tf)) * 60)
         st["sinal_confirmado"] = {
             "ativo": ativo,
             "sinal": sinal,
@@ -3013,42 +3094,86 @@ def bot_loop():
                     if st.get("analise_ativo_atual") is not None:
                         st["analise_atual"] = st["analise_ativo_atual"]
 
-                    # Enquanto há alerta confirmado/pendente, a varredura continua,
-                    # porém só pode substituir o alerta se a oportunidade nova for
-                    # realmente melhor: probabilidade maior; em empate, confluência maior;
-                    # em novo empate, mais estratégias concordando. Nunca por troca aleatória de ativo.
-                    if candidatos_globais and not st.get("aguardando_confirmacao"):
-                        # Ordena todas as oportunidades pela mesma regra usada pelo Vision Pro.
+                    # O motor NUNCA para a varredura porque existe uma entrada em execução.
+                    # Quando um sinal já foi confirmado, o candidato seguinte é apenas
+                    # armazenado em paralelo; ele não substitui a entrada atual. Assim,
+                    # quando WIN/G1/RED/PULAR encerrar a operação, a próxima oportunidade
+                    # já estará preparada e será revalidada/programada imediatamente.
+                    melhor_candidato = None
+                    if candidatos_globais:
                         candidatos_ordenados = sorted(
                             candidatos_globais,
                             key=lambda x: (x["confirmacoes"], x["probabilidade"], x["confluencia"], x["concordantes"]),
                             reverse=True
                         )
 
-                        melhor_candidato = candidatos_ordenados[0]
-
-                        # Proteção contra repetição do mesmo ativo dentro da mesma vela.
-                        # Se existir outra oportunidade forte, ela pode assumir a próxima
-                        # entrada. Se não existir, o ativo anterior continua elegível no
-                        # próximo candle — nunca fabricamos um sinal só para alternar ativos.
-                        tf_seg = max(1, int(tf)) * 60
-                        candle_atual_ts = math.floor(time.time() / tf_seg) * tf_seg
-                        ultimo_ativo = st.get("ultimo_sinal_ativo")
-                        ultimo_candle = float(st.get("ultimo_sinal_candle_ts") or 0.0)
-                        if ultimo_ativo and ultimo_candle == candle_atual_ts and melhor_candidato.get("ativo") == ultimo_ativo:
-                            alternativas = [
+                        # Durante uma entrada confirmada, priorizamos outro ativo.
+                        # Se não houver alternativa, mantemos o melhor candidato como
+                        # fallback para o próximo candle, sem forçar uma troca artificial.
+                        sinal_confirmado_atual = st.get("sinal_confirmado") if st.get("aguardando_confirmacao") else None
+                        candidatos_pipeline = candidatos_ordenados
+                        if sinal_confirmado_atual:
+                            outros_ativos = [
                                 c for c in candidatos_ordenados
-                                if c.get("ativo") != ultimo_ativo and int(c.get("probabilidade", 0)) >= 78
+                                if c.get("ativo") != sinal_confirmado_atual.get("ativo")
                             ]
-                            if alternativas:
-                                melhor_candidato = alternativas[0]
-                            else:
-                                # Nenhuma alternativa forte nesta vela: aguarda o próximo
-                                # candle em vez de gerar novamente o mesmo sinal.
-                                melhor_candidato = None
-                    else:
-                        melhor_candidato = None
+                            if outros_ativos:
+                                candidatos_pipeline = outros_ativos
 
+                        melhor_candidato = candidatos_pipeline[0] if candidatos_pipeline else None
+
+                        # Reentrada no mesmo ativo/direção exige novo impulso microestrutural.
+                        # Isso continua valendo tanto para a próxima entrada quanto para
+                        # a fila preparada durante a operação atual.
+                        ultimo_direcao = st.get("ultimo_sinal_direcao")
+                        if melhor_candidato and (ultimo_ativo := st.get("ultimo_sinal_ativo")):
+                            repetido_direcao = melhor_candidato.get("ativo") == ultimo_ativo and melhor_candidato.get("sinal") == ultimo_direcao
+                            if repetido_direcao:
+                                ana_rep = melhor_candidato.get("analise") or {}
+                                micro_rep = float(ana_rep.get("microtendencia_score", 0) or 0)
+                                impulso_rep = bool(ana_rep.get("microtendencia_impulso"))
+                                if micro_rep < 70 or not impulso_rep:
+                                    alternativas_rep = [
+                                        c for c in candidatos_pipeline
+                                        if not (c.get("ativo") == ultimo_ativo and c.get("sinal") == ultimo_direcao)
+                                    ]
+                                    melhor_candidato = alternativas_rep[0] if alternativas_rep else None
+
+                        # Proteção contra repetição do mesmo ativo na mesma vela.
+                        if melhor_candidato:
+                            tf_seg = max(1, int(tf)) * 60
+                            candle_atual_ts = math.floor(time.time() / tf_seg) * tf_seg
+                            ultimo_ativo = st.get("ultimo_sinal_ativo")
+                            ultimo_candle = float(st.get("ultimo_sinal_candle_ts") or 0.0)
+                            if ultimo_ativo and ultimo_candle == candle_atual_ts and melhor_candidato.get("ativo") == ultimo_ativo:
+                                alternativas = [
+                                    c for c in candidatos_pipeline
+                                    if c.get("ativo") != ultimo_ativo and int(c.get("probabilidade", 0)) >= 78
+                                ]
+                                melhor_candidato = alternativas[0] if alternativas else None
+
+                        # Se existe uma entrada confirmada, NÃO agendamos outra entrada
+                        # sobre ela. Guardamos apenas o melhor próximo candidato.
+                        if st.get("sinal_confirmado") and st.get("aguardando_confirmacao"):
+                            if melhor_candidato and melhor_candidato.get("confirmacoes", 0) >= 2 and int(melhor_candidato.get("probabilidade", 0)) >= 78:
+                                st["proximo_sinal_candidato"] = {
+                                    "ativo": melhor_candidato.get("ativo"),
+                                    "sinal": melhor_candidato.get("sinal"),
+                                    "probabilidade": int(melhor_candidato.get("probabilidade", 0)),
+                                    "confluencia": float(melhor_candidato.get("confluencia", 0)),
+                                    "confirmacoes": int(melhor_candidato.get("confirmacoes", 0)),
+                                    "concordantes": int(melhor_candidato.get("concordantes", 0)),
+                                    "estrategia": melhor_candidato.get("estrategia"),
+                                    "estrategia_fmt": melhor_candidato.get("estrategia_fmt"),
+                                    "analise": melhor_candidato.get("analise"),
+                                    "data": None,
+                                    "preparado_em": time.time()
+                                }
+                                st["proximo_sinal_atualizado"] = time.time()
+                            melhor_candidato = None
+
+                    # Só pode existir um alerta/entrada ativo por vez. O pipeline acima
+                    # continua analisando em segundo plano mesmo durante a entrada atual.
                     if melhor_candidato and melhor_candidato.get("confirmacoes",0) >= 2 and melhor_candidato["probabilidade"] >= 78 and not st.get("aguardando_confirmacao"):
                         agora = agora_brasilia()
                         total_seg = tf * 60
@@ -3116,6 +3241,9 @@ def bot_loop():
                             timer_confirmacao=threading.Timer(atraso,confirmar_alerta_agendado,args=(user_email,novo_alert_id)); timer_confirmacao.daemon=True; st["timer_confirmacao"]=timer_confirmacao; timer_confirmacao.start()
                             enviar_telegram_em_background(msg_pre_alerta,user_email,alert_id=novo_alert_id,deletar_msg_id=msg_antigo_id,st=st)
                             st["sinais_enviados"][ativo]=str_entrada
+                            # O candidato preparado foi promovido para alerta ativo.
+                            st["proximo_sinal_candidato"] = None
+                            st["proximo_sinal_atualizado"] = time.time()
                             st["notificacao"]={"id":str(time.time_ns()),"titulo":f"⚠️ NOVO ALERTA: {ativo} — {sinal_encontrado}","corpo":f"{ativo} | {sinal_encontrado} | Entrada {str_entrada} | {maior_prob}% | Confluência {melhor_analise.get('confluencia',0):.0f}/100"}
                             cor="#10b981" if sinal_encontrado=="CALL" else "#ef4444"
                             st["ultimo_sinal"]=f"<div style='text-align:center;line-height:1.6;color:#f59e0b'>⚠️ <b>PRÉ-ALERTA</b><br><b style='font-size:18px;color:{cor}'>{ativo} • {sinal_encontrado}</b><br><span>{maior_prob}% • M{tf} • Entrada {str_entrada}</span><br><span style='color:#00d9ff'>{nome_est_formatado}</span></div>"
