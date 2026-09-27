@@ -104,7 +104,11 @@ def get_user_state(email):
             # o motor continua procurando a próxima oportunidade sem substituir a
             # entrada atual. O melhor candidato fica preparado para a próxima entrada.
             "proximo_sinal_candidato": None,
-            "proximo_sinal_atualizado": 0.0
+            "proximo_sinal_atualizado": 0.0,
+            # Histórico curto de estratégias efetivamente confirmadas.
+            # Serve para diversificar a seleção sem forçar uma estratégia fraca.
+            "historico_estrategias_sinais": [],
+            "contagem_estrategias_sessao": {},
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -1986,6 +1990,92 @@ def analisar_estrategia_detalhada(data, estrategia):
     indicadores["nivel_confluencia"]="FORTE" if qtd>=4 else "CONFIRMADO" if qtd>=3 else "PRÉ-ALERTA"
     return sinal,prob,indicadores
 
+def _pontuacao_diversidade_estrategia(candidato, st):
+    """Aplica diversificação suave entre estratégias.
+
+    Não inventa sinais e não elimina uma estratégia válida por si só.
+    Apenas evita que uma única estratégia, especialmente MHI1, monopolize
+    a seleção quando existe outra oportunidade tecnicamente comparável.
+    """
+    est = candidato.get("estrategia")
+    hist = list(st.get("historico_estrategias_sinais") or [])
+    repeticoes = 0
+    for x in reversed(hist):
+        if x == est:
+            repeticoes += 1
+        else:
+            break
+    # Pequeno bônus para estratégia ainda não utilizada e penalidade progressiva
+    # para uma estratégia que vem dominando as últimas entradas.
+    bonus = 4 if est not in hist[-4:] else 0
+    penalidade = min(8, repeticoes * 4)
+    return bonus - penalidade
+
+def _selecionar_candidato_diversificado(candidatos, st):
+    """Escolhe a melhor oportunidade sem deixar uma estratégia monopolizar o motor.
+
+    Regra: se a melhor oportunidade absoluta for de uma estratégia repetida e
+    houver outra estratégia com probabilidade próxima (até 6 pontos), mesma
+    quantidade de confirmações ou maior, e confluência comparável, priorizamos
+    a alternativa. Caso contrário, mantemos a oportunidade mais forte.
+    """
+    if not candidatos:
+        return None
+
+    # Primeiro elimina duplicatas quase idênticas por ativo/direção/estratégia.
+    unicos = {}
+    for c in candidatos:
+        chave = (c.get("ativo"), c.get("sinal"), c.get("estrategia"))
+        atual = unicos.get(chave)
+        if atual is None or (int(c.get("probabilidade",0)), float(c.get("confluencia",0))) > (int(atual.get("probabilidade",0)), float(atual.get("confluencia",0))):
+            unicos[chave] = c
+    pool = list(unicos.values())
+
+    def base_key(c):
+        return (
+            int(c.get("confirmacoes",0)),
+            int(c.get("probabilidade",0)),
+            float(c.get("confluencia",0)),
+            int(c.get("concordantes",0)),
+        )
+
+    melhor_absoluto = max(pool, key=base_key)
+    est_melhor = melhor_absoluto.get("estrategia")
+    hist = list(st.get("historico_estrategias_sinais") or [])
+    repeticoes = 0
+    for x in reversed(hist):
+        if x == est_melhor:
+            repeticoes += 1
+        else:
+            break
+
+    # Após 2 entradas consecutivas da mesma estratégia, procurar uma alternativa
+    # real. A alternativa precisa continuar sendo tecnicamente próxima da melhor.
+    if repeticoes >= 2:
+        alternativas = [
+            c for c in pool
+            if c.get("estrategia") != est_melhor
+            and int(c.get("confirmacoes",0)) >= max(2, int(melhor_absoluto.get("confirmacoes",0)) - 1)
+            and int(c.get("probabilidade",0)) >= int(melhor_absoluto.get("probabilidade",0)) - 6
+            and float(c.get("confluencia",0)) >= float(melhor_absoluto.get("confluencia",0)) - 8
+        ]
+        if alternativas:
+            return max(alternativas, key=lambda c: (
+                int(c.get("confirmacoes",0)),
+                int(c.get("probabilidade",0)) + _pontuacao_diversidade_estrategia(c, st),
+                float(c.get("confluencia",0)),
+                int(c.get("concordantes",0)),
+            ))
+
+    # Fora do cooldown suave, a pontuação de diversidade só desempata
+    # oportunidades tecnicamente próximas.
+    return max(pool, key=lambda c: (
+        int(c.get("confirmacoes",0)),
+        int(c.get("probabilidade",0)) + _pontuacao_diversidade_estrategia(c, st),
+        float(c.get("confluencia",0)),
+        int(c.get("concordantes",0)),
+    ))
+
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
 @app.route('/sw.js')
 def service_worker():
@@ -2204,6 +2294,8 @@ def status():
         "sinal_confirmado": st.get("sinal_confirmado"),
         "proximo_sinal": st.get("proximo_sinal_candidato"),
         "proximo_sinal_atualizado": st.get("proximo_sinal_atualizado", 0.0),
+        "estrategias_sessao": st.get("contagem_estrategias_sessao", {}),
+        "historico_estrategias_sinais": st.get("historico_estrategias_sinais", []),
         "sinais_sessao_total": st.get("sinais_sessao_total", 0),
         "g1_sessao": sum(1 for r in st.get("sessao_resultados", []) if r == "g1"),
         "mercado": st["tipo_mercado"],
@@ -2405,7 +2497,9 @@ def command(cmd):
         st["startup_lock_seconds"] = 0
         st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
         st["inicio_varredura"] = time.time()
-        st["sinais_enviados"].clear() 
+        st["sinais_enviados"].clear()
+        st["historico_estrategias_sinais"] = []
+        st["contagem_estrategias_sessao"] = {}
         
         st["ativo_atual"] = "INICIANDO VARREDURA..."
         st["ultimo_sinal"] = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE DINÂMICA</b><br><span style='color:#00f2fe;'>[VARRENDO TODOS OS ATIVOS...]</span></div><div class='tech-scanner'></div>"
@@ -2447,6 +2541,8 @@ def command(cmd):
         st["alerta_ativo"] = None
         st["proximo_sinal_candidato"] = None
         st["proximo_sinal_atualizado"] = 0.0
+        st["historico_estrategias_sinais"] = []
+        st["contagem_estrategias_sessao"] = {}
         # Envia o fechamento ANTES de limpar os resultados da sessão.
         enviar_telegram(mensagem_encerramento_sessao(st), user_solicitante=user)
 
@@ -2781,6 +2877,15 @@ def confirmar_alerta_agendado(user_email, alert_id):
             "analise": analise_info,
             "confirmado_em": agora_brasilia().isoformat(),
         }
+        # Registra a estratégia efetivamente CONFIRMADA para a diversificação
+        # das próximas entradas. Pré-alertas não entram nessa contagem.
+        est_confirmada = alerta.get("estrategia") or "DESCONHECIDA"
+        hist_est = st.setdefault("historico_estrategias_sinais", [])
+        hist_est.append(est_confirmada)
+        st["historico_estrategias_sinais"] = hist_est[-8:]
+        cont_est = st.setdefault("contagem_estrategias_sessao", {})
+        cont_est[est_confirmada] = int(cont_est.get(est_confirmada, 0)) + 1
+
         st["aguardando_confirmacao"] = True
         # O pré-alerta é apagado; o estado confirmado acima passa a ser a referência da UI.
         st["alerta_ativo"] = None
@@ -3068,7 +3173,34 @@ def bot_loop():
                                     "motivos": ana.get("confluencias", []),
                                     "estrategias_concordantes": [NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"]) for x in candidatos if x["sinal"] == melhor_local["sinal"]]
                                 })
-                                candidatos_globais.append({"ativo":ativo,"sinal":melhor_local["sinal"],"probabilidade":int(melhor_local["prob_final"]),"confluencia":float(ana.get("confluencia",0)),"confirmacoes":int(ana.get("confirmacoes_fortes",0)),"concordantes":int(melhor_local["concordantes"]),"estrategia":melhor_local["estrategia"],"estrategia_fmt":ana["estrategia_fmt"],"analise":ana,"data":data})
+                                # O painel usa a melhor leitura do ativo, mas o pipeline
+                                # guarda TODAS as estratégias válidas para que MHI1 não
+                                # monopolize a seleção quando outra estratégia também
+                                # encontrou uma oportunidade real.
+                                for cand_global in candidatos:
+                                    ana_global = dict(cand_global.get("analise") or {})
+                                    ana_global.update({
+                                        "ativo": ativo,
+                                        "direcao": cand_global.get("sinal"),
+                                        "probabilidade": int(cand_global.get("prob_final", cand_global.get("prob", 0))),
+                                        "estrategia": cand_global.get("estrategia"),
+                                        "estrategia_fmt": NOME_ESTRATEGIAS_DISPLAY.get(cand_global.get("estrategia"), cand_global.get("estrategia")),
+                                        "grafico": [float(x) for x in np.asarray(data.get("close", []), dtype=float)[-60:] if np.isfinite(x)],
+                                        "motivos": ana_global.get("confluencias", []),
+                                        "estrategias_concordantes": [NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"]) for x in candidatos if x["sinal"] == cand_global["sinal"]]
+                                    })
+                                    candidatos_globais.append({
+                                        "ativo": ativo,
+                                        "sinal": cand_global["sinal"],
+                                        "probabilidade": int(cand_global.get("prob_final", cand_global.get("prob", 0))),
+                                        "confluencia": float(ana_global.get("confluencia", 0)),
+                                        "confirmacoes": int(ana_global.get("confirmacoes_fortes", 0)),
+                                        "concordantes": int(cand_global.get("concordantes", 0)),
+                                        "estrategia": cand_global.get("estrategia"),
+                                        "estrategia_fmt": ana_global["estrategia_fmt"],
+                                        "analise": ana_global,
+                                        "data": data
+                                    })
                                 chave_diag=(int(melhor_local["prob_final"]),float(ana.get("confluencia",0)),int(melhor_local["concordantes"]))
                                 if chave_diag>melhor_diag_chave:
                                     melhor_diag_chave=chave_diag; diagnostico_melhor=ana
@@ -3101,9 +3233,17 @@ def bot_loop():
                     # já estará preparada e será revalidada/programada imediatamente.
                     melhor_candidato = None
                     if candidatos_globais:
+                        # A seleção final considera todas as estratégias válidas e
+                        # aplica uma diversificação suave para impedir sequência infinita
+                        # da mesma estratégia.
                         candidatos_ordenados = sorted(
                             candidatos_globais,
-                            key=lambda x: (x["confirmacoes"], x["probabilidade"], x["confluencia"], x["concordantes"]),
+                            key=lambda x: (
+                                int(x.get("confirmacoes", 0)),
+                                int(x.get("probabilidade", 0)) + _pontuacao_diversidade_estrategia(x, st),
+                                float(x.get("confluencia", 0)),
+                                int(x.get("concordantes", 0))
+                            ),
                             reverse=True
                         )
 
@@ -3120,7 +3260,7 @@ def bot_loop():
                             if outros_ativos:
                                 candidatos_pipeline = outros_ativos
 
-                        melhor_candidato = candidatos_pipeline[0] if candidatos_pipeline else None
+                        melhor_candidato = _selecionar_candidato_diversificado(candidatos_pipeline, st) if candidatos_pipeline else None
 
                         # Reentrada no mesmo ativo/direção exige novo impulso microestrutural.
                         # Isso continua valendo tanto para a próxima entrada quanto para
@@ -3137,7 +3277,7 @@ def bot_loop():
                                         c for c in candidatos_pipeline
                                         if not (c.get("ativo") == ultimo_ativo and c.get("sinal") == ultimo_direcao)
                                     ]
-                                    melhor_candidato = alternativas_rep[0] if alternativas_rep else None
+                                    melhor_candidato = _selecionar_candidato_diversificado(alternativas_rep, st) if alternativas_rep else None
 
                         # Proteção contra repetição do mesmo ativo na mesma vela.
                         if melhor_candidato:
@@ -3150,7 +3290,7 @@ def bot_loop():
                                     c for c in candidatos_pipeline
                                     if c.get("ativo") != ultimo_ativo and int(c.get("probabilidade", 0)) >= 78
                                 ]
-                                melhor_candidato = alternativas[0] if alternativas else None
+                                melhor_candidato = _selecionar_candidato_diversificado(alternativas, st) if alternativas else None
 
                         # Se existe uma entrada confirmada, NÃO agendamos outra entrada
                         # sobre ela. Guardamos apenas o melhor próximo candidato.
