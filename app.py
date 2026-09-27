@@ -85,26 +85,18 @@ def get_user_state(email):
             "analise_atual": None,
             "sessao_resultados": [],
             "sinais_sessao_total": 0,
-            "warmup_concluido": False,
+            "warmup_concluido": True,
             "warmup_ativos_analisados": set(),
-            "warmup_ativos_indisponiveis": set(),
             "warmup_analysis": {},
             "warmup_inicio": 0.0,
             "startup_lock_until": 0.0,
             "startup_lock_seconds": 0,
-            "warmup_status": "AGUARDANDO START",
+            "warmup_status": "ANÁLISE EM TEMPO REAL",
             "selected_assets": [],
             # Controle de diversificação: evita repetir o mesmo ativo na mesma vela
             # quando existem outras oportunidades válidas. Não força um ativo sem sinal.
             "ultimo_sinal_ativo": None,
-            "ultimo_sinal_candle_ts": 0.0,
-            # Estado da varredura assíncrona: nenhum ativo pode bloquear os demais.
-            "analysis_generation": 0,
-            "analysis_inflight": set(),
-            "analysis_results": {},
-            "analysis_submitted": {},
-            "analysis_last_completed": 0.0,
-            "analysis_completed_count": 0
+            "ultimo_sinal_candle_ts": 0.0
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -620,17 +612,7 @@ function abrirView(name,btn){
 }
 function toggleBox(id){const e=document.getElementById(id); if(e)e.classList.toggle('open')}
 function toast(msg){const e=document.getElementById('toast');if(!e)return;e.innerText=msg;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2200)}
-async function sendCommand(cmd){
-    try{
-        const r=await fetch('/command/'+encodeURIComponent(cmd),{cache:'no-store',headers:{'Accept':'application/json'}});
-        const ct=r.headers.get('content-type')||'';
-        const d=ct.includes('application/json')?await r.json():{error:'Servidor retornou uma resposta inválida ('+r.status+').'};
-        if(!r.ok){toast(d.error||('Falha no comando ('+r.status+')'));return;}
-        if(d.redirect)location.href=d.redirect;
-        else if(d.error)toast(d.error);
-        else toast('Comando atualizado');
-    }catch(e){toast('Falha de comunicação com o servidor. Tente novamente.');}
-}
+function sendCommand(cmd){fetch('/command/'+cmd,{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d.redirect)location.href=d.redirect;else if(d.error)toast(d.error);else toast('Comando atualizado');}).catch(()=>toast('Falha de comunicação com o servidor'))}
 
 let assetsCatalog=[];
 function assetsForMarket(mkt){
@@ -683,6 +665,8 @@ function renderSignal(d){
         }else if(alerta){
             const corAlerta=dir==='CALL'?'#34d399':dir==='PUT'?'#fb7185':'#fbbf24';
             panel.innerHTML=`<div style=\"text-align:center;line-height:1.6\"><b style=\"color:#fbbf24\">⚠️ PRÉ-ALERTA</b><br><b style=\"font-size:15px;color:${corAlerta}\">${ativo} • ${dir||'--'}</b><br><span style=\"color:#cbd5e1\">Probabilidade: ${prob||'--'}% • M${tf}</span><br><span style=\"color:#94a3b8\">Entrada prevista: ${entrada} • Expiração: ${expiracao}</span></div>`;
+        }else if(d.rodando){
+            panel.innerHTML=`<div style=\"text-align:center;color:#00d9ff;line-height:1.6\">🔎 <b>ANÁLISE EM TEMPO REAL</b><br>Conferindo ativos, tendência, MAs, volatilidade, volume e estratégias.</div>`;
         }else{
             panel.innerHTML=d.html||'Aguardando Comando...';
         }
@@ -1086,47 +1070,35 @@ LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
 
 NOME_ESTRATEGIAS_DISPLAY = {
     "LOGICA_DO_PRECO": "Lógica do Preço",
-    "RSI_MACD_MA": "RSI + MACD + MA 9/21/50/100",
+    "RSI_MACD_MA": "RSI + Cruzamento MACD + MA",
     "MHI1": "MHI 1 (+ Filtro Tendência)",
     "REVERSAO": "Reversão de Bandas",
     "TODAS": "Análise Dinâmica Múltipla"
 }
 
 # ================= ATIVOS DIVIDIDOS ABERTO E OTC =================
+# Catálogo amplo de Forex. A disponibilidade efetiva pode variar no terminal da Quotex.
+# Os ativos OTC abaixo usam o ticker público correspondente apenas como proxy de dados;
+# não são apresentados como a cotação OTC proprietária da Quotex.
+FOREX_PARES = [
+    "EURUSD","GBPUSD","USDJPY","USDCHF","USDCAD","AUDUSD","NZDUSD",
+    "EURGBP","EURJPY","EURCHF","EURAUD","EURCAD","EURNZD",
+    "GBPJPY","GBPCHF","GBPAUD","GBPCAD","GBPNZD",
+    "AUDJPY","AUDCAD","AUDCHF","AUDNZD",
+    "CADJPY","CADCHF","CHFJPY","NZDJPY","NZDCAD","NZDCHF",
+    "USDINR","USDTRY","USDZAR","USDMXN","USDSGD","USDHKD",
+    "USDSEK","USDNOK","USDDKK","USDPLN","USDHUF","USDCNH",
+    "EURTRY","EURZAR","EURPLN","EURHUF","GBPZAR","GBPNOK",
+    "AUDSGD","CADSGD","SGDJPY","TRYJPY","ZARJPY","HUFJPY"
+]
+
 ATIVOS_BASE = {
-    "FOREX_ABERTO": [
-        # Principais
-        "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
-        # Cruzados
-        "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURCAD", "EURNZD",
-        "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
-        "AUDJPY", "AUDCAD", "AUDCHF", "AUDNZD",
-        "CADJPY", "CADCHF", "CHFJPY", "NZDJPY", "NZDCAD", "NZDCHF",
-        # Exóticos / moedas adicionais que podem aparecer na Quotex
-        "USDINR", "USDTRY", "USDZAR", "USDMXN", "USDSGD", "USDHKD",
-        "USDSEK", "USDNOK", "USDDKK", "USDPLN", "USDHUF", "USDCNH",
-        "EURTRY", "EURZAR", "EURPLN", "EURHUF", "GBPZAR", "GBPNOK",
-        "AUDSGD", "CADSGD", "SGDJPY", "TRYJPY", "ZARJPY", "HUFJPY"
-    ],
+    "FOREX_ABERTO": FOREX_PARES,
     "CRIPTO_ABERTO": [
         "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "AVAXUSD",
         "LINKUSD", "DOGEUSD", "DOTUSD", "LTCUSD", "TRXUSD"
     ],
-    "FOREX_OTC": [
-        # O catálogo OTC acompanha o catálogo Forex. A disponibilidade real do OTC
-        # deve sempre ser validada pela plataforma; o motor nunca inventa candles.
-        *[f"{par}-OTC" for par in [
-            "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
-            "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURCAD", "EURNZD",
-            "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
-            "AUDJPY", "AUDCAD", "AUDCHF", "AUDNZD",
-            "CADJPY", "CADCHF", "CHFJPY", "NZDJPY", "NZDCAD", "NZDCHF",
-            "USDINR", "USDTRY", "USDZAR", "USDMXN", "USDSGD", "USDHKD",
-            "USDSEK", "USDNOK", "USDDKK", "USDPLN", "USDHUF", "USDCNH",
-            "EURTRY", "EURZAR", "EURPLN", "EURHUF", "GBPZAR", "GBPNOK",
-            "AUDSGD", "CADSGD", "SGDJPY", "TRYJPY", "ZARJPY", "HUFJPY"
-        ]],
-    ],
+    "FOREX_OTC": [f"{par}-OTC" for par in FOREX_PARES],
     "CRIPTO_OTC": [
         "BTCUSD-OTC", "ETHUSD-OTC", "SOLUSD-OTC", "BNBUSD-OTC", "XRPUSD-OTC", "AVAXUSD-OTC",
         "LINKUSD-OTC", "DOGEUSD-OTC", "DOTUSD-OTC", "LTCUSD-OTC", "TRXUSD-OTC"
@@ -1157,6 +1129,61 @@ def ativos_por_mercado(mkt):
             if ativo not in out:
                 out.append(ativo)
     return out
+
+# ================= CACHE ASSÍNCRONO DE DADOS DE MERCADO =================
+# A coleta de preços nunca é executada dentro do loop principal do robô.
+# Assim, um ativo lento ou indisponível não consegue travar a análise dos demais.
+DATA_FETCH_EXECUTOR = ThreadPoolExecutor(max_workers=16, thread_name_prefix="vision-data")
+DATA_CACHE_LOCK = threading.RLock()
+DATA_CACHE = {}
+DATA_FETCH_INFLIGHT = {}
+DATA_CACHE_TTL = 6.0
+DATA_FAILURE_TTL = 3.0
+
+def _dados_cache_key(ticker, tf):
+    return f"{ticker}_{int(tf)}"
+
+def _finalizar_fetch_dados(cache_key, future):
+    try:
+        data = future.result()
+        with DATA_CACHE_LOCK:
+            if data is not None:
+                DATA_CACHE[cache_key] = {"data": data, "time": time.time(), "ok": True}
+            else:
+                DATA_CACHE[cache_key] = {"data": None, "time": time.time(), "ok": False}
+    except Exception as exc:
+        print(f"⚠️ Coleta isolada falhou ({cache_key}): {exc}")
+        with DATA_CACHE_LOCK:
+            DATA_CACHE[cache_key] = {"data": None, "time": time.time(), "ok": False}
+    finally:
+        with DATA_CACHE_LOCK:
+            DATA_FETCH_INFLIGHT.pop(cache_key, None)
+
+def solicitar_dados_async(ticker, tf):
+    cache_key = _dados_cache_key(ticker, tf)
+    agora = time.time()
+    with DATA_CACHE_LOCK:
+        item = DATA_CACHE.get(cache_key)
+        if item and item.get("data") is not None and agora - item.get("time", 0) <= DATA_CACHE_TTL:
+            return item.get("data")
+        if item and item.get("data") is None and agora - item.get("time", 0) <= DATA_FAILURE_TTL:
+            return None
+        if cache_key in DATA_FETCH_INFLIGHT:
+            return item.get("data") if item else None
+        try:
+            future = DATA_FETCH_EXECUTOR.submit(get_data_v2, ticker, tf, 30)
+            DATA_FETCH_INFLIGHT[cache_key] = future
+            future.add_done_callback(lambda f, ck=cache_key: _finalizar_fetch_dados(ck, f))
+        except Exception as exc:
+            DATA_CACHE[cache_key] = {"data": None, "time": agora, "ok": False}
+            print(f"⚠️ Não foi possível agendar coleta {cache_key}: {exc}")
+        return item.get("data") if item else None
+
+def obter_dados_cache(ticker, tf):
+    with DATA_CACHE_LOCK:
+        item = DATA_CACHE.get(_dados_cache_key(ticker, tf))
+        return item.get("data") if item else None
+
 
 # ================= TRAVA DE NOTÍCIAS / CALENDÁRIO INVESTING.COM =================
 # O Investing.com classifica o impacto dos eventos com 1, 2 ou 3 estrelas/touros.
@@ -1331,106 +1358,101 @@ def _extrair_eventos_investing(html_resposta):
     return eventos
 
 
-def _atualizar_calendario_investing_bloqueante(force=False):
+def atualizar_calendario_investing(force=False):
     """Consulta o Investing.com e mantém apenas eventos reais de 2/3 touros."""
     agora_ts = time.time()
-    # Nunca mantenha o lock durante requests HTTP. O bot principal só precisa
-    # proteger leituras/escritas curtas do cache; a rede fica totalmente fora do lock.
     with INVESTING_CALENDAR_LOCK:
-        cache_updated = float(INVESTING_CALENDAR_CACHE.get("updated", 0) or 0)
-        cache_ok = bool(INVESTING_CALENDAR_CACHE.get("ok", False))
-    if not force and (agora_ts - cache_updated) < NEWS_CACHE_TTL:
-        return cache_ok
+        if not force and (agora_ts - INVESTING_CALENDAR_CACHE.get("updated", 0)) < NEWS_CACHE_TTL:
+            return INVESTING_CALENDAR_CACHE.get("ok", False)
 
-    hoje = agora_brasilia().date()
-    amanha = hoje + timedelta(days=1)
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/140.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-        "X-Requested-With": "XMLHttpRequest",
-        "Origin": "https://www.investing.com",
-        "Referer": "https://www.investing.com/economic-calendar/",
-    }
+        hoje = agora_brasilia().date()
+        amanha = hoje + timedelta(days=1)
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/140.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "X-Requested-With": "XMLHttpRequest",
+            "Origin": "https://www.investing.com",
+            "Referer": "https://www.investing.com/economic-calendar/",
+        }
 
-    eventos = []
-    erro = ""
-    sucesso_fonte = False
+        eventos = []
+        erro = ""
+        sucesso_fonte = False
 
-    # 1) Endpoint oficial usado pelo calendário.
-    urls_api = [
-        "https://br.investing.com/economic-calendar/Service/getCalendarFilteredData",
-        "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData",
-    ]
+        # 1) Endpoint oficial usado pelo calendário.
+        urls_api = [
+            "https://br.investing.com/economic-calendar/Service/getCalendarFilteredData",
+            "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData",
+        ]
 
-    for url in urls_api:
-        try:
-            with requests.Session() as sess:
-                base = url.split("/Service/")[0] + "/"
-                sess.headers.update({"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]})
-                try:
-                    sess.get(base, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=8)
-                except Exception:
-                    pass
-
-                payload = {
-                    "country[]": INVESTING_COUNTRIES.split(","),
-                    "dateFrom": hoje.strftime("%Y-%m-%d"),
-                    "dateTo": amanha.strftime("%Y-%m-%d"),
-                    "timeZone": INVESTING_TIMEZONE,
-                    "timeFilter": "timeRemain",
-                    "currentTab": "custom",
-                    "submitFilters": "1",
-                    "limit_from": "0",
-                }
-                resp = sess.post(url, data=payload, headers=headers, timeout=12)
-                if resp.status_code == 200 and resp.text:
-                    sucesso_fonte = True
-                    eventos = _extrair_eventos_investing(resp.text)
-                    # Resposta válida sem eventos de 2/3 touros é normal.
-                    break
-                erro = f"HTTP {resp.status_code} em {url}"
-        except Exception as exc:
-            erro = str(exc)
-
-    # 2) Página oficial do calendário como fallback.
-    if not sucesso_fonte:
-        for url in ("https://br.investing.com/economic-calendar/", "https://www.investing.com/economic-calendar/"):
+        for url in urls_api:
             try:
-                resp = requests.get(url, headers={**headers, "X-Requested-With": ""}, timeout=12)
-                if resp.status_code == 200 and resp.text:
-                    sucesso_fonte = True
-                    eventos = _extrair_eventos_investing(resp.text)
-                    break
-                erro = f"HTTP {resp.status_code} em {url}"
+                with requests.Session() as sess:
+                    base = url.split("/Service/")[0] + "/"
+                    sess.headers.update({"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]})
+                    try:
+                        sess.get(base, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=8)
+                    except Exception:
+                        pass
+
+                    payload = {
+                        "country[]": INVESTING_COUNTRIES.split(","),
+                        "dateFrom": hoje.strftime("%Y-%m-%d"),
+                        "dateTo": amanha.strftime("%Y-%m-%d"),
+                        "timeZone": INVESTING_TIMEZONE,
+                        "timeFilter": "timeRemain",
+                        "currentTab": "custom",
+                        "submitFilters": "1",
+                        "limit_from": "0",
+                    }
+                    resp = sess.post(url, data=payload, headers=headers, timeout=12)
+                    if resp.status_code == 200 and resp.text:
+                        sucesso_fonte = True
+                        eventos = _extrair_eventos_investing(resp.text)
+                        # Resposta válida sem eventos de 2/3 touros é normal.
+                        break
+                    erro = f"HTTP {resp.status_code} em {url}"
             except Exception as exc:
                 erro = str(exc)
 
-    # 3) Widget oficial do Investing.com: alternativa quando o endpoint principal
-    # estiver protegido/indisponível no servidor do Render.
-    if not sucesso_fonte:
-        widget_url = (
-            "https://sslecal2.investing.com/?"
-            "columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous&"
-            "features=datepicker,timezone&"
-            f"countries={INVESTING_COUNTRIES}&"
-            "calType=week&"
-            f"timeZone={INVESTING_TIMEZONE}&"
-            "lang=12"
-        )
-        try:
-            resp = requests.get(widget_url, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=12)
-            if resp.status_code == 200 and resp.text:
-                sucesso_fonte = True
-                eventos = _extrair_eventos_investing(resp.text)
-        except Exception as exc:
-            erro = str(exc)
+        # 2) Página oficial do calendário como fallback.
+        if not sucesso_fonte:
+            for url in ("https://br.investing.com/economic-calendar/", "https://www.investing.com/economic-calendar/"):
+                try:
+                    resp = requests.get(url, headers={**headers, "X-Requested-With": ""}, timeout=12)
+                    if resp.status_code == 200 and resp.text:
+                        sucesso_fonte = True
+                        eventos = _extrair_eventos_investing(resp.text)
+                        break
+                    erro = f"HTTP {resp.status_code} em {url}"
+                except Exception as exc:
+                    erro = str(exc)
 
-    with INVESTING_CALENDAR_LOCK:
+        # 3) Widget oficial do Investing.com: alternativa quando o endpoint principal
+        # estiver protegido/indisponível no servidor do Render.
+        if not sucesso_fonte:
+            widget_url = (
+                "https://sslecal2.investing.com/?"
+                "columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous&"
+                "features=datepicker,timezone&"
+                f"countries={INVESTING_COUNTRIES}&"
+                "calType=week&"
+                f"timeZone={INVESTING_TIMEZONE}&"
+                "lang=12"
+            )
+            try:
+                resp = requests.get(widget_url, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=12)
+                if resp.status_code == 200 and resp.text:
+                    sucesso_fonte = True
+                    eventos = _extrair_eventos_investing(resp.text)
+            except Exception as exc:
+                erro = str(exc)
+
         INVESTING_CALENDAR_CACHE["updated"] = agora_ts
 
         if sucesso_fonte:
@@ -1443,31 +1465,27 @@ def _atualizar_calendario_investing_bloqueante(force=False):
             INVESTING_CALENDAR_CACHE["ok"] = False
             INVESTING_CALENDAR_CACHE["error"] = erro or "Fonte indisponível"
 
-    return sucesso_fonte
+        return sucesso_fonte
 
 
-INVESTING_REFRESH_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="investing")
-INVESTING_REFRESH_FUTURE = None
-INVESTING_REFRESH_LOCK = threading.Lock()
+CALENDAR_FETCH_INFLIGHT = None
+CALENDAR_FETCH_LOCK = threading.Lock()
+CALENDAR_REFRESH_INTERVAL = 60.0
 
-def atualizar_calendario_investing(force=False):
-    """Versão não bloqueante: nunca espera a rede dentro do bot_loop."""
-    global INVESTING_REFRESH_FUTURE
-    agora_ts = time.time()
-    with INVESTING_CALENDAR_LOCK:
-        atualizado = float(INVESTING_CALENDAR_CACHE.get("updated", 0) or 0)
-        cache_ok = bool(INVESTING_CALENDAR_CACHE.get("ok", False))
-
-    if not force and (agora_ts - atualizado) < NEWS_CACHE_TTL:
-        return cache_ok
-
-    with INVESTING_REFRESH_LOCK:
-        if INVESTING_REFRESH_FUTURE is None or INVESTING_REFRESH_FUTURE.done():
-            INVESTING_REFRESH_FUTURE = INVESTING_REFRESH_EXECUTOR.submit(
-                _atualizar_calendario_investing_bloqueante, force
-            )
-    # FAIL-OPEN: enquanto a atualização estiver em andamento, não bloqueia o mercado.
-    return cache_ok
+def _agendar_calendario_investing_async():
+    global CALENDAR_FETCH_INFLIGHT
+    agora=time.time()
+    with CALENDAR_FETCH_LOCK:
+        atualizado=float(INVESTING_CALENDAR_CACHE.get("updated",0) or 0)
+        if CALENDAR_FETCH_INFLIGHT is not None and not CALENDAR_FETCH_INFLIGHT.done():
+            return
+        if agora-atualizado < CALENDAR_REFRESH_INTERVAL:
+            return
+        try:
+            fut=DATA_FETCH_EXECUTOR.submit(atualizar_calendario_investing, True)
+            CALENDAR_FETCH_INFLIGHT=fut
+        except Exception as exc:
+            print(f"⚠️ Não foi possível agendar calendário Investing: {exc}")
 
 
 def moedas_do_ativo(ativo):
@@ -1528,96 +1546,34 @@ def resumo_trava_noticias(evento):
     touros = "🐂" * max(1, min(3, impacto))
     return f"🔒 {touros} {evento.get('currency', '')} — {evento.get('event', 'Evento')} às {horario} | trava ±30 min"
 
-# ================= MOTOR DE ANÁLISE DE CONFLUÊNCIAS =================
+# ================= MOTOR DE ANÁLISE TÉCNICA EM TEMPO REAL =================
 def _normalizar_candles_fechados(ohlc, tf):
-    """Remove candles incompletos e valores inválidos antes da análise."""
+    """Remove candles incompletos e normaliza campos opcionais sem quebrar a coleta."""
     try:
-        n = len(ohlc.get("close", []))
-        if n < 2:
+        base_keys=("time","open","high","low","close")
+        n=len(ohlc.get("close",[]))
+        if n<2 or any(len(ohlc.get(k,[]))!=n for k in base_keys):
             return None
-        mask = np.isfinite(ohlc["open"]) & np.isfinite(ohlc["high"]) & np.isfinite(ohlc["low"]) & np.isfinite(ohlc["close"])
-        for k in ohlc:
-            ohlc[k] = np.asarray(ohlc[k])[mask]
-        if len(ohlc["close"]) < 2:
+        base={k:np.asarray(ohlc[k]) for k in base_keys}
+        mask=np.ones(n,dtype=bool)
+        for k in ("open","high","low","close"):
+            mask &= np.isfinite(base[k].astype(float))
+        for k in base:
+            base[k]=base[k][mask]
+        vol=np.asarray(ohlc.get("volume",[]),dtype=float)
+        if len(vol)==n:
+            base["volume"]=vol[mask]
+        else:
+            base["volume"]=np.full(len(base["close"]),np.nan,dtype=float)
+        if len(base["close"])<2:
             return None
-        # A análise usa apenas candles fechados. O último candle é descartado
-        # quando ainda estiver dentro da janela corrente do timeframe.
-        ultimo_ts = float(ohlc["time"][-1])
-        agora_ts = time.time()
-        if ultimo_ts + (int(tf) * 60) > agora_ts:
-            for k in ohlc:
-                ohlc[k] = ohlc[k][:-1]
-        return ohlc if len(ohlc["close"]) >= 30 else None
+        ultimo_ts=float(base["time"][-1]); agora_ts=time.time()
+        if ultimo_ts+(int(tf)*60)>agora_ts:
+            for k in base:
+                base[k]=base[k][:-1]
+        return base if len(base["close"])>=30 else None
     except Exception:
         return None
-
-# ================= GERENCIADOR DE DADOS NÃO BLOQUEANTE =================
-# O motor principal NUNCA faz HTTP de candles dentro da varredura.
-# As consultas são feitas em segundo plano e o resultado é colocado em cache
-# assim que chegar. Isso impede que um ativo lento trave todos os outros.
-DATA_FETCH_MAX_WORKERS = 16
-DATA_FETCH_EXECUTOR = ThreadPoolExecutor(
-    max_workers=DATA_FETCH_MAX_WORKERS,
-    thread_name_prefix="dados"
-)
-DATA_FETCH_LOCK = threading.Lock()
-DATA_FETCH_FUTURES = {}
-DATA_FETCH_ERRORS = {}
-DATA_FETCH_RETRY_AFTER = {}
-SHARED_OHLC_CACHE = {}
-SHARED_OHLC_LOCK = threading.Lock()
-DATA_FETCH_ERROR_COOLDOWN = 4.0
-
-def _finalizar_fetch_dados(futuro, chave, ticker, tf):
-    try:
-        data = futuro.result()
-        if data is not None and len(data.get("close", [])) >= 30:
-            with SHARED_OHLC_LOCK:
-                SHARED_OHLC_CACHE[chave] = {"data": data, "time": time.time()}
-            DATA_FETCH_ERRORS.pop(chave, None)
-            DATA_FETCH_RETRY_AFTER.pop(chave, None)
-        else:
-            DATA_FETCH_ERRORS[chave] = "sem histórico público suficiente"
-            DATA_FETCH_RETRY_AFTER[chave] = time.time() + DATA_FETCH_ERROR_COOLDOWN
-    except Exception as exc:
-        DATA_FETCH_ERRORS[chave] = str(exc)
-        DATA_FETCH_RETRY_AFTER[chave] = time.time() + DATA_FETCH_ERROR_COOLDOWN
-        print(f"⚠️ Coleta isolada de {ticker} falhou: {exc}")
-    finally:
-        with DATA_FETCH_LOCK:
-            DATA_FETCH_FUTURES.pop(chave, None)
-
-def solicitar_dados_background(ticker, tf):
-    """Agenda uma única coleta por ticker/timeframe e retorna somente cache pronto."""
-    chave = f"{ticker}_{tf}"
-    agora_ts = time.time()
-    with SHARED_OHLC_LOCK:
-        item = SHARED_OHLC_CACHE.get(chave)
-        if item and item.get("data") is not None and agora_ts - item.get("time", 0) < 15:
-            return item.get("data")
-
-    with DATA_FETCH_LOCK:
-        futuro = DATA_FETCH_FUTURES.get(chave)
-        if futuro is None:
-            retry_after = DATA_FETCH_RETRY_AFTER.get(chave, 0)
-            if agora_ts >= retry_after:
-                futuro = DATA_FETCH_EXECUTOR.submit(get_data_v2, ticker, tf, 30)
-                DATA_FETCH_FUTURES[chave] = futuro
-                futuro.add_done_callback(
-                    lambda f, _ch=chave, _ticker=ticker, _tf=tf: _finalizar_fetch_dados(
-                        f, _ch, _ticker, _tf
-                    )
-                )
-
-    return None
-
-def obter_cache_ohlc_background(ticker, tf):
-    chave = f"{ticker}_{tf}"
-    with SHARED_OHLC_LOCK:
-        item = SHARED_OHLC_CACHE.get(chave)
-        if item and item.get("data") is not None and time.time() - item.get("time", 0) < 15:
-            return item.get("data")
-    return None
 
 def get_data_v2(ticker, tf, velas_minimas=30):
     """Obtém candles reais. Nunca cria candles aleatórios quando uma fonte falha."""
@@ -1627,21 +1583,12 @@ def get_data_v2(ticker, tf, velas_minimas=30):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36',
             'Accept': 'application/json, text/plain, */*'
         }
-        # Yahoo possui mais de um endpoint de distribuição. Tentar query1/query2
-        # reduz falhas transitórias sem transformar a análise em uma operação bloqueante.
-        yahoo_urls = [
-            f"https://query1.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d",
-            f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d",
-        ]
-        for url in yahoo_urls:
-            try:
-                res = requests.get(url, headers=headers, timeout=4.0)
-                if res.status_code != 200:
-                    continue
-                payload = res.json()
-                result = (payload.get('chart') or {}).get('result')
-                if not result:
-                    continue
+        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d"
+        res = requests.get(url, headers=headers, timeout=5.0)
+        if res.status_code == 200:
+            payload = res.json()
+            result = (payload.get('chart') or {}).get('result')
+            if result:
                 result = result[0]
                 timestamps = result.get('timestamp') or []
                 quote = (result.get('indicators') or {}).get('quote', [{}])[0]
@@ -1650,13 +1597,12 @@ def get_data_v2(ticker, tf, velas_minimas=30):
                     "open": np.array(quote.get('open', []), dtype=float),
                     "high": np.array(quote.get('high', []), dtype=float),
                     "low": np.array(quote.get('low', []), dtype=float),
-                    "close": np.array(quote.get('close', []), dtype=float)
+                    "close": np.array(quote.get('close', []), dtype=float),
+                    "volume": np.array(quote.get('volume', []), dtype=float) if quote.get('volume') is not None else np.array([], dtype=float)
                 }
                 fechado = _normalizar_candles_fechados(ohlc, tf)
                 if fechado is not None and len(fechado["close"]) >= velas_minimas:
                     return fechado
-            except Exception:
-                continue
 
         if "-USD" in base_ticker or "USD" in ticker:
             crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
@@ -1671,7 +1617,8 @@ def get_data_v2(ticker, tf, velas_minimas=30):
                         "open": np.array([x.get('open', np.nan) for x in data_list], dtype=float),
                         "high": np.array([x.get('high', np.nan) for x in data_list], dtype=float),
                         "low": np.array([x.get('low', np.nan) for x in data_list], dtype=float),
-                        "close": np.array([x.get('close', np.nan) for x in data_list], dtype=float)
+                        "close": np.array([x.get('close', np.nan) for x in data_list], dtype=float),
+                        "volume": np.array([x.get('volumefrom', np.nan) for x in data_list], dtype=float)
                     }
                     fechado = _normalizar_candles_fechados(ohlc, tf)
                     if fechado is not None and len(fechado["close"]) >= velas_minimas:
@@ -1712,366 +1659,119 @@ def _macd_atual(c):
     sinal = calcular_ema(linha, 9)
     return float(linha[-1]), float(sinal[-1]), float(linha[-1] - sinal[-1])
 
-def _sma(c, periodo):
-    c = np.asarray(c, dtype=float)
-    if len(c) == 0:
-        return 0.0
-    n = min(int(periodo), len(c))
-    return float(np.mean(c[-n:]))
-
-
-def _adx_detalhado(h, l, c, periodo=14):
-    """ADX/+DI/-DI simplificado, sem dependência externa."""
-    if len(c) < periodo + 2:
-        return 0.0, 0.0, 0.0
-    h = np.asarray(h, dtype=float)
-    l = np.asarray(l, dtype=float)
-    c = np.asarray(c, dtype=float)
-    up = h[1:] - h[:-1]
-    down = l[:-1] - l[1:]
-    plus_dm = np.where((up > down) & (up > 0), up, 0.0)
-    minus_dm = np.where((down > up) & (down > 0), down, 0.0)
-    tr = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
-    tr_n = np.convolve(tr, np.ones(periodo) / periodo, mode='valid')
-    plus_n = np.convolve(plus_dm, np.ones(periodo) / periodo, mode='valid')
-    minus_n = np.convolve(minus_dm, np.ones(periodo) / periodo, mode='valid')
-    tr_n = np.maximum(tr_n, 1e-12)
-    plus_di = 100.0 * plus_n / tr_n
-    minus_di = 100.0 * minus_n / tr_n
-    dx = 100.0 * np.abs(plus_di - minus_di) / np.maximum(plus_di + minus_di, 1e-12)
-    adx = float(np.mean(dx[-periodo:])) if len(dx) else 0.0
-    return adx, float(plus_di[-1]), float(minus_di[-1])
-
-
-def _estocastico_detalhado(h, l, c, periodo=14):
-    if len(c) < periodo:
-        return 50.0, 50.0
-    hh = float(np.max(h[-periodo:]))
-    ll = float(np.min(l[-periodo:]))
-    k = 50.0 if hh <= ll else float((c[-1] - ll) / (hh - ll) * 100.0)
-    # D simples com os últimos valores de K.
-    ks = []
-    inicio = max(periodo - 1, len(c) - 5)
-    for i in range(inicio, len(c)):
-        janela_h = h[max(0, i-periodo+1):i+1]
-        janela_l = l[max(0, i-periodo+1):i+1]
-        den = float(np.max(janela_h) - np.min(janela_l))
-        ks.append(50.0 if den <= 0 else float((c[i] - np.min(janela_l)) / den * 100.0))
-    d = float(np.mean(ks[-3:])) if ks else k
-    return k, d
-
-
 def _indicadores_confluencia(data, direcao=None):
-    """Motor central de confluência.
-
-    A leitura não depende da estratégia que encontrou o primeiro padrão.
-    Todas as estratégias usam este mesmo painel técnico para confirmar:
-    tendência, EMA9/21/50/100, MA20/50/100, RSI, MACD, ADX/DI,
-    Estocástico, price action, Bollinger, suporte/resistência e momentum.
-    """
-    c = np.asarray(data["close"], dtype=float)
-    o = np.asarray(data["open"], dtype=float)
-    h = np.asarray(data["high"], dtype=float)
-    l = np.asarray(data["low"], dtype=float)
-    if len(c) < 30:
-        return {
-            "confluencia": 0.0, "confluencias": [], "confirmacoes": 0,
-            "conflitos": 99, "tendencia": "SEM DADOS", "regime": "SEM DADOS",
-            "forca_direcional": 0.0
-        }
-
-    ema9 = calcular_ema(c, 9)
-    ema21 = calcular_ema(c, 21)
-    ema50 = calcular_ema(c, 50)
-    ema100 = calcular_ema(c, 100)
-    ma20 = _sma(c, 20)
-    ma50 = _sma(c, 50)
-    ma100 = _sma(c, 100)
-    rsi = _rsi_atual(c, 14)
-    macd, macd_signal, macd_hist = _macd_atual(c)
-    adx, plus_di, minus_di = _adx_detalhado(h, l, c, 14)
-    stoch_k, stoch_d = _estocastico_detalhado(h, l, c, 14)
-
-    std20 = float(np.std(c[-20:]))
-    bb_sup = ma20 + 2.0 * std20
-    bb_inf = ma20 - 2.0 * std20
-    preco = float(c[-1])
-    corpo = abs(float(c[-1] - o[-1]))
-    amplitude = max(float(h[-1] - l[-1]), 1e-12)
-    pavio_sup = float(h[-1] - max(o[-1], c[-1]))
-    pavio_inf = float(min(o[-1], c[-1]) - l[-1])
-
-    suporte = float(np.min(l[-20:-1]))
-    resistencia = float(np.max(h[-20:-1]))
-    tr = np.maximum(h[-20:] - l[-20:], np.maximum(np.abs(h[-20:] - c[-21:-1]), np.abs(l[-20:] - c[-21:-1]))) if len(c) >= 21 else h[-20:] - l[-20:]
-    atr = float(np.mean(tr)) if len(tr) else 0.0
-    atr_pct = (atr / preco * 100.0) if preco else 0.0
-
-    # Tendência exige alinhamento das quatro EMAs, não apenas EMA9/21.
-    subida = ema21[-1] > ema21[-4] and ema50[-1] >= ema50[-4]
-    descida = ema21[-1] < ema21[-4] and ema50[-1] <= ema50[-4]
-    stack_alta = ema9[-1] > ema21[-1] > ema50[-1] > ema100[-1]
-    stack_baixa = ema9[-1] < ema21[-1] < ema50[-1] < ema100[-1]
-    if stack_alta and subida and preco >= ema50[-1]:
-        tendencia = "ALTA"
-    elif stack_baixa and descida and preco <= ema50[-1]:
-        tendencia = "BAIXA"
+    """Confluência técnica em tempo real: MAs, tendência, volatilidade, volume e momentum."""
+    c=np.asarray(data.get("close",[]),dtype=float); o=np.asarray(data.get("open",[]),dtype=float)
+    h=np.asarray(data.get("high",[]),dtype=float); l=np.asarray(data.get("low",[]),dtype=float)
+    if len(c)<25:
+        return {"confluencia":0.0,"confluencias":[],"tendencia":"INDEFINIDA","rsi":50.0,"atr_pct":0.0,"volume_ratio":0.0,"volume_disponivel":False}
+    ema9=calcular_ema(c,9); ema21=calcular_ema(c,21)
+    ma20=float(np.mean(c[-20:])); ma50=float(np.mean(c[-50:])) if len(c)>=50 else ma20
+    ma100=float(np.mean(c[-100:])) if len(c)>=100 else ma50
+    rsi=_rsi_atual(c,14); macd,macd_signal,macd_hist=_macd_atual(c)
+    tr=np.maximum(h[1:]-l[1:],np.maximum(np.abs(h[1:]-c[:-1]),np.abs(l[1:]-c[:-1])))
+    atr=float(np.mean(tr[-14:])) if len(tr)>=14 else float(np.mean(tr))
+    preco=float(c[-1]); atr_pct=(atr/preco*100) if preco else 0.0
+    std20=float(np.std(c[-20:])); bb_sup=ma20+2*std20; bb_inf=ma20-2*std20
+    suporte=float(np.min(l[-20:-1])); resistencia=float(np.max(h[-20:-1]))
+    # Tendência exige alinhamento das médias, evitando operar contra o fluxo principal.
+    alta=ema9[-1]>ema21[-1] and c[-1]>ma20 and (ma20>=ma50 if len(c)>=50 else ema21[-1]>=ema21[-5])
+    baixa=ema9[-1]<ema21[-1] and c[-1]<ma20 and (ma20<=ma50 if len(c)>=50 else ema21[-1]<=ema21[-5])
+    tendencia="ALTA" if alta else "BAIXA" if baixa else "LATERAL"
+    volume=np.asarray(data.get("volume",[]),dtype=float)
+    volume_disponivel=False; volume_ratio=0.0
+    if len(volume)==len(c):
+        v=volume[np.isfinite(volume)]
+        if len(v)>=21 and np.nanmean(v[-20:])>0:
+            volume_disponivel=True; volume_ratio=float(v[-1]/np.nanmean(v[-20:]))
+    itens=[]
+    def add(nome,pontos,detalhe,status):
+        itens.append({"nome":nome,"pontos":int(max(0,min(20,pontos))),"detalhe":detalhe,"status":status})
+    # 1) Tendência / não contra-tendência
+    trend_ok=(direcao=="CALL" and tendencia=="ALTA") or (direcao=="PUT" and tendencia=="BAIXA") if direcao else tendencia!="LATERAL"
+    add("Tendência",20 if trend_ok else 2,f"EMA9/21 + MA20/50 • {tendencia}","ok" if trend_ok else "bad")
+    # 2) Médias móveis
+    ma_ok=(direcao=="CALL" and c[-1]>ma20 and ma20>=ma50) or (direcao=="PUT" and c[-1]<ma20 and ma20<=ma50) if direcao else False
+    add("MAs",18 if ma_ok else 5,f"Preço {preco:.5g} • MA20 {ma20:.5g} • MA50 {ma50:.5g}","ok" if ma_ok else "warn")
+    # 3) RSI em zona de continuação, evitando extremos contra o fluxo
+    rsi_ok=(direcao=="CALL" and 50<=rsi<=70) or (direcao=="PUT" and 30<=rsi<=50) if direcao else False
+    add("RSI",16 if rsi_ok else 6,f"RSI {rsi:.1f}","ok" if rsi_ok else "warn")
+    # 4) MACD
+    macd_ok=(direcao=="CALL" and macd_hist>0) or (direcao=="PUT" and macd_hist<0) if direcao else False
+    add("MACD",16 if macd_ok else 5,f"Histograma {'positivo' if macd_hist>0 else 'negativo'}","ok" if macd_ok else "warn")
+    # 5) Volatilidade: nem mercado morto, nem explosão anormal
+    vol_ok=0.015<=atr_pct<=2.0
+    add("Volatilidade",15 if vol_ok else 5,f"ATR {atr_pct:.3f}%", "ok" if vol_ok else "warn")
+    # 6) Volume relativo: em Forex algumas fontes não entregam volume confiável; nesse caso é neutro.
+    if volume_disponivel:
+        volume_ok=0.75<=volume_ratio<=2.5
+        add("Volume",15 if volume_ok else 6,f"Volume relativo {volume_ratio:.2f}x", "ok" if volume_ok else "warn")
     else:
-        tendencia = "LATERAL"
-
-    if adx >= 25:
-        regime = "TENDÊNCIA_FORTE"
-    elif adx >= 18:
-        regime = "TENDÊNCIA_MODERADA"
-    elif atr_pct > 1.8:
-        regime = "VOLATILIDADE_ALTA"
-    else:
-        regime = "LATERAL"
-
-    itens = []
-    def add(nome, pontos, detalhe, status, peso=10):
-        itens.append({
-            "nome": nome,
-            "pontos": int(max(0, min(peso, pontos))),
-            "detalhe": detalhe,
-            "status": status,
-            "peso": peso
-        })
-
-    # 1) Direção macro — bloqueia contra-tendência.
-    if direcao == "CALL":
-        ok = tendencia == "ALTA"
-        pontos = 15 if ok else 0
-    elif direcao == "PUT":
-        ok = tendencia == "BAIXA"
-        pontos = 15 if ok else 0
-    else:
-        ok = tendencia in ("ALTA", "BAIXA")
-        pontos = 15 if ok else 6
-    add("Tendência", pontos, f"Estrutura EMA9/21/50/100 • {tendencia}", "ok" if ok else "bad", 15)
-
-    # 2) Alinhamento das quatro médias + preço.
-    if direcao == "CALL":
-        ok = stack_alta and preco >= ema21[-1]
-        detalhe = f"EMA9 {ema9[-1]:.5g} > EMA21 {ema21[-1]:.5g} > EMA50 {ema50[-1]:.5g} > EMA100 {ema100[-1]:.5g}"
-    elif direcao == "PUT":
-        ok = stack_baixa and preco <= ema21[-1]
-        detalhe = f"EMA9 {ema9[-1]:.5g} < EMA21 {ema21[-1]:.5g} < EMA50 {ema50[-1]:.5g} < EMA100 {ema100[-1]:.5g}"
-    else:
-        ok = stack_alta or stack_baixa
-        detalhe = "EMA9/21/50/100 alinhadas" if ok else "Médias sem alinhamento"
-    add("MA/EMA 9•21•50•100", 15 if ok else 0, detalhe, "ok" if ok else "bad", 15)
-
-    # 3) MA20/50/100 como segunda confirmação independente da EMA.
-    if direcao == "CALL":
-        ok = ma20 > ma50 > ma100 and preco >= ma20
-    elif direcao == "PUT":
-        ok = ma20 < ma50 < ma100 and preco <= ma20
-    else:
-        ok = (ma20 > ma50 > ma100) or (ma20 < ma50 < ma100)
-    add("MA 20•50•100", 10 if ok else 0, f"MA20 {ma20:.5g} • MA50 {ma50:.5g} • MA100 {ma100:.5g}", "ok" if ok else "bad", 10)
-
-    # 4) RSI: confirma momentum sem exigir extremo artificial.
-    if direcao == "CALL":
-        ok = 50 <= rsi <= 68
-    elif direcao == "PUT":
-        ok = 32 <= rsi <= 50
-    else:
-        ok = False
-    add("RSI 14", 10 if ok else 0, f"RSI {rsi:.1f}", "ok" if ok else "warn", 10)
-
-    # 5) MACD.
-    if direcao == "CALL":
-        ok = macd_hist > 0 and macd >= macd_signal
-    elif direcao == "PUT":
-        ok = macd_hist < 0 and macd <= macd_signal
-    else:
-        ok = False
-    add("MACD", 12 if ok else 0, f"Hist. {'positivo' if macd_hist > 0 else 'negativo'}", "ok" if ok else "warn", 12)
-
-    # 6) ADX + DI: mede força e direção, não apenas volatilidade.
-    if direcao == "CALL":
-        ok = adx >= 18 and plus_di > minus_di
-    elif direcao == "PUT":
-        ok = adx >= 18 and minus_di > plus_di
-    else:
-        ok = adx >= 18
-    add("ADX / +DI / -DI", 10 if ok else 0, f"ADX {adx:.1f} • +DI {plus_di:.1f} • -DI {minus_di:.1f}", "ok" if ok else "warn", 10)
-
-    # 7) Estocástico.
-    if direcao == "CALL":
-        ok = stoch_k >= stoch_d and stoch_k >= 35 and stoch_k <= 85
-    elif direcao == "PUT":
-        ok = stoch_k <= stoch_d and stoch_k >= 15 and stoch_k <= 65
-    else:
-        ok = False
-    add("Estocástico", 8 if ok else 0, f"K {stoch_k:.1f} • D {stoch_d:.1f}", "ok" if ok else "warn", 8)
-
-    # 8) Price action.
-    bullish = c[-1] > o[-1]
-    bearish = c[-1] < o[-1]
-    rejeicao_call = pavio_inf / amplitude >= .35
-    rejeicao_put = pavio_sup / amplitude >= .35
-    if direcao == "CALL":
-        ok = bullish or rejeicao_call
-    elif direcao == "PUT":
-        ok = bearish or rejeicao_put
-    else:
-        ok = False
-    add("Price Action", 10 if ok else 0, f"Corpo {corpo/amplitude*100:.0f}% • {'rejeição' if (rejeicao_call or rejeicao_put) else 'candle'}", "ok" if ok else "warn", 10)
-
-    # 9) Bollinger: usada como localização, não como sinal isolado.
-    if direcao == "CALL":
-        ok = preco <= bb_sup and preco >= bb_inf * 0.995
-    elif direcao == "PUT":
-        ok = preco >= bb_inf and preco <= bb_sup * 1.005
-    else:
-        ok = False
-    add("Bollinger", 8 if ok else 0, f"Preço {preco:.5g} • faixa [{bb_inf:.5g}, {bb_sup:.5g}]", "ok" if ok else "warn", 8)
-
-    # 10) Suporte/resistência.
-    dist_sup = abs(preco - suporte) / max(abs(preco), 1e-12) * 100
-    dist_res = abs(resistencia - preco) / max(abs(preco), 1e-12) * 100
-    if direcao == "CALL":
-        ok = dist_sup <= max(0.15, atr_pct * 1.6)
-        detalhe = f"Suporte {dist_sup:.3f}% • Resistência {dist_res:.3f}%"
-    elif direcao == "PUT":
-        ok = dist_res <= max(0.15, atr_pct * 1.6)
-        detalhe = f"Suporte {dist_sup:.3f}% • Resistência {dist_res:.3f}%"
-    else:
-        ok = False
-        detalhe = f"Suporte {dist_sup:.3f}% • Resistência {dist_res:.3f}%"
-    add("Suporte/Resist.", 7 if ok else 0, detalhe, "ok" if ok else "warn", 7)
-
-    # 11) Momentum curto.
-    roc = ((preco / c[-6]) - 1.0) * 100.0 if len(c) >= 7 and c[-6] else 0.0
-    if direcao == "CALL":
-        ok = roc > 0
-    elif direcao == "PUT":
-        ok = roc < 0
-    else:
-        ok = False
-    add("Momentum 6", 5 if ok else 0, f"ROC {roc:.3f}%", "ok" if ok else "warn", 5)
-
-    peso_total = sum(x["peso"] for x in itens)
-    pontos_total = sum(x["pontos"] for x in itens)
-    confluencia = round((pontos_total / peso_total) * 100, 1) if peso_total else 0.0
-    confirmacoes = sum(1 for x in itens if x["status"] == "ok")
-
-    # Conflitos explícitos: tendência/médias/DI contra a direção escolhida.
-    conflitos = 0
-    if direcao == "CALL":
-        conflitos += int(tendencia == "BAIXA") + int(stack_baixa) + int(minus_di > plus_di and adx >= 18)
-    elif direcao == "PUT":
-        conflitos += int(tendencia == "ALTA") + int(stack_alta) + int(plus_di > minus_di and adx >= 18)
-
-    forca_direcional = min(10.0, max(0.0, (adx / 4.0) + (abs(plus_di - minus_di) / 8.0)))
-    if direcao == "CALL" and plus_di <= minus_di:
-        forca_direcional *= 0.55
-    if direcao == "PUT" and minus_di <= plus_di:
-        forca_direcional *= 0.55
-
-    return {
-        "rsi": float(rsi),
-        "ema9": float(ema9[-1]), "ema21": float(ema21[-1]),
-        "ema50": float(ema50[-1]), "ema100": float(ema100[-1]),
-        "ma20": float(ma20), "ma50": float(ma50), "ma100": float(ma100),
-        "macd": float(macd), "macd_signal": float(macd_signal), "macd_hist": float(macd_hist),
-        "adx": float(adx), "plus_di": float(plus_di), "minus_di": float(minus_di),
-        "stoch_k": float(stoch_k), "stoch_d": float(stoch_d),
-        "atr_pct": float(atr_pct), "tendencia": tendencia, "regime": regime,
-        "suporte": suporte, "resistencia": resistencia,
-        "confluencia": float(confluencia), "confirmacoes": int(confirmacoes),
-        "conflitos": int(conflitos), "forca_direcional": float(forca_direcional),
-        "confluencias": itens
-    }
-
+        add("Volume",10,"Volume não disponível/confiável na fonte • filtro neutro","warn")
+    # 7) Price action / candle atual
+    amplitude=max(float(h[-1]-l[-1]),1e-12); corpo=abs(float(c[-1]-o[-1]))
+    bullish=c[-1]>o[-1]; bearish=c[-1]<o[-1]
+    pa_ok=(direcao=="CALL" and bullish) or (direcao=="PUT" and bearish)
+    add("Price Action",10 if pa_ok else 5,f"Corpo {corpo/amplitude*100:.0f}%","ok" if pa_ok else "warn")
+    # 8) Zona técnica / Bollinger
+    sr_ok=(direcao=="CALL" and preco>suporte) or (direcao=="PUT" and preco<resistencia)
+    bb_ok=(direcao=="CALL" and preco>=ma20 and preco<bb_sup) or (direcao=="PUT" and preco<=ma20 and preco>bb_inf)
+    add("Zona técnica",10 if (sr_ok and bb_ok) else 5,f"Sup {suporte:.5g} • Res {resistencia:.5g}","ok" if (sr_ok and bb_ok) else "warn")
+    soma=sum(x["pontos"] for x in itens); maximo=len(itens)*20
+    confluencia=round(soma/maximo*100,1) if maximo else 0.0
+    return {"rsi":float(rsi),"ema9":float(ema9[-1]),"ema21":float(ema21[-1]),"ma20":ma20,"ma50":ma50,"ma100":ma100,
+            "macd":macd,"macd_signal":macd_signal,"macd_hist":macd_hist,"atr_pct":atr_pct,"volume_ratio":volume_ratio,
+            "volume_disponivel":volume_disponivel,"tendencia":tendencia,"suporte":suporte,"resistencia":resistencia,
+            "confluencia":confluencia,"confluencias":itens}
 
 def analisar_estrategia(data, estrategia, i=-1):
-    """Gera a leitura própria de cada estratégia; a confirmação final é feita pelo motor central."""
+    """Motor legado preservado para compatibilidade; retorna sinal e probabilidade em %."""
     c, o, h, l = data["close"], data["open"], data["high"], data["low"]
     if len(c) < 30:
         return None, 0
-    sinal = None
-    base_prob = 0
-
+    sinal=None; probabilidade=0
     if estrategia == "LOGICA_DO_PRECO":
-        tamanho = abs(c[i] - o[i]); amplitude = h[i] - l[i]
-        if amplitude > 0 and tamanho > 0:
-            cor = 'G' if c[i] > o[i] else 'R'
-            p_sup = h[i] - max(o[i], c[i]); p_inf = min(o[i], c[i]) - l[i]
-            if cor == 'G' and p_inf >= amplitude*.45 and p_sup <= amplitude*.20:
-                sinal = 'CALL'; base_prob = 82
-            elif cor == 'R' and p_sup >= amplitude*.45 and p_inf <= amplitude*.20:
-                sinal = 'PUT'; base_prob = 82
-            elif cor == 'G' and p_sup >= amplitude*.50 and tamanho <= amplitude*.35:
-                sinal = 'PUT'; base_prob = 80
-            elif cor == 'R' and p_inf >= amplitude*.50 and tamanho <= amplitude*.35:
-                sinal = 'CALL'; base_prob = 80
-
+        tamanho=abs(c[i]-o[i]); amplitude=h[i]-l[i]
+        if amplitude>0 and tamanho>0:
+            cor='G' if c[i]>o[i] else 'R'; p_sup=h[i]-max(o[i],c[i]); p_inf=min(o[i],c[i])-l[i]
+            if cor=='G' and p_inf>=amplitude*.45 and p_sup<=amplitude*.20: sinal='CALL'; probabilidade=int(82+(p_inf/amplitude)*15)
+            elif cor=='R' and p_sup>=amplitude*.45 and p_inf<=amplitude*.20: sinal='PUT'; probabilidade=int(82+(p_sup/amplitude)*15)
+            elif cor=='G' and p_sup>=amplitude*.50 and tamanho<=amplitude*.35: sinal='PUT'; probabilidade=int(80+(p_sup/amplitude)*15)
+            elif cor=='R' and p_inf>=amplitude*.50 and tamanho<=amplitude*.35: sinal='CALL'; probabilidade=int(80+(p_inf/amplitude)*15)
     elif estrategia == "RSI_MACD_MA":
-        rsi = _rsi_atual(c, 14)
-        macd_line, signal_line, hist = _macd_atual(c)
-        ema9 = calcular_ema(c, 9); ema21 = calcular_ema(c, 21); ema50 = calcular_ema(c, 50); ema100 = calcular_ema(c, 100)
-        if rsi >= 50 and rsi <= 68 and macd_line > signal_line and hist > 0 and ema9[-1] > ema21[-1] > ema50[-1] > ema100[-1]:
-            sinal = 'CALL'; base_prob = 84
-        elif rsi <= 50 and rsi >= 32 and macd_line < signal_line and hist < 0 and ema9[-1] < ema21[-1] < ema50[-1] < ema100[-1]:
-            sinal = 'PUT'; base_prob = 84
-
+        rsi=_rsi_atual(c,14); macd_line,signal_line,_=_macd_atual(c)
+        if rsi<=35 and macd_line>signal_line: sinal='CALL'; probabilidade=int(83+(35-rsi)*.5)
+        elif rsi>=65 and macd_line<signal_line: sinal='PUT'; probabilidade=int(83+(rsi-65)*.5)
     elif estrategia == "MHI1":
-        cores = []
-        for j in range(i-2, i+1):
-            cores.append('G' if c[j] > o[j] else 'R' if c[j] < o[j] else 'D')
-        ema21 = calcular_ema(c, 21); ema50 = calcular_ema(c, 50); ema100 = calcular_ema(c, 100)
+        cores=[]
+        for j in range(i-2,i+1): cores.append('G' if c[j]>o[j] else 'R' if c[j]<o[j] else 'D')
         if 'D' not in cores:
-            qtd_g = cores.count('G'); qtd_r = cores.count('R')
-            if qtd_r >= 2 and c[i] >= ema21[-1] and ema21[-1] > ema50[-1] > ema100[-1]:
-                sinal = 'CALL'; base_prob = 83
-            elif qtd_g >= 2 and c[i] <= ema21[-1] and ema21[-1] < ema50[-1] < ema100[-1]:
-                sinal = 'PUT'; base_prob = 83
-
-    elif estrategia in ['REVERSAO', 'RETRACAO']:
-        std = np.std(c[-20:]); ma = np.mean(c[-20:]); bs = ma + 2*std; bi = ma - 2*std
-        ema21 = calcular_ema(c, 21); ema50 = calcular_ema(c, 50); ema100 = calcular_ema(c, 100)
-        # Reversão contra tendência é bloqueada: só aceitamos pullback/rejeição
-        # na direção da tendência maior.
-        if c[i] <= bi and c[i] >= ema21[-1] and ema21[-1] > ema50[-1] > ema100[-1]:
-            sinal = 'CALL'; base_prob = 84
-        elif c[i] >= bs and c[i] <= ema21[-1] and ema21[-1] < ema50[-1] < ema100[-1]:
-            sinal = 'PUT'; base_prob = 84
-
-    return sinal, base_prob
-
+            qtd_g=cores.count('G');qtd_r=cores.count('R');ema20=np.mean(c[-20:])
+            if qtd_g==2 and qtd_r==1 and c[i]<=ema20: sinal='PUT';probabilidade=84
+            elif qtd_r==2 and qtd_g==1 and c[i]>=ema20: sinal='CALL';probabilidade=84
+            elif qtd_g==3: sinal='PUT';probabilidade=88
+            elif qtd_r==3: sinal='CALL';probabilidade=88
+    elif estrategia in ['REVERSAO','RETRACAO']:
+        std=np.std(c[-20:]);ma=np.mean(c[-20:]);bs=ma+2*std;bi=ma-2*std
+        if c[i]<=bi and c[i]<o[i]: sinal='CALL';dist=(bi-c[i])/(std if std>0 else 1);probabilidade=int(81+min(15,dist*10))
+        elif c[i]>=bs and c[i]>o[i]: sinal='PUT';dist=(c[i]-bs)/(std if std>0 else 1);probabilidade=int(81+min(15,dist*10))
+    probabilidade=min(98,max(75,probabilidade)) if sinal else 0
+    return sinal,probabilidade
 
 def analisar_estrategia_detalhada(data, estrategia):
-    """Executa uma estratégia isoladamente e depois exige confirmação do motor técnico."""
     sinal, base_prob = analisar_estrategia(data, estrategia)
-    if not sinal:
-        return None, 0, _indicadores_confluencia(data, None)
-
     indicadores = _indicadores_confluencia(data, sinal)
-    tendencia = indicadores.get("tendencia")
-    confluencia = float(indicadores.get("confluencia", 0))
-    confirmacoes = int(indicadores.get("confirmacoes", 0))
-    conflitos = int(indicadores.get("conflitos", 99))
-    forca = float(indicadores.get("forca_direcional", 0))
-
-    # Regras duras: nunca operar contra a tendência e nunca transformar um
-    # padrão isolado em sinal só porque a estratégia atribuiu 80%+.
-    if tendencia not in ("ALTA", "BAIXA"):
+    if not sinal:
         return None, 0, indicadores
-    if (sinal == "CALL" and tendencia != "ALTA") or (sinal == "PUT" and tendencia != "BAIXA"):
+    tendencia=indicadores.get("tendencia")
+    # Regra estrutural: nunca validar CALL em tendência de baixa ou PUT em tendência de alta.
+    if (sinal=="CALL" and tendencia!="ALTA") or (sinal=="PUT" and tendencia!="BAIXA"):
         return None, 0, indicadores
-    if confluencia < 72 or confirmacoes < 6 or conflitos >= 2 or forca < 5.0:
+    if indicadores.get("confluencia",0) < 72:
         return None, 0, indicadores
-
-    # A probabilidade exibida nasce da confluência técnica; a pontuação da
-    # estratégia é apenas um pequeno componente, não o fator dominante.
-    prob = int(round(68 + confluencia * 0.24 + min(5, max(0, base_prob - 80) * 0.35)))
-    prob = max(74, min(94, prob))
-    indicadores["estrategia_base_prob"] = int(base_prob)
-    indicadores["estrategia"] = estrategia
-    return sinal, prob, indicadores
+    ajuste=round((indicadores["confluencia"]-72)*0.18)
+    prob=int(max(80,min(98,base_prob+ajuste)))
+    return sinal,prob,indicadores
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
 @app.route('/sw.js')
@@ -2302,9 +2002,9 @@ def status():
         "candle_total": st["timeframe"] * 60,
         "candle_elapsed": time.time() - (math.floor(time.time() / (st["timeframe"] * 60)) * (st["timeframe"] * 60)),
         "candle_remaining": max(0.0, ((math.floor(time.time() / (st["timeframe"] * 60)) + 1) * (st["timeframe"] * 60)) - time.time()),
-        "warmup_concluido": bool(st.get("warmup_concluido")),
-        "warmup_status": st.get("warmup_status", "ANÁLISE EM TEMPO REAL"),
-        "warmup_ativos_analisados": len(st.get("warmup_ativos_analisados", set())),
+        "warmup_concluido": True,
+        "warmup_status": "ANÁLISE EM TEMPO REAL",
+        "warmup_ativos_analisados": 0,
         "entry_end_ts": (((st.get("alerta_ativo") or {}).get("prox_minuto_entrada").timestamp()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("prox_minuto_entrada")) else None),
         "entry_remaining": max(0.0, (st.get("alerta_ativo") or {}).get("prox_minuto_entrada").timestamp() - time.time()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("prox_minuto_entrada")) else 0,
         "confirmation_ts": (((st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else None),
@@ -2333,14 +2033,12 @@ def set_assets():
         if ativo in validos and ativo not in selecionados:
             selecionados.append(ativo)
     st["selected_assets"] = selecionados
-    resetar_estado_varredura(st)
     st["warmup_concluido"] = True
     st["warmup_ativos_analisados"] = set()
     st["warmup_analysis"] = {}
-    st["warmup_inicio"] = 0.0
-    if st.get("bot_iniciado"):
-        st["startup_lock_until"] = 0.0
-        st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
+    st["warmup_inicio"] = time.time()
+    st["startup_lock_until"] = 0.0
+    st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
     return jsonify({"ok": True, "assets": selecionados})
 
 @app.route('/backtest', methods=['POST'])
@@ -2416,18 +2114,6 @@ def backtest():
         print(f"⚠️ Backtest: {e}")
         return jsonify({"ok":False,"error":"Não foi possível concluir o backtest com os dados disponíveis agora."}), 500
 
-@app.errorhandler(500)
-def handle_server_error(error):
-    # Comandos do painel devem sempre receber JSON, mesmo se alguma dependência
-    # externa falhar. Isso evita o toast genérico de comunicação causado por uma
-    # página HTML de erro 500. O erro continua registrado no log do servidor.
-    path = request.path or ""
-    if path.startswith("/command/"):
-        print(f"❌ Erro interno em {path}: {error}")
-        return jsonify({"ok": False, "error": "O servidor encontrou um erro ao processar este comando. Tente novamente."}), 500
-    return "Erro interno do servidor.", 500
-
-
 @app.route('/command/<cmd>')
 def command(cmd):
     user = session.get('user')
@@ -2491,14 +2177,12 @@ def command(cmd):
         st["sinais_sessao_total"] = 0
         st["warmup_concluido"] = True
         st["warmup_ativos_analisados"] = set()
-        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
-        st["warmup_inicio"] = 0.0
+        st["warmup_inicio"] = time.time()
         st["startup_lock_until"] = 0.0
         st["startup_lock_seconds"] = 0
         st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
         st["inicio_varredura"] = time.time()
-        resetar_estado_varredura(st)
         st["sinais_enviados"].clear() 
         
         st["ativo_atual"] = "INICIANDO VARREDURA..."
@@ -2511,30 +2195,18 @@ def command(cmd):
             f"📊 <b>Timeframe:</b> M{st['timeframe']}\n"
             f"🌐 <b>Mercado:</b> {st['tipo_mercado']}\n"
             f"⚙️ <b>Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(st['estrategia'], st['estrategia'])}\n\n"
-            f"<i>Varrendo gráficos em tempo real...</i>"
+            f"<i>Coletando dados e procurando confluências em tempo real...</i>"
         )
-        # O comando START não pode ficar esperando a API do Telegram. Em hospedagens
-        # como Render isso pode fazer o fetch do painel atingir timeout mesmo com o
-        # motor já iniciado. O envio fica desacoplado da resposta HTTP.
-        def _start_telegram_background(_msg=msg_inicio_telegram, _user=user):
-            try:
-                msg_id = enviar_telegram(_msg, user_solicitante=_user)
-                if msg_id:
-                    print(f"✅ Telegram: START enviado em background (ID {msg_id}).")
-                else:
-                    print("ℹ️ Telegram: START sem envio (trava desativada ou configuração indisponível).")
-            except Exception as e:
-                print(f"⚠️ Erro no Telegram durante START: {e}")
-
-        threading.Thread(target=_start_telegram_background, daemon=True, name="telegram-start").start()
-        return jsonify({"ok": True, "telegram_enviado_em_background": True})
+        threading.Thread(target=enviar_telegram, args=(msg_inicio_telegram,), kwargs={"user_solicitante": user}, daemon=True).start()
+        # START nunca espera a rede/Telegram. O HTTP responde imediatamente.
+        return jsonify({"ok": True})
 
     elif cmd == "pause_bot":
         st["bot_pausado"] = not st["bot_pausado"]
-        status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if st["bot_pausado"] else f"🔍 ANALISANDO: {st['ativo_atual']} (M{st['timeframe']})"
-        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO ATIVOS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[CONFLUÊNCIAS EM TEMPO REAL]</span></div><div class='tech-scanner'></div>"
+        status_txt = "[PAUSADO] VARREDURA EM PAUSA..." if st["bot_pausado"] else f"🔍 ANALISANDO EM TEMPO REAL: {st['ativo_atual']} (M{st['timeframe']})"
+        st["ultimo_sinal"] = f"<div class='system-console' style='color:#f59e0b;'>{status_txt}</div>" if st["bot_pausado"] else f"<div class='system-console'>🔍 ANALISANDO EM TEMPO REAL: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[CONFLUÊNCIAS + TENDÊNCIA + VOLUME + VOLATILIDADE]</span></div><div class='tech-scanner'></div>"
         msg_pause = "⏸ <b>SISTEMA PAUSADO</b>" if st["bot_pausado"] else "▶️ <b>SISTEMA RETOMADO!</b>"
-        enviar_telegram(msg_pause, user_solicitante=user)
+        threading.Thread(target=enviar_telegram, args=(msg_pause,), kwargs={"user_solicitante": user}, daemon=True).start()
         return jsonify({"ok": True})
 
     elif cmd == "stop_bot":
@@ -2554,17 +2226,15 @@ def command(cmd):
         # Envia o fechamento ANTES de limpar os resultados da sessão.
         enviar_telegram(mensagem_encerramento_sessao(st), user_solicitante=user)
 
-        resetar_estado_varredura(st)
         st["ativo_atual"] = "DESCONECTADO"
         st["news_guard_status"] = "DESATIVADA"
         st["news_guard_event"] = None
         st["news_blocked_assets"] = []
-        st["warmup_concluido"] = False
+        st["warmup_concluido"] = True
         st["warmup_ativos_analisados"] = set()
-        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
         st["startup_lock_until"] = 0.0
-        st["warmup_status"] = "AGUARDANDO START"
+        st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
         st["ultimo_sinal"] = "Aguardando Comando..."
         
         # Mantém o comportamento anterior de zerar o placar geral no encerramento.
@@ -2574,25 +2244,21 @@ def command(cmd):
         st["sinais_sessao_total"] = 0
         return jsonify({"ok": True})
 
-    elif cmd.startswith("tf_"): 
+    elif cmd.startswith("tf_"):
         st["timeframe"] = int(cmd.split('_')[1])
-        resetar_estado_varredura(st)
         st["warmup_concluido"] = True
         st["warmup_ativos_analisados"] = set()
-        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
-        st["warmup_inicio"] = 0.0
+        st["warmup_inicio"] = time.time()
         st["startup_lock_until"] = 0.0
         st["startup_lock_seconds"] = 0
         st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
-    elif cmd.startswith("mkt_"): 
-        st["tipo_mercado"] = cmd.split('_', 1)[1] 
-        resetar_estado_varredura(st)
+    elif cmd.startswith("mkt_"):
+        st["tipo_mercado"] = cmd.split('_', 1)[1]
         st["warmup_concluido"] = True
         st["warmup_ativos_analisados"] = set()
-        st["warmup_ativos_indisponiveis"] = set()
         st["warmup_analysis"] = {}
-        st["warmup_inicio"] = 0.0
+        st["warmup_inicio"] = time.time()
         st["startup_lock_until"] = 0.0
         st["startup_lock_seconds"] = 0
         st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
@@ -2931,310 +2597,8 @@ def confirmar_alerta_agendado(user_email, alert_id):
         print(f"⚠️ Erro na confirmação agendada ({user_email}): {e}")
 
 
-
-# ================= VARREDURA DE ATIVOS ISOLADA/SEGURA =================
-# A análise técnica é assíncrona e persistente. O loop principal apenas agenda
-# trabalhos e coleta resultados já concluídos; ele nunca espera um ativo terminar.
-ANALYSIS_MAX_WORKERS = 16
-ANALYSIS_EXECUTOR = ThreadPoolExecutor(
-    max_workers=ANALYSIS_MAX_WORKERS,
-    thread_name_prefix="analise"
-)
-ANALYSIS_STATE_LOCK = threading.RLock()
-
-def _assinatura_dados_analise(data):
-    """Assinatura curta para não recalcular o mesmo candle indefinidamente."""
-    try:
-        tempos = data.get("time", [])
-        ultimo = float(tempos[-1]) if len(tempos) else 0.0
-        return (ultimo, len(data.get("close", [])))
-    except Exception:
-        return (0.0, len(data.get("close", [])) if isinstance(data, dict) else 0)
-
-def _finalizar_analise_background(futuro, user_email, ativo, generation, assinatura):
-    try:
-        resultado = futuro.result()
-    except Exception as exc:
-        resultado = {
-            "ativo": ativo,
-            "data": None,
-            "cache_key": f"{MAPA_TICKERS.get(ativo, ativo)}",
-            "candidatos": [],
-            "diagnostico": None,
-            "erro": str(exc)
-        }
-        print(f"⚠️ Falha isolada na análise assíncrona de {ativo}: {exc}")
-
-    resultado["_assinatura"] = assinatura
-    resultado["_concluido_em"] = time.time()
-
-    with ANALYSIS_STATE_LOCK:
-        st = DADOS_USUARIOS.get(user_email)
-        if not st or int(st.get("analysis_generation", 0)) != int(generation):
-            return
-        st.setdefault("analysis_results", {})[ativo] = resultado
-        st.setdefault("analysis_inflight", set()).discard(ativo)
-        st["analysis_last_completed"] = resultado["_concluido_em"]
-        st["analysis_completed_count"] = len(st.get("analysis_results", {}))
-
-def agendar_analise_background(user_email, st, ativo, tf, user_est, data):
-    """Agenda uma análise CPU sem bloquear o bot_loop."""
-    assinatura = _assinatura_dados_analise(data)
-    generation = int(st.get("analysis_generation", 0))
-
-    with ANALYSIS_STATE_LOCK:
-        inflight = st.setdefault("analysis_inflight", set())
-        submitted = st.setdefault("analysis_submitted", {})
-        results = st.setdefault("analysis_results", {})
-
-        if ativo in inflight:
-            return False
-        if submitted.get(ativo) == assinatura:
-            resultado_existente = results.get(ativo)
-            if resultado_existente and resultado_existente.get("_assinatura") == assinatura:
-                return False
-            return False
-
-        inflight.add(ativo)
-        submitted[ativo] = assinatura
-
-    try:
-        futuro = ANALYSIS_EXECUTOR.submit(
-            _processar_ativo_scan, ativo, tf, user_est, data
-        )
-        futuro.add_done_callback(
-            lambda f, _u=user_email, _a=ativo, _g=generation, _s=assinatura:
-                _finalizar_analise_background(f, _u, _a, _g, _s)
-        )
-        return True
-    except Exception as exc:
-        with ANALYSIS_STATE_LOCK:
-            st.setdefault("analysis_inflight", set()).discard(ativo)
-            st.setdefault("analysis_submitted", {}).pop(ativo, None)
-        print(f"⚠️ Não foi possível agendar análise de {ativo}: {exc}")
-        return False
-
-def resetar_estado_varredura(st):
-    """Inicia uma nova geração e invalida resultados/futuros antigos."""
-    with ANALYSIS_STATE_LOCK:
-        st["analysis_generation"] = int(st.get("analysis_generation", 0)) + 1
-        st["analysis_inflight"] = set()
-        st["analysis_results"] = {}
-        st["analysis_submitted"] = {}
-        st["analysis_last_completed"] = 0.0
-        st["analysis_completed_count"] = 0
-
-def _processar_ativo_scan(ativo, tf, user_est, data_inicial=None):
-    """Analisa um ativo isoladamente e sem qualquer acesso à rede.
-
-    A função foi otimizada para calcular o painel técnico uma única vez por
-    direção. Antes, cada estratégia recalculava EMA/RSI/MACD/ADX etc.; com
-    muitos ativos isso multiplicava o custo da varredura.
-    """
-    ticker = MAPA_TICKERS.get(ativo, ativo)
-    cache_key = f"{ticker}_{tf}"
-    data = data_inicial
-    try:
-        if data is None or len(data.get("close", [])) < 30:
-            return {"ativo": ativo, "data": None, "candidatos": [], "diagnostico": None, "erro": None}
-
-        if user_est == "TODAS":
-            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
-        elif "," in str(user_est):
-            estrategias_para_analisar = [
-                e.strip() for e in user_est.split(",")
-                if e.strip() in LISTA_ESTRATEGIAS
-            ]
-        elif user_est in LISTA_ESTRATEGIAS:
-            estrategias_para_analisar = [user_est]
-        else:
-            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
-
-        # Primeiro encontra os padrões de cada estratégia. Esta etapa é barata.
-        sinais_por_estrategia = []
-        for est_nome in estrategias_para_analisar:
-            try:
-                sinal_test, prob_test = analisar_estrategia(data, est_nome)
-                if sinal_test:
-                    sinais_por_estrategia.append({
-                        "sinal": sinal_test,
-                        "prob": int(prob_test),
-                        "estrategia": est_nome
-                    })
-            except Exception as exc_est:
-                print(f"⚠️ Estratégia {est_nome} falhou em {ativo}: {exc_est}")
-
-        # O painel de confluência é calculado no máximo uma vez por direção.
-        indicadores_por_direcao = {}
-        for direcao in {x["sinal"] for x in sinais_por_estrategia}:
-            try:
-                indicadores_por_direcao[direcao] = _indicadores_confluencia(data, direcao)
-            except Exception as exc_ind:
-                print(f"⚠️ Indicadores {direcao} falharam em {ativo}: {exc_ind}")
-                indicadores_por_direcao[direcao] = {
-                    "confluencia": 0.0, "confirmacoes": 0, "conflitos": 99,
-                    "tendencia": "SEM DADOS", "forca_direcional": 0.0,
-                    "confluencias": []
-                }
-
-        multi_estrategia = len(estrategias_para_analisar) > 1
-        candidatos = []
-        for item in sinais_por_estrategia:
-            sinal = item["sinal"]
-            indicadores = indicadores_por_direcao.get(sinal) or {}
-            tendencia = indicadores.get("tendencia")
-            confluencia = float(indicadores.get("confluencia", 0))
-            confirmacoes = int(indicadores.get("confirmacoes", 0))
-            conflitos = int(indicadores.get("conflitos", 99))
-            forca = float(indicadores.get("forca_direcional", 0))
-
-            if tendencia not in ("ALTA", "BAIXA"):
-                continue
-            if (sinal == "CALL" and tendencia != "ALTA") or (sinal == "PUT" and tendencia != "BAIXA"):
-                continue
-            if confluencia < 72 or confirmacoes < 6 or conflitos >= 2 or forca < 5.0:
-                continue
-
-            prob = int(round(68 + confluencia * 0.24 + min(5, max(0, item["prob"] - 80) * 0.35)))
-            prob = max(74, min(94, prob))
-            ana = dict(indicadores)
-            ana["estrategia_base_prob"] = int(item["prob"])
-            ana["estrategia"] = item["estrategia"]
-            candidatos.append({
-                "sinal": sinal,
-                "prob": prob,
-                "estrategia": item["estrategia"],
-                "analise": ana
-            })
-
-        grupos = {"CALL": [], "PUT": []}
-        for cand in candidatos:
-            grupos.setdefault(cand["sinal"], []).append(cand)
-
-        candidatos_consensuais = []
-        for direcao, grupo in grupos.items():
-            if not grupo:
-                continue
-            consenso = len(grupo)
-            if multi_estrategia and consenso < 2:
-                continue
-
-            grupo = sorted(
-                grupo,
-                key=lambda x: (
-                    float(x["analise"].get("confluencia", 0)),
-                    int(x["analise"].get("confirmacoes", 0)),
-                    int(x["prob"])
-                ),
-                reverse=True
-            )
-            principal = dict(grupo[0])
-            ana = dict(principal["analise"])
-            conf = float(ana.get("confluencia", 0))
-            confirms = int(ana.get("confirmacoes", 0))
-            conflicts = int(ana.get("conflitos", 99))
-            tendencia = ana.get("tendencia")
-
-            if tendencia != direcao or conf < 72 or confirms < 6 or conflicts >= 2:
-                continue
-
-            bonus_consenso = min(9, max(0, consenso - 1) * 3)
-            prob_final = min(96, int(principal["prob"]) + bonus_consenso)
-            if prob_final < 82:
-                continue
-
-            nomes_concordantes = [
-                NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"])
-                for x in grupo
-            ]
-            principal["concordantes"] = consenso - 1
-            principal["consenso"] = consenso
-            principal["prob_final"] = prob_final
-            principal["analise"] = ana
-            principal["analise"]["consenso_estrategias"] = consenso
-            principal["analise"]["estrategias_concordantes"] = nomes_concordantes
-            principal["analise"]["motivos"] = ana.get("confluencias", [])
-            candidatos_consensuais.append(principal)
-
-        candidatos_globais = []
-        diagnostico = None
-        if candidatos_consensuais:
-            melhor_local = max(
-                candidatos_consensuais,
-                key=lambda x: (
-                    int(x["consenso"]),
-                    float(x["analise"].get("confluencia", 0)),
-                    int(x["analise"].get("confirmacoes", 0)),
-                    int(x["prob_final"])
-                )
-            )
-            ana = dict(melhor_local["analise"])
-            ana.update({
-                "ativo": ativo,
-                "direcao": melhor_local["sinal"],
-                "probabilidade": melhor_local["prob_final"],
-                "estrategia": melhor_local["estrategia"],
-                "estrategia_fmt": (
-                    f"{NOME_ESTRATEGIAS_DISPLAY.get(melhor_local['estrategia'], melhor_local['estrategia'])} • "
-                    f"{melhor_local['consenso']} estratégias em acordo"
-                ),
-                "grafico": [float(x) for x in data["close"][-30:]],
-                "motivos": ana.get("confluencias", []),
-                "estrategias_concordantes": ana.get("estrategias_concordantes", [])
-            })
-            candidatos_globais.append({
-                "ativo": ativo,
-                "sinal": melhor_local["sinal"],
-                "probabilidade": int(melhor_local["prob_final"]),
-                "confluencia": float(ana.get("confluencia", 0)),
-                "concordantes": int(melhor_local.get("concordantes", 0)),
-                "consenso": int(melhor_local.get("consenso", 1)),
-                "estrategia": melhor_local["estrategia"],
-                "estrategia_fmt": ana["estrategia_fmt"],
-                "analise": ana,
-                "data": data
-            })
-            diagnostico = ana
-        else:
-            try:
-                diag = _indicadores_confluencia(data, None)
-                diag.update({
-                    "ativo": ativo,
-                    "direcao": None,
-                    "probabilidade": 0,
-                    "estrategia": None,
-                    "estrategia_fmt": "Sem sinal validado",
-                    "grafico": [float(x) for x in data["close"][-30:]],
-                    "motivos": diag.get("confluencias", [])
-                })
-                diagnostico = diag
-            except Exception as exc_diag:
-                print(f"⚠️ Diagnóstico falhou em {ativo}: {exc_diag}")
-
-        return {
-            "ativo": ativo,
-            "data": data,
-            "cache_key": cache_key,
-            "candidatos": candidatos_globais,
-            "diagnostico": diagnostico,
-            "erro": None
-        }
-    except Exception as exc:
-        print(f"⚠️ Falha isolada na análise de {ativo}: {exc}")
-        return {
-            "ativo": ativo,
-            "data": None,
-            "cache_key": cache_key,
-            "candidatos": [],
-            "diagnostico": None,
-            "erro": str(exc)
-        }
-
-
 # ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT =================
 def bot_loop():
-    ohlc_cache = {}
-
     while True:
         try:
             usuarios_ativos = list(DADOS_USUARIOS.items())
@@ -3245,9 +2609,6 @@ def bot_loop():
 
             agora_scan = agora_brasilia()
             now_ts = time.time()
-
-            # Limpeza do cache de dados OHLC a cada 5 segundos
-            ohlc_cache = {k: v for k, v in ohlc_cache.items() if now_ts - v["time"] < 15}
 
             for user_email, st in usuarios_ativos:
                 try:
@@ -3291,26 +2652,20 @@ def bot_loop():
                     selecionados_usuario = [a for a in st.get("selected_assets", []) if a in ativos_mercado]
                     ativos = selecionados_usuario if selecionados_usuario else ativos_mercado
 
-                    # COLETA E ANÁLISE EM TEMPO REAL
-                    # Ao clicar em START, o motor agenda os dados de cada ativo em
-                    # background e analisa imediatamente tudo que já estiver disponível.
-                    # Não existe etapa separada de "pré-análise" nem contagem de 30 velas.
-                    # O histórico técnico necessário é usado apenas internamente pelos
-                    # indicadores; ele nunca bloqueia o início da sessão.
-                    ativos = list(dict.fromkeys(ativos))
-                    for ativo_rt in ativos:
-                        ticker_rt = MAPA_TICKERS.get(ativo_rt, ativo_rt)
-                        if obter_cache_ohlc_background(ticker_rt, tf) is None:
-                            solicitar_dados_background(ticker_rt, tf)
+                    # A análise começa imediatamente. Não existe mais etapa de warmup
+                    # nem espera de 5 minutos. A coleta de dados ocorre em background.
                     st["warmup_concluido"] = True
                     st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
-                    st["startup_lock_until"] = 0.0
+                    startup_remaining = 0.0
 
                     # 🛡️ CONSULTA DO CALENDÁRIO ANTES DA VARREDURA
                     # A consulta é feita uma vez por ciclo, e não uma vez por ativo.
                     # Assim, os ativos realmente bloqueados são retirados da lista de
                     # análise, enquanto todos os demais continuam normalmente.
-                    calendario_ok = atualizar_calendario_investing()
+                    # Calendário também não pode bloquear o motor. A atualização é
+                    # disparada em background e o loop usa somente o último snapshot confirmado.
+                    _agendar_calendario_investing_async()
+                    calendario_ok = bool(INVESTING_CALENDAR_CACHE.get("ok", False))
                     eventos_calendario = INVESTING_CALENDAR_CACHE.get("events", []) if calendario_ok else []
 
                     ativos_bloqueados = set()
@@ -3368,108 +2723,84 @@ def bot_loop():
                         )
                         continue
 
-                    # 2. VARREDURA ASSÍNCRONA: nenhum ativo espera outro.
-                    # A coleta de candles continua em background e, assim que um ticker
-                    # está pronto, sua análise CPU é agendada no executor persistente.
-                    # O bot_loop segue livre para atualizar painel, timer e sinais.
+                    # 2. VARREDURA GLOBAL EM TEMPO REAL: analisa todos os ativos disponíveis,
+                    # depois escolhe apenas o candidato mais forte. Isso impede a cascata
+                    # de alertas aleatórios quando existem várias oportunidades.
+                    # Dispara todas as coletas necessárias antes do processamento local.
+                    # Open/OTC que compartilham proxy público usam a mesma tarefa.
+                    tickers_agendados = set()
+                    for ativo_pre in ativos_scan:
+                        ticker_pre = MAPA_TICKERS.get(ativo_pre, ativo_pre)
+                        if ticker_pre not in tickers_agendados:
+                            tickers_agendados.add(ticker_pre)
+                            solicitar_dados_async(ticker_pre, tf)
+
                     candidatos_globais = []
                     diagnostico_melhor = None
-                    melhor_diag_chave = (-1, -1, -1, -1)
+                    melhor_diag_chave = (-1, -1, -1)
 
-                    total_ativos_scan = len(ativos_scan)
-                    dados_para_scan = {}
-                    for ativo_scan in ativos_scan:
-                        ticker_scan = MAPA_TICKERS.get(ativo_scan, ativo_scan)
-                        cache_key_scan = f"{ticker_scan}_{tf}"
-                        data_scan = obter_cache_ohlc_background(ticker_scan, tf)
-                        if data_scan is not None and len(data_scan.get("close", [])) >= 30:
-                            dados_para_scan[ativo_scan] = data_scan
-                            ohlc_cache[cache_key_scan] = {"data": data_scan, "time": time.time()}
-                            agendar_analise_background(
-                                user_email, st, ativo_scan, tf, user_est, data_scan
-                            )
+                    for ativo in ativos_scan:
+                        if not st.get("bot_iniciado") or st.get("bot_pausado"):
+                            break
+                        st["ativo_atual"] = ativo
+                        ticker = MAPA_TICKERS.get(ativo, ativo)
+                        # Agenda a coleta sem bloquear a varredura. O ativo só é analisado
+                        # quando houver um snapshot real no cache.
+                        data = solicitar_dados_async(ticker, tf)
+                        if data is None:
+                            st["ultimo_sinal"] = (f"<div class='system-console'>🔄 COLETANDO DADOS: <b>{ativo}</b> • M{tf}<br>"
+                                                   f"<span style='color:#00d9ff'>Os demais ativos continuam sendo processados em paralelo.</span></div>")
+                            continue
+
+                        if user_est == "TODAS":
+                            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+                        elif "," in str(user_est):
+                            estrategias_para_analisar = [e.strip() for e in user_est.split(",") if e.strip() in LISTA_ESTRATEGIAS]
+                        elif user_est in LISTA_ESTRATEGIAS:
+                            estrategias_para_analisar = [user_est]
                         else:
-                            solicitar_dados_background(ticker_scan, tf)
+                            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
 
-                    prontos_scan = list(dados_para_scan.keys())
-                    aguardando_dados = max(0, total_ativos_scan - len(prontos_scan))
+                        candidatos = []
+                        for est_nome in estrategias_para_analisar:
+                            sinal_test, prob_test, analise_test = analisar_estrategia_detalhada(data, est_nome)
+                            if sinal_test:
+                                candidatos.append({"sinal": sinal_test, "prob": int(prob_test), "estrategia": est_nome, "analise": analise_test})
 
-                    with ANALYSIS_STATE_LOCK:
-                        resultados_validos = []
-                        for ativo_scan in prontos_scan:
-                            resultado = st.get("analysis_results", {}).get(ativo_scan)
-                            data_scan = dados_para_scan.get(ativo_scan)
-                            if not resultado or data_scan is None:
-                                continue
-                            if resultado.get("_assinatura") != _assinatura_dados_analise(data_scan):
-                                continue
-                            resultados_validos.append(resultado)
+                        # Quando TODAS está selecionado, uma única estratégia isolada não libera sinal.
+                        # Exigimos concordância real de pelo menos 2 estratégias para reduzir ruído.
+                        if user_est == "TODAS":
+                            direcoes_validas = {d for d in ("CALL", "PUT") if sum(1 for x in candidatos if x["sinal"] == d) >= 2}
+                            candidatos = [x for x in candidatos if x["sinal"] in direcoes_validas]
 
-                        inflight_count = sum(
-                            1 for a in prontos_scan
-                            if a in st.get("analysis_inflight", set())
-                        )
+                        # Bônus somente quando há concordância real entre estratégias.
+                        for cand in candidatos:
+                            concordantes = sum(1 for x in candidatos if x["sinal"] == cand["sinal"] and x["estrategia"] != cand["estrategia"])
+                            cand["concordantes"] = concordantes
+                            cand["prob_final"] = min(98, int(cand["prob"]) + min(5, concordantes * 2))
 
-                    concluidos_reais = len(resultados_validos)
-                    if not prontos_scan:
-                        st["ativo_atual"] = (
-                            f"COLETANDO DADOS • 0/{total_ativos_scan} PRONTOS"
-                        )
-                        st["warmup_status"] = "ANÁLISE EM TEMPO REAL • COLETA EM BACKGROUND"
-                        st["ultimo_sinal"] = (
-                            "<div class='system-console' style='color:#f59e0b;'>"
-                            "⚡ <b>COLETA EM TEMPO REAL</b><br>"
-                            f"Coletando dados dos {total_ativos_scan} ativos em paralelo.<br>"
-                            "A análise começa automaticamente assim que cada ativo estiver pronto."
-                            "</div>"
-                        )
-                        continue
+                        if candidatos:
+                            melhor_local = max(candidatos, key=lambda x:(x["prob_final"], x["analise"].get("confluencia",0), x["concordantes"]))
+                            ana = dict(melhor_local["analise"])
+                            ana.update({
+                                "ativo": ativo, "direcao": melhor_local["sinal"], "probabilidade": melhor_local["prob_final"],
+                                "estrategia": melhor_local["estrategia"],
+                                "estrategia_fmt": NOME_ESTRATEGIAS_DISPLAY.get(melhor_local["estrategia"], melhor_local["estrategia"]),
+                                "grafico": [float(x) for x in data["close"][-30:]],
+                                "motivos": ana.get("confluencias", []),
+                                "estrategias_concordantes": [NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"]) for x in candidatos if x["sinal"] == melhor_local["sinal"]]
+                            })
+                            candidatos_globais.append({"ativo":ativo,"sinal":melhor_local["sinal"],"probabilidade":int(melhor_local["prob_final"]),"confluencia":float(ana.get("confluencia",0)),"concordantes":int(melhor_local["concordantes"]),"estrategia":melhor_local["estrategia"],"estrategia_fmt":ana["estrategia_fmt"],"analise":ana,"data":data})
+                            chave_diag=(int(melhor_local["prob_final"]),float(ana.get("confluencia",0)),int(melhor_local["concordantes"]))
+                            if chave_diag>melhor_diag_chave:
+                                melhor_diag_chave=chave_diag; diagnostico_melhor=ana
+                        else:
+                            diag=_indicadores_confluencia(data,None)
+                            diag.update({"ativo":ativo,"direcao":None,"probabilidade":0,"estrategia":None,"estrategia_fmt":"Sem sinal validado","grafico":[float(x) for x in data["close"][-30:]],"motivos":diag.get("confluencias",[])})
+                            if diagnostico_melhor is None:
+                                diagnostico_melhor=diag
 
-                    if not resultados_validos:
-                        st["ativo_atual"] = (
-                            f"ANÁLISE EM PARALELO • 0/{len(prontos_scan)} CONCLUÍDOS"
-                            + (f" • {aguardando_dados} AGUARDANDO DADOS" if aguardando_dados else "")
-                            + (f" • {inflight_count} EM PROCESSAMENTO" if inflight_count else "")
-                        )
-                        st["warmup_status"] = "ANÁLISE EM TEMPO REAL • PROCESSANDO EM PARALELO"
-                        continue
-
-                    # Mostra progresso real e não espera os ativos ainda em processamento.
-                    ultimo_resultado = max(
-                        resultados_validos,
-                        key=lambda r: float(r.get("_concluido_em", 0) or 0)
-                    )
-                    st["ativo_atual"] = (
-                        f"ANALISANDO • {ultimo_resultado.get('ativo', '--')} • "
-                        f"{concluidos_reais}/{len(prontos_scan)} CONCLUÍDOS"
-                        + (f" • {aguardando_dados} AGUARDANDO DADOS" if aguardando_dados else "")
-                        + (f" • {inflight_count} EM PROCESSAMENTO" if inflight_count else "")
-                    )
-                    st["warmup_status"] = "ANÁLISE EM TEMPO REAL • MOTOR PARALELO"
-
-                    # Consolida somente resultados da assinatura atual.
-                    for resultado_scan in resultados_validos:
-                        data_result = resultado_scan.get("data")
-                        cache_key_result = resultado_scan.get("cache_key")
-                        if data_result is not None and cache_key_result:
-                            ohlc_cache[cache_key_result] = {"data": data_result, "time": time.time()}
-
-                        candidatos_globais.extend(resultado_scan.get("candidatos") or [])
-                        diag_result = resultado_scan.get("diagnostico")
-                        if diag_result is not None:
-                            chave_diag = (
-                                int(diag_result.get("consenso_estrategias", 0) or 0),
-                                float(diag_result.get("confluencia", 0)),
-                                int(diag_result.get("confirmacoes", 0)),
-                                int(diag_result.get("probabilidade", 0))
-                            )
-                            if diagnostico_melhor is None or chave_diag > melhor_diag_chave:
-                                melhor_diag_chave = chave_diag
-                                diagnostico_melhor = diag_result
-
-                    if diagnostico_melhor is not None and (
-                        not st.get("aguardando_confirmacao") or st.get("analise_atual") is None
-                    ):
+                    if diagnostico_melhor is not None and (not st.get("aguardando_confirmacao") or st.get("analise_atual") is None):
                         st["analise_atual"] = diagnostico_melhor
 
                     # Enquanto há alerta confirmado/pendente, a varredura continua,
@@ -3480,7 +2811,7 @@ def bot_loop():
                         # Ordena todas as oportunidades pela mesma regra usada pelo Vision Pro.
                         candidatos_ordenados = sorted(
                             candidatos_globais,
-                            key=lambda x: (x.get("consenso", 1), x["confluencia"], x["concordantes"], x["probabilidade"]),
+                            key=lambda x: (x["probabilidade"], x["confluencia"], x["concordantes"]),
                             reverse=True
                         )
 
@@ -3508,11 +2839,7 @@ def bot_loop():
                     else:
                         melhor_candidato = None
 
-                    # Não existe mais trava temporal de 5 minutos. O único bloqueio
-                    # para um alerta é a própria qualidade da leitura: confluência,
-                    # tendência, consenso entre estratégias e janela de entrada.
-                    minimo_consenso = 2 if len(estrategias_global) > 1 else 1
-                    if melhor_candidato and melhor_candidato["probabilidade"] >= 82 and int(melhor_candidato.get("consenso", 1)) >= minimo_consenso and float(melhor_candidato.get("confluencia", 0)) >= 72 and not st.get("aguardando_confirmacao"):
+                    if melhor_candidato and melhor_candidato["probabilidade"] >= 80 and not st.get("aguardando_confirmacao"):
                         agora = agora_brasilia()
                         total_seg = tf * 60
                         seg_pass = (agora.minute % tf) * 60 + agora.second
