@@ -667,22 +667,65 @@ async function dispararNotificacaoNativa(titulo,corpo,id){if(!('Notification'in 
 
 function urlBase64ToUint8Array(base64String){const padding='='.repeat((4-base64String.length%4)%4);const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(base64);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));}
 async function ativarNotificacoesEmSegundoPlano(){
+    const btn=document.getElementById('btn-enable-notify');
+    const erro=(msg)=>{console.error('[Vision Push]',msg);alert('Web Push: '+msg);if(btn)btn.innerText='🔔 TENTAR ATIVAR ALERTAS';};
     try{
-        if(!('Notification'in window)||!('serviceWorker'in navigator)||!('PushManager'in window)){alert('Este navegador não oferece Web Push neste dispositivo.');return}
-        const permissao=await Notification.requestPermission();
-        if(permissao!=='granted'){alert('Permissão de notificações não concedida.');return}
-        const cfg=await fetch('/push/config',{cache:'no-store'}).then(r=>r.json());
-        if(!cfg.ok||!cfg.public_key){alert('Notificações em segundo plano ainda não estão configuradas no servidor.');return}
+        if(location.protocol!=='https:' && location.hostname!=='localhost') return erro('O Vision Pro precisa estar em HTTPS para Web Push.');
+        if(!('Notification'in window)) return erro('O Chrome deste dispositivo não disponibiliza a API de notificações.');
+        if(!('serviceWorker'in navigator)) return erro('O Chrome não disponibilizou Service Worker neste contexto.');
+        if(!('PushManager'in window)) return erro('O Chrome não disponibilizou PushManager neste dispositivo.');
+
+        const permissao=Notification.permission==='granted' ? 'granted' : await Notification.requestPermission();
+        if(permissao!=='granted') return erro('A permissão do Chrome está como '+permissao+'. Abra as permissões do site e deixe Notificações como Permitir.');
+
+        const cfgResp=await fetch('/push/config',{cache:'no-store'});
+        const cfg=await cfgResp.json().catch(()=>({}));
+        if(!cfgResp.ok || !cfg.ok || !cfg.public_key){
+            return erro(cfg.error || 'O servidor não está pronto para Web Push. Confira pywebpush e as 3 variáveis VAPID no Render.');
+        }
+        let applicationServerKey;
+        try{applicationServerKey=urlBase64ToUint8Array(cfg.public_key);}catch(e){return erro('A VAPID_PUBLIC_KEY do Render é inválida. Gere novamente o par VAPID e mantenha a pública correspondente à privada.');}
+        if(applicationServerKey.length!==65 || applicationServerKey[0]!==4){
+            return erro('A VAPID_PUBLIC_KEY não tem o formato P-256 esperado pelo Chrome (65 bytes).');
+        }
+
         const reg=await navigator.serviceWorker.ready;
+        if(!reg || !reg.pushManager) return erro('O Service Worker ficou pronto, mas o PushManager não está disponível.');
+
         let sub=await reg.pushManager.getSubscription();
-        if(!sub){sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(cfg.public_key)});}
-        const body=sub.toJSON();
+        // Se existir uma assinatura criada com outra VAPID public key, recria.
+        if(sub && sub.options && sub.options.applicationServerKey){
+            try{
+                const atual=new Uint8Array(sub.options.applicationServerKey);
+                if(atual.length!==applicationServerKey.length || atual.some((v,i)=>v!==applicationServerKey[i])){
+                    await sub.unsubscribe();
+                    sub=null;
+                }
+            }catch(e){ /* alguns browsers não expõem a chave anterior; mantém a assinatura */ }
+        }
+        if(!sub){
+            sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey});
+        }
+        const body=sub.toJSON ? sub.toJSON() : {endpoint:sub.endpoint,keys:{p256dh:btoa(String.fromCharCode(...new Uint8Array(sub.getKey('p256dh')))),auth:btoa(String.fromCharCode(...new Uint8Array(sub.getKey('auth'))))}};
         const r=await fetch('/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscription:body})});
-        const d=await r.json();
-        const b=document.getElementById('btn-enable-notify');
-        if(d.ok){if(b)b.innerText='✅ ALERTAS EM SEGUNDO PLANO ATIVOS';toast('Notificações ativas mesmo fora da página');}
-        else alert(d.error||'Não foi possível ativar as notificações.');
-    }catch(e){console.error(e);alert('Não foi possível ativar as notificações em segundo plano. Verifique a permissão do navegador.');}
+        const d=await r.json().catch(()=>({}));
+        if(!r.ok || !d.ok) return erro(d.error || ('O servidor recusou a inscrição (HTTP '+r.status+').'));
+        if(btn)btn.innerText='✅ ALERTAS EM SEGUNDO PLANO ATIVOS';
+        toast('Web Push ativado neste celular.');
+        // Confirma a cadeia inteira: navegador → Render → push service → celular.
+        try{
+            const teste=await fetch('/push/test',{method:'POST',headers:{'Content-Type':'application/json'}});
+            const td=await teste.json().catch(()=>({}));
+            if(!teste.ok || !td.ok) console.warn('[Vision Push] inscrição salva, mas teste de envio falhou:',td.error||teste.status);
+        }catch(e){console.warn('[Vision Push] teste não executado:',e);}
+    }catch(e){
+        console.error('[Vision Push] erro detalhado:',e);
+        const nome=e&&e.name?e.name:''; const msg=e&&e.message?e.message:'';
+        if(nome==='NotAllowedError') return erro('Chrome bloqueou a inscrição Push. Verifique Notificações do site e tente novamente após recarregar a página.');
+        if(nome==='InvalidStateError') return erro('O Service Worker ainda não está pronto. Recarregue o Vision Pro e tente novamente.');
+        if(nome==='AbortError') return erro('O Chrome cancelou a inscrição Push. Tente novamente com a página aberta e desbloqueada.');
+        return erro((nome?nome+': ':'')+(msg||'falha desconhecida ao criar a inscrição Push.'));
+    }
 }
 function solicitarPermissaoNotificacao(){ativarNotificacoesEmSegundoPlano();}
 function toggleAtivosBloqueados(){const p=document.getElementById('news-locked-panel');const b=document.getElementById('news-locked-toggle');if(!p||!b)return;p.classList.toggle('open');const n=(latestData&&latestData.news_blocked_assets||[]).length;b.innerText=(p.classList.contains('open')?'🔽 OCULTAR':'🔒 VER')+' ATIVOS BLOQUEADOS ('+n+')'}
@@ -1784,7 +1827,12 @@ def _indicadores_confluencia(data, direcao=None):
     micro=_microtendencia_curta(c,o)
     micro_dir=micro.get("direcao","INDEFINIDA")
     micro_score=float(micro.get("score",50.0) or 50.0)
-    micro_contra_forte=bool((direcao=="CALL" and micro_dir=="BAIXA" and micro_score>=70) or (direcao=="PUT" and micro_dir=="ALTA" and micro_score>=70))
+    # REGRA ABSOLUTA: nunca operar contra a microtendência.
+    # Antes o bloqueio dependia de score >= 70, permitindo que uma micro
+    # tendência contrária moderada liberasse uma entrada. Isso é indesejado
+    # para o filtro de timing do Vision Pro.
+    micro_contra=bool((direcao=="CALL" and micro_dir=="BAIXA") or (direcao=="PUT" and micro_dir=="ALTA"))
+    micro_contra_forte=bool(micro_contra and micro_score>=70)
     micro_a_favor=bool((direcao=="CALL" and micro_dir=="ALTA") or (direcao=="PUT" and micro_dir=="BAIXA"))
     volume=np.asarray(data.get("volume",[]),dtype=float)
     volume_disponivel=False; volume_ratio=0.0
@@ -1838,7 +1886,10 @@ def _indicadores_confluencia(data, direcao=None):
             "volume_disponivel":volume_disponivel,"tendencia":tendencia,"suporte":suporte,"resistencia":resistencia,
             "microtendencia":micro_dir,"microtendencia_score":micro_score,"microtendencia_forca":micro.get("forca","NEUTRA"),
             "microtendencia_impulso":bool(micro.get("impulso",False)),"microtendencia_detalhe":micro.get("detalhe",""),
+            "microtendencia_contra":micro_contra,
             "microtendencia_contra_forte":micro_contra_forte,
+            "macrotendencia":tendencia,
+            "macrotendencia_contra":bool((direcao=="CALL" and tendencia=="BAIXA") or (direcao=="PUT" and tendencia=="ALTA")),
             "confluencia":confluencia,"confluencias":itens}
 
 def _resumo_confluencias_direcionais(diag):
@@ -1875,10 +1926,12 @@ def _painel_decisao(data):
     # ela não conta como confirmação direcional.
     call_tend_ok=tendencia=="ALTA"
     put_tend_ok=tendencia=="BAIXA"
-    call_micro_ok=not bool(call.get("microtendencia_contra_forte"))
-    put_micro_ok=not bool(put.get("microtendencia_contra_forte"))
-    call_apto=call_tend_ok and call_micro_ok and call_n>=2
-    put_apto=put_tend_ok and put_micro_ok and put_n>=2
+    call_micro_ok=not bool(call.get("microtendencia_contra"))
+    put_micro_ok=not bool(put.get("microtendencia_contra"))
+    call_macro_ok=not bool(call.get("macrotendencia_contra"))
+    put_macro_ok=not bool(put.get("macrotendencia_contra"))
+    call_apto=call_tend_ok and call_macro_ok and call_micro_ok and call_n>=2
+    put_apto=put_tend_ok and put_macro_ok and put_micro_ok and put_n>=2
 
     # Score mínimo baixo o suficiente para permitir 2 confirmações, mas evita
     # validar combinações muito fracas. A contagem de confirmações é o gatilho principal.
@@ -1919,15 +1972,21 @@ def _painel_decisao(data):
             gate="BLOQUEADO • tendência sem direção clara."
         elif tendencia=="ALTA":
             if not call_micro_ok:
-                explicacao=f"CALL alinhado à tendência principal, mas a microtendência está BAIXA ({float(call.get('microtendencia_score',50) or 50):.0f}/100)."
-                gate="BLOQUEADO • microtendência curta contra o CALL."
+                explicacao=f"CALL bloqueado: microtendência está BAIXA ({float(call.get('microtendencia_score',50) or 50):.0f}/100)."
+                gate="BLOQUEADO • nunca operar contra a microtendência."
+            elif not call_macro_ok:
+                explicacao="CALL bloqueado: macrotendência está BAIXA."
+                gate="BLOQUEADO • nunca operar contra a macrotendência."
             else:
                 explicacao=f"CALL em tendência de alta, mas encontrou apenas {call_n} confirmação(ões) direcional(is); mínimo: 2."
                 gate="AGUARDAR • falta confirmação."
         elif tendencia=="BAIXA":
             if not put_micro_ok:
-                explicacao=f"PUT alinhado à tendência principal, mas a microtendência está ALTA ({float(put.get('microtendencia_score',50) or 50):.0f}/100)."
-                gate="BLOQUEADO • microtendência curta contra o PUT."
+                explicacao=f"PUT bloqueado: microtendência está ALTA ({float(put.get('microtendencia_score',50) or 50):.0f}/100)."
+                gate="BLOQUEADO • nunca operar contra a microtendência."
+            elif not put_macro_ok:
+                explicacao="PUT bloqueado: macrotendência está ALTA."
+                gate="BLOQUEADO • nunca operar contra a macrotendência."
             else:
                 explicacao=f"PUT em tendência de baixa, mas encontrou apenas {put_n} confirmação(ões) direcional(is); mínimo: 2."
                 gate="AGUARDAR • falta confirmação."
@@ -2014,8 +2073,10 @@ def analisar_estrategia_detalhada(data, estrategia):
     if (sinal=="CALL" and tendencia!="ALTA") or (sinal=="PUT" and tendencia!="BAIXA"):
         return None, 0, indicadores
 
-    # Reforço de timing: microtendência forte contra o setup bloqueia a entrada.
-    if bool(indicadores.get("microtendencia_contra_forte")):
+    # GATE ABSOLUTO: a entrada precisa estar alinhada com macro e microtendência.
+    # Não importa se a microtendência contrária é moderada ou forte: se estiver
+    # em sentido oposto ao sinal, o setup é descartado.
+    if bool(indicadores.get("macrotendencia_contra")) or bool(indicadores.get("microtendencia_contra")):
         return None, 0, indicadores
 
     fortes=_resumo_confluencias_direcionais(indicadores)
@@ -2193,7 +2254,21 @@ def enviar_web_push(user_email, titulo, corpo, tag=None, url='/'):
 def push_config():
     user=session.get('user')
     if not user: return jsonify({"ok":False,"error":"Sessão expirada"}),401
-    return jsonify({"ok":_push_configurado(),"public_key":VAPID_PUBLIC_KEY if _push_configurado() else ""})
+    if not WEBPUSH_DISPONIVEL:
+        return jsonify({"ok":False,"error":"pywebpush não está instalado no servidor. Confira o requirements.txt e faça um novo deploy no Render."}),503
+    if not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
+        return jsonify({"ok":False,"error":"VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY não estão configuradas no Render."}),503
+    return jsonify({"ok":True,"public_key":VAPID_PUBLIC_KEY})
+
+@app.route('/push/test', methods=['POST'])
+def push_test():
+    user=session.get('user')
+    if not user: return jsonify({"ok":False,"error":"Sessão expirada"}),401
+    if not _push_configurado(): return jsonify({"ok":False,"error":"Web Push não está configurado no servidor."}),503
+    enviados=enviar_web_push(user, '🔔 TESTE VISION PRO', 'Web Push ativado com sucesso neste celular.', tag='vision-push-test')
+    if enviados < 1:
+        return jsonify({"ok":False,"error":"A inscrição foi salva, mas o servidor não conseguiu enviar o Push de teste. Verifique VAPID e o log do Render."}),502
+    return jsonify({"ok":True,"enviados":enviados})
 
 @app.route('/push/subscribe', methods=['POST'])
 def push_subscribe():
