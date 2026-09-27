@@ -402,6 +402,7 @@ HTML_INDEX = """
         .chart-wrap{padding:10px 12px 12px}.chart{width:100%;height:150px;display:block;background:#080e16;border:1px solid #172333;border-radius:10px}.chart-grid{stroke:#172333;stroke-width:1}.chart-line{fill:none;stroke:#00d9ff;stroke-width:2.2;vector-effect:non-scaling-stroke}.chart-area{fill:url(#areaGrad);opacity:.25}.chart-empty{fill:#657489;font-size:11px}
         .confluence{display:grid;gap:7px}.conf-row{display:grid;grid-template-columns:110px 1fr 42px;align-items:center;gap:8px;font-size:9px}.conf-name{color:#a6b3c4;font-weight:800}.conf-bar{height:7px;background:#172231;border-radius:99px;overflow:hidden}.conf-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,#38bdf8,#22c55e)}.conf-points{text-align:right;color:#d9e5f1;font-family:'JetBrains Mono';font-size:9px}
         .analysis-reasons{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.reason{padding:9px;border:1px solid #182536;background:#0b121c;border-radius:10px}.reason b{font-size:9px}.reason div{font-size:9px;color:#75859a;margin-top:3px;line-height:1.4}.ok{color:#4ade80}.warn{color:#fbbf24}.bad{color:#fb7185}
+        .decision-panel{display:grid;gap:9px;margin-bottom:11px}.decision-summary{display:grid;grid-template-columns:1fr 1fr;gap:8px}.decision-side{padding:10px;border:1px solid #1b2b3c;background:#0a111b;border-radius:11px}.decision-side.call{border-color:rgba(34,197,94,.28)}.decision-side.put{border-color:rgba(251,113,133,.28)}.decision-side.active{box-shadow:0 0 0 1px rgba(0,217,255,.18),0 0 18px rgba(0,217,255,.06)}.decision-side-head{display:flex;justify-content:space-between;align-items:center;gap:8px}.decision-side-title{font-size:11px;font-weight:900}.decision-score{font-family:'JetBrains Mono';font-size:14px;font-weight:900}.decision-meter{height:7px;background:#172231;border-radius:99px;overflow:hidden;margin-top:8px}.decision-meter>div{height:100%;border-radius:99px;background:linear-gradient(90deg,#38bdf8,#22c55e)}.decision-sub{font-size:8px;color:#75859a;margin-top:7px;line-height:1.4}.decision-verdict{padding:11px;border:1px solid #1b2b3c;background:#080f18;border-radius:11px;display:grid;gap:4px}.decision-verdict-head{display:flex;justify-content:space-between;align-items:center;gap:8px}.decision-verdict-title{font-size:10px;font-weight:900;letter-spacing:.5px}.decision-badge{padding:5px 8px;border-radius:8px;font-size:8px;font-weight:900}.decision-badge.call{color:#86efac;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2)}.decision-badge.put{color:#fda4af;background:rgba(251,113,133,.08);border:1px solid rgba(251,113,133,.2)}.decision-badge.wait{color:#fbbf24;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2)}.decision-text{font-size:9px;color:#aebdcd;line-height:1.45}.decision-reasons{display:grid;gap:5px;margin-top:2px}.decision-reason{font-size:8px;color:#8796a9;padding:6px 8px;border-radius:7px;background:#0b131e;border:1px solid #182536}.decision-reason strong{color:#dce6f2}.decision-gate{font-size:8px;color:#66758a}
         .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.stat-box{background:#0b121d;border:1px solid #182536;border-radius:12px;padding:11px;text-align:center}.stat-k{font-size:8px;color:#66758a;font-weight:900;text-transform:uppercase}.stat-v{font-family:'JetBrains Mono';font-size:19px;font-weight:900;margin-top:3px}.win{color:#4ade80}.loss{color:#fb7185}.blue{color:#60a5fa}
         .session-bar{height:7px;background:#182231;border-radius:99px;overflow:hidden;margin-top:10px}.session-fill{height:100%;background:linear-gradient(90deg,#16a34a,#4ade80);width:0%;transition:.4s}
         .protection{display:grid;gap:8px}.protection-main{display:flex;justify-content:space-between;gap:8px;align-items:center}.guard-badge{padding:6px 8px;border-radius:8px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.18);font-size:9px;font-weight:900;color:#86efac}.locked-btn{width:100%;padding:10px;border:1px solid rgba(239,68,68,.25);background:rgba(239,68,68,.06);color:#fca5a5;border-radius:9px;font-size:9px;font-weight:900;text-transform:uppercase}.locked-panel{display:none;border:1px solid rgba(239,68,68,.2);background:#080e15;border-radius:10px;padding:8px}.locked-panel.open{display:block}.locked-item{padding:8px;border-left:3px solid #ef4444;background:rgba(239,68,68,.05);border-radius:7px;margin-top:5px;font-size:9px;line-height:1.5}.locked-item:first-child{margin-top:0}.empty{font-size:9px;color:#66758a;text-align:center;padding:8px}
@@ -414,7 +415,7 @@ HTML_INDEX = """
         @media(max-width:1100px){.grid-main{grid-template-columns:1fr}.sidebar{width:210px}.main{width:calc(100% - 210px);margin-left:210px}.signal-meta{grid-template-columns:repeat(2,1fr)}}
         @media(max-width:760px){
             body{padding:0;background:#070b12}.app-shell{display:block}.sidebar{display:none}.main{width:100%;margin:0;padding:12px 10px 86px}.topbar{margin-bottom:11px}.page-title{font-size:16px}.status-pill{font-size:8px;padding:6px 8px}.logout{font-size:8px;padding:6px 8px}.mobile-only{display:block}.desktop-only{display:none}
-            .grid-main{display:flex;flex-direction:column;gap:10px}.card{border-radius:13px}.card-pad{padding:12px}.hero{min-height:280px}.signal-direction{font-size:35px}.prob-value{font-size:28px}.signal-meta{grid-template-columns:repeat(2,1fr)}.analysis-reasons{grid-template-columns:1fr}.conf-row{grid-template-columns:92px 1fr 36px}.chart{height:135px}.stat-grid{grid-template-columns:repeat(2,1fr)}.field-grid{grid-template-columns:1fr}.action-grid{position:sticky;bottom:72px;z-index:20;background:rgba(7,11,18,.92);padding:7px;border:1px solid #182333;border-radius:12px;backdrop-filter:blur(12px)}
+            .grid-main{display:flex;flex-direction:column;gap:10px}.card{border-radius:13px}.card-pad{padding:12px}.hero{min-height:280px}.signal-direction{font-size:35px}.prob-value{font-size:28px}.signal-meta{grid-template-columns:repeat(2,1fr)}.analysis-reasons{grid-template-columns:1fr}.conf-row{grid-template-columns:92px 1fr 36px}.decision-summary{grid-template-columns:1fr 1fr}.decision-side{padding:9px}.decision-side-title{font-size:10px}.decision-score{font-size:13px}.chart{height:135px}.stat-grid{grid-template-columns:repeat(2,1fr)}.field-grid{grid-template-columns:1fr}.action-grid{position:sticky;bottom:72px;z-index:20;background:rgba(7,11,18,.92);padding:7px;border:1px solid #182333;border-radius:12px;backdrop-filter:blur(12px)}
             .mobile-nav{position:fixed;display:grid;grid-template-columns:repeat(7,1fr);left:8px;right:8px;bottom:8px;height:60px;background:rgba(8,14,22,.96);border:1px solid #203044;border-radius:16px;z-index:60;box-shadow:0 10px 35px rgba(0,0,0,.45);padding:4px}.mobile-nav button{border:0;background:transparent;color:#65758a;font-size:7px;font-weight:900;border-radius:11px;min-width:0}.mobile-nav button.active{background:rgba(0,217,255,.08);color:#dffbff}.mobile-nav span{display:block;font-size:15px;margin-bottom:2px}
             .topbar .top-meta{gap:5px}.topbar{gap:6px}.hero-top .mini{max-width:160px}.locked-btn{padding:11px}.section-head{margin-top:2px}.table-card{border-radius:12px}.asset-picker{grid-template-columns:repeat(2,minmax(0,1fr));max-height:360px}.backtest-grid{grid-template-columns:1fr 1fr}.bt-summary{grid-template-columns:repeat(2,1fr)}
         }
@@ -485,6 +486,7 @@ HTML_INDEX = """
                         <div class="card" style="margin-top:12px">
                             <div class="card-head"><div><div class="eyebrow">Confluência técnica</div><div class="card-title">Raio-X do sinal</div></div><div class="mini" id="analysis-direction">Sem sinal</div></div>
                             <div class="card-pad">
+                                <div class="decision-panel" id="decision-panel"><div class="empty">Aguardando dados do mercado...</div></div>
                                 <div class="confluence" id="confluence-list"><div class="empty">Aguardando dados do mercado...</div></div>
                                 <div class="analysis-reasons" id="analysis-reasons"></div>
                             </div>
@@ -527,7 +529,7 @@ HTML_INDEX = """
             <section id="view-analise" class="view">
                 <div class="section-head"><div><h2>📊 Análise detalhada</h2><p>Indicadores e confluências usadas pelo motor.</p></div><div class="asset-tag" id="analysis-asset">AGUARDANDO</div></div>
                 <div class="grid-main">
-                    <div class="card"><div class="card-head"><div><div class="eyebrow">Mercado</div><div class="card-title">Leitura técnica</div></div></div><div class="chart-wrap"><canvas id="market-chart-2" class="chart"></canvas></div><div class="card-pad"><div class="confluence" id="confluence-list-2"></div></div></div>
+                    <div class="card"><div class="card-head"><div><div class="eyebrow">Mercado</div><div class="card-title">Leitura técnica</div></div></div><div class="chart-wrap"><canvas id="market-chart-2" class="chart"></canvas></div><div class="card-pad"><div class="decision-panel" id="decision-panel-2"><div class="empty">Aguardando dados do mercado...</div></div><div class="confluence" id="confluence-list-2"></div></div></div>
                     <div class="card"><div class="card-head"><div><div class="eyebrow">Diagnóstico</div><div class="card-title">Motivos do sinal</div></div></div><div class="card-pad"><div class="analysis-reasons" id="analysis-reasons-2"></div><div style="margin-top:12px" class="metric"><div class="k">Probabilidade estimada</div><div class="v" id="prob-value-2">--%</div></div></div></div>
                 </div>
             </section>
@@ -715,8 +717,10 @@ function renderSignal(d){
     setText('robot-status',d.rodando?'ONLINE':'PARADO');
     setText('top-status',d.rodando?'ANALISANDO':'ONLINE');
 
+    renderDecision(analise,'decision-panel');
     renderConfluence(analise,'confluence-list');
     renderReasons(analise,'analysis-reasons');
+    renderDecision(analise,'decision-panel-2');
     renderConfluence(analise,'confluence-list-2');
     renderReasons(analise,'analysis-reasons-2');
     drawChart(analise.grafico||[],'market-chart');
@@ -724,6 +728,7 @@ function renderSignal(d){
 }
 
 function renderConfluence(a,id){const box=document.getElementById(id);if(!box)return;const items=Array.isArray(a.confluencias)?a.confluencias:[];box.innerHTML=items.length?items.map(x=>`<div class="conf-row"><div class="conf-name">${x.nome||'Indicador'}</div><div class="conf-bar"><div class="conf-fill" style="width:${Math.max(0,Math.min(100,Number(x.pontos)||0))*5}%"></div></div><div class="conf-points">${x.pontos||0}/20</div></div>`).join(''):'<div class="empty">Aguardando dados do mercado...</div>'}
+function renderDecision(a,id){const box=document.getElementById(id);if(!box)return;const d=a&&a.decisao;if(!d){box.innerHTML='<div class="empty">Aguardando dados do mercado...</div>';return}const call=d.call||{},put=d.put||{},ver=String(d.veredito||'AGUARDAR').toUpperCase(),cs=Number(call.score||0),ps=Number(put.score||0),badge=ver==='CALL'?'call':ver==='PUT'?'put':'wait',ca=ver==='CALL'?' active':'',pa=ver==='PUT'?' active':'',reasons=Array.isArray(d.motivos)?d.motivos:[];box.innerHTML=`<div class="decision-summary"><div class="decision-side call${ca}"><div class="decision-side-head"><div class="decision-side-title" style="color:#4ade80">🟢 CALL</div><div class="decision-score">${cs.toFixed(0)}/100</div></div><div class="decision-meter"><div style="width:${Math.max(0,Math.min(100,cs))}%"></div></div><div class="decision-sub">${call.leitura||'Sem confirmação suficiente.'}</div></div><div class="decision-side put${pa}"><div class="decision-side-head"><div class="decision-side-title" style="color:#fb7185">🔴 PUT</div><div class="decision-score">${ps.toFixed(0)}/100</div></div><div class="decision-meter"><div style="width:${Math.max(0,Math.min(100,ps))}%"></div></div><div class="decision-sub">${put.leitura||'Sem confirmação suficiente.'}</div></div></div><div class="decision-verdict"><div class="decision-verdict-head"><div class="decision-verdict-title">DECISÃO DO MOTOR</div><span class="decision-badge ${badge}">${ver==='CALL'?'CALL VALIDADO':ver==='PUT'?'PUT VALIDADO':'AGUARDAR'}</span></div><div class="decision-text">${d.explicacao||'Comparando todos os filtros técnicos.'}</div><div class="decision-reasons">${reasons.slice(0,5).map(x=>`<div class="decision-reason"><strong>${x.tipo||'Filtro'}:</strong> ${x.texto||''}</div>`).join('')}</div><div class="decision-gate">${d.gate||'Sem entrada validada.'}</div></div>`}
 function renderReasons(a,id){const box=document.getElementById(id);if(!box)return;const items=Array.isArray(a.motivos)?a.motivos:[];box.innerHTML=items.length?items.map(x=>`<div class="reason"><b class="${x.status==='ok'?'ok':x.status==='warn'?'warn':'bad'}">${x.status==='ok'?'✓':x.status==='warn'?'•':'×'} ${x.nome||'Indicador'}</b><div>${x.detalhe||''}</div></div>`).join(''):'<div class="empty">Sem diagnóstico disponível.</div>'}
 function drawChart(vals,id){const c=document.getElementById(id);if(!c)return;const ctx=c.getContext('2d');const rect=c.getBoundingClientRect();const w=Math.max(300,Math.floor(rect.width)),h=Math.max(120,Math.floor(rect.height));const dpr=window.devicePixelRatio||1;c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.strokeStyle='#172333';ctx.lineWidth=1;for(let i=1;i<4;i++){const y=i*h/4;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}if(!Array.isArray(vals)||vals.length<2){ctx.fillStyle='#64748b';ctx.font='11px Inter';ctx.fillText('Aguardando candles válidos...',12,20);return}const min=Math.min(...vals),max=Math.max(...vals),range=max-min||1;const pts=vals.map((v,i)=>[i*(w-18)/(vals.length-1)+9,h-10-((v-min)/range)*(h-24)]);ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.strokeStyle='#00d9ff';ctx.lineWidth=2.2;ctx.stroke();ctx.lineTo(pts[pts.length-1][0],h-10);ctx.lineTo(pts[0][0],h-10);ctx.closePath();ctx.fillStyle='rgba(0,217,255,.07)';ctx.fill();const last=pts[pts.length-1];ctx.beginPath();ctx.arc(last[0],last[1],3.5,0,Math.PI*2);ctx.fillStyle='#22c55e';ctx.fill()}
 function renderHistory(hist){const body=document.getElementById('history-table-body');if(!body)return;if(!hist.length){body.innerHTML='<tr><td colspan="3" class="empty">Nenhum histórico.</td></tr>';return}body.innerHTML=hist.map(x=>{const raw=String(x.res||'--');const r=raw.toLowerCase();const cls=r.includes('red')?'history-red':(r.includes('win')?'history-win':'');const label=raw.replace('WinG1','WIN G1').replace('winG1','WIN G1');return `<tr><td>#${x.id||'--'}</td><td>${x.sinal||'--'}</td><td><span class="history-result ${cls}">${label}</span></td></tr>`}).join('')}
@@ -1733,6 +1738,84 @@ def _indicadores_confluencia(data, direcao=None):
             "macd":macd,"macd_signal":macd_signal,"macd_hist":macd_hist,"atr_pct":atr_pct,"volume_ratio":volume_ratio,
             "volume_disponivel":volume_disponivel,"tendencia":tendencia,"suporte":suporte,"resistencia":resistencia,
             "confluencia":confluencia,"confluencias":itens}
+
+def _painel_decisao(data):
+    """Monta o painel comparativo CALL x PUT sem depender de existir sinal.
+    A decisão é apenas o diagnóstico do motor: exige tendência compatível,
+    confluência mínima e vantagem suficiente entre as duas direções.
+    """
+    try:
+        call = _indicadores_confluencia(data, "CALL")
+        put = _indicadores_confluencia(data, "PUT")
+    except Exception as exc:
+        return {"veredito":"AGUARDAR","call":{"score":0},"put":{"score":0},
+                "explicacao":"Não foi possível concluir o diagnóstico deste snapshot.",
+                "gate":f"Filtro técnico indisponível: {exc}","motivos":[]}
+
+    cs=float(call.get("confluencia",0) or 0)
+    ps=float(put.get("confluencia",0) or 0)
+    tendencia=call.get("tendencia") or put.get("tendencia") or "INDEFINIDA"
+    diferenca=abs(cs-ps)
+    minimo=72.0
+
+    def leitura(diag, lado):
+        itens=diag.get("confluencias",[])
+        fortes=sum(1 for x in itens if x.get("status")=="ok" and int(x.get("pontos",0))>=10)
+        fracos=sum(1 for x in itens if x.get("status")!="ok")
+        return f"{fortes} confirmações fortes • {fracos} filtros pendentes"
+
+    # Tendência é um bloqueio estrutural: não basta o score geral ser alto.
+    call_tend_ok=tendencia=="ALTA"
+    put_tend_ok=tendencia=="BAIXA"
+    call_apto=call_tend_ok and cs>=minimo
+    put_apto=put_tend_ok and ps>=minimo
+
+    if call_apto and (not put_apto or (cs>ps and diferenca>=8)):
+        veredito="CALL"
+        explicacao=f"CALL tem maior confluência ({cs:.0f}/100) e a tendência está em ALTA."
+        gate="LIBERADO pelo diagnóstico técnico; estratégias ainda precisam confirmar a entrada."
+    elif put_apto and (not call_apto or (ps>cs and diferenca>=8)):
+        veredito="PUT"
+        explicacao=f"PUT tem maior confluência ({ps:.0f}/100) e a tendência está em BAIXA."
+        gate="LIBERADO pelo diagnóstico técnico; estratégias ainda precisam confirmar a entrada."
+    else:
+        veredito="AGUARDAR"
+        if tendencia=="LATERAL":
+            explicacao="Mercado lateral: o motor não encontrou tendência estrutural suficiente para escolher uma direção."
+            gate="BLOQUEADO • tendência sem direção clara."
+        elif not call_apto and not put_apto:
+            explicacao=f"Nenhum lado atingiu a confluência mínima de {minimo:.0f}/100."
+            gate="BLOQUEADO • confirmação insuficiente."
+        else:
+            explicacao=f"Existe direção dominante, mas a vantagem entre os lados é pequena ({diferenca:.0f} pontos)."
+            gate="BLOQUEADO • conflito técnico; aguardando confirmação."
+
+    motivos=[]
+    if tendencia=="ALTA":
+        motivos.append({"tipo":"Tendência","texto":"Fluxo principal favorece alta; PUT contra-tendência fica bloqueado."})
+    elif tendencia=="BAIXA":
+        motivos.append({"tipo":"Tendência","texto":"Fluxo principal favorece baixa; CALL contra-tendência fica bloqueado."})
+    else:
+        motivos.append({"tipo":"Tendência","texto":"Estrutura lateral; nenhuma direção recebe prioridade estrutural."})
+    motivos.append({"tipo":"Confluência","texto":f"CALL {cs:.0f}/100 × PUT {ps:.0f}/100 • diferença {diferenca:.0f} pontos."})
+    if veredito=="AGUARDAR":
+        motivos.append({"tipo":"Filtro","texto":"O motor exige combinação de tendência + indicadores antes de validar uma direção."})
+    else:
+        vencedor=call if veredito=="CALL" else put
+        bons=[x.get("nome") for x in vencedor.get("confluencias",[]) if x.get("status")=="ok"]
+        if bons:
+            motivos.append({"tipo":"Confirmações","texto":"Ativos: "+", ".join(bons[:4])+ ("..." if len(bons)>4 else "")})
+
+    return {
+        "veredito":veredito,
+        "call":{"score":round(cs,1),"leitura":leitura(call,"CALL"),"tendencia_ok":call_tend_ok},
+        "put":{"score":round(ps,1),"leitura":leitura(put,"PUT"),"tendencia_ok":put_tend_ok},
+        "vantagem":round(diferenca,1),
+        "tendencia":tendencia,
+        "explicacao":explicacao,
+        "gate":gate,
+        "motivos":motivos,
+    }
 
 def analisar_estrategia(data, estrategia, i=-1):
     """Motor legado preservado para compatibilidade; retorna sinal e probabilidade em %."""
@@ -2783,6 +2866,10 @@ def bot_loop():
                             except Exception:
                                 closes_validos = []
                             diag_atual = _indicadores_confluencia(data, None)
+                            try:
+                                diag_atual["decisao"] = _painel_decisao(data)
+                            except Exception:
+                                diag_atual["decisao"] = {"veredito":"AGUARDAR","call":{"score":0},"put":{"score":0},"explicacao":"Diagnóstico comparativo indisponível.","gate":"BLOQUEADO","motivos":[]}
                             diag_atual.update({
                                 "ativo": ativo,
                                 "direcao": None,
@@ -2835,6 +2922,10 @@ def bot_loop():
                             if candidatos:
                                 melhor_local = max(candidatos, key=lambda x:(x["prob_final"], x["analise"].get("confluencia",0), x["concordantes"]))
                                 ana = dict(melhor_local["analise"])
+                                try:
+                                    ana["decisao"] = _painel_decisao(data)
+                                except Exception:
+                                    ana["decisao"] = diag_atual.get("decisao", {})
                                 ana.update({
                                     "ativo": ativo, "direcao": melhor_local["sinal"], "probabilidade": melhor_local["prob_final"],
                                     "estrategia": melhor_local["estrategia"],
@@ -2849,6 +2940,7 @@ def bot_loop():
                                     melhor_diag_chave=chave_diag; diagnostico_melhor=ana
                             else:
                                 diag=_indicadores_confluencia(data,None)
+                                diag["decisao"] = diag_atual.get("decisao", _painel_decisao(data))
                                 diag.update({"ativo":ativo,"direcao":None,"probabilidade":0,"estrategia":None,"estrategia_fmt":"Sem sinal validado","grafico":[float(x) for x in np.asarray(data.get("close", []), dtype=float)[-60:] if np.isfinite(x)],"motivos":diag.get("confluencias",[])})
                                 if diagnostico_melhor is None:
                                     diagnostico_melhor=diag
