@@ -6,3 +6,4 @@ psycopg2-binary
 gunicorn
 websocket-client
 pyquotex @ git+https://github.com/cleitonleonel/pyquotex.git
+pywebpush>=2.0.0
