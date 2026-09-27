@@ -1090,16 +1090,37 @@ NOME_ESTRATEGIAS_DISPLAY = {
 # ================= ATIVOS DIVIDIDOS ABERTO E OTC =================
 ATIVOS_BASE = {
     "FOREX_ABERTO": [
-        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
-        "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCAD", "EURCHF"
+        # Principais
+        "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
+        # Cruzados
+        "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURCAD", "EURNZD",
+        "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
+        "AUDJPY", "AUDCAD", "AUDCHF", "AUDNZD",
+        "CADJPY", "CADCHF", "CHFJPY", "NZDJPY", "NZDCAD", "NZDCHF",
+        # Exóticos / moedas adicionais que podem aparecer na Quotex
+        "USDINR", "USDTRY", "USDZAR", "USDMXN", "USDSGD", "USDHKD",
+        "USDSEK", "USDNOK", "USDDKK", "USDPLN", "USDHUF", "USDCNH",
+        "EURTRY", "EURZAR", "EURPLN", "EURHUF", "GBPZAR", "GBPNOK",
+        "AUDSGD", "CADSGD", "SGDJPY", "TRYJPY", "ZARJPY", "HUFJPY"
     ],
     "CRIPTO_ABERTO": [
         "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "AVAXUSD",
         "LINKUSD", "DOGEUSD", "DOTUSD", "LTCUSD", "TRXUSD"
     ],
     "FOREX_OTC": [
-        "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC", "USDCAD-OTC", "USDCHF-OTC", "NZDUSD-OTC",
-        "EURGBP-OTC", "EURJPY-OTC", "GBPJPY-OTC", "AUDJPY-OTC", "EURAUD-OTC", "EURCAD-OTC", "EURCHF-OTC"
+        # O catálogo OTC acompanha o catálogo Forex. A disponibilidade real do OTC
+        # deve sempre ser validada pela plataforma; o motor nunca inventa candles.
+        *[f"{par}-OTC" for par in [
+            "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
+            "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURCAD", "EURNZD",
+            "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
+            "AUDJPY", "AUDCAD", "AUDCHF", "AUDNZD",
+            "CADJPY", "CADCHF", "CHFJPY", "NZDJPY", "NZDCAD", "NZDCHF",
+            "USDINR", "USDTRY", "USDZAR", "USDMXN", "USDSGD", "USDHKD",
+            "USDSEK", "USDNOK", "USDDKK", "USDPLN", "USDHUF", "USDCNH",
+            "EURTRY", "EURZAR", "EURPLN", "EURHUF", "GBPZAR", "GBPNOK",
+            "AUDSGD", "CADSGD", "SGDJPY", "TRYJPY", "ZARJPY", "HUFJPY"
+        ]],
     ],
     "CRIPTO_OTC": [
         "BTCUSD-OTC", "ETHUSD-OTC", "SOLUSD-OTC", "BNBUSD-OTC", "XRPUSD-OTC", "AVAXUSD-OTC",
@@ -3036,46 +3057,89 @@ def bot_loop():
                         indisponiveis = st.setdefault("warmup_ativos_indisponiveis", set())
                         warmup_analysis = st.setdefault("warmup_analysis", {})
 
-                        def _carregar_30_velas(ativo_w):
+                        # Deduplica por ticker. Aberto e OTC podem usar o mesmo
+                        # proxy público; fazer a mesma requisição duas vezes só aumenta
+                        # latência e pode provocar rate-limit. Uma única coleta alimenta
+                        # todos os ativos que compartilham o ticker público.
+                        grupos_ticker = {}
+                        for ativo_w in ativos:
+                            if ativo_w in warmup_set or ativo_w in indisponiveis:
+                                continue
                             ticker_w = MAPA_TICKERS.get(ativo_w, ativo_w)
+                            grupos_ticker.setdefault(ticker_w, []).append(ativo_w)
+
+                        def _carregar_30_ticker(ticker_w):
                             cache_key_w = f"{ticker_w}_{tf}"
                             cached_w = ohlc_cache.get(cache_key_w)
-                            if cached_w and cached_w.get("data"):
-                                return ativo_w, ticker_w, cache_key_w, cached_w.get("data"), None
+                            if cached_w and cached_w.get("data") is not None:
+                                return ticker_w, cache_key_w, cached_w.get("data"), None
                             try:
                                 data_w = get_data_v2(ticker_w, tf, velas_minimas=30)
-                                return ativo_w, ticker_w, cache_key_w, data_w, None
+                                return ticker_w, cache_key_w, data_w, None
                             except Exception as exc_w:
-                                return ativo_w, ticker_w, cache_key_w, None, exc_w
+                                return ticker_w, cache_key_w, None, exc_w
 
-                        # A quantidade de workers acompanha a quantidade de ativos,
-                        # limitada para não saturar a hospedagem nem as fontes públicas.
-                        workers_w = max(1, min(12, len(ativos)))
-                        with ThreadPoolExecutor(max_workers=workers_w, thread_name_prefix="warmup") as pool_w:
-                            futuros_w = [pool_w.submit(_carregar_30_velas, ativo_w) for ativo_w in ativos
-                                         if ativo_w not in warmup_set and ativo_w not in indisponiveis]
-                            for futuro_w in as_completed(futuros_w):
-                                ativo_w, ticker_w, cache_key_w, data_w, exc_w = futuro_w.result()
-                                if data_w and len(data_w.get("close", [])) >= 30:
-                                    try:
-                                        ohlc_cache[cache_key_w] = {"data": data_w, "time": time.time()}
-                                        diag_w = _indicadores_confluencia(data_w, None)
-                                        warmup_analysis[ativo_w] = {
-                                            "confluencia": float(diag_w.get("confluencia", 0)),
-                                            "tendencia": diag_w.get("tendencia"),
-                                            "rsi": float(diag_w.get("rsi", 50)),
-                                            "timestamp": time.time()
-                                        }
-                                        warmup_set.add(ativo_w)
-                                    except Exception as exc_diag:
-                                        print(f"⚠️ Warmup diagnóstico {ativo_w}: {exc_diag}")
-                                        indisponiveis.add(ativo_w)
-                                else:
-                                    # Algumas fontes não fornecem histórico para certos
-                                    # OTC/ativos. Isso não pode travar os ativos disponíveis.
-                                    indisponiveis.add(ativo_w)
-                                    if exc_w:
-                                        print(f"⚠️ Warmup {ativo_w}: {exc_w}")
+                        tickers_pendentes = list(grupos_ticker.keys())
+                        workers_w = max(1, min(20, len(tickers_pendentes)))
+                        executor_w = ThreadPoolExecutor(max_workers=workers_w, thread_name_prefix="warmup") if tickers_pendentes else None
+                        futuros_w = {}
+                        try:
+                            if executor_w:
+                                for ticker_w in tickers_pendentes:
+                                    futuros_w[executor_w.submit(_carregar_30_ticker, ticker_w)] = ticker_w
+
+                                # A pré-análise tem limite próprio. Uma fonte lenta não
+                                # pode congelar a sessão inteira esperando resposta HTTP.
+                                prazo_w = time.time() + max(5.0, min(10.0, 5.0 + len(tickers_pendentes) * 0.04))
+                                pendentes_w = set(futuros_w)
+                                while pendentes_w and time.time() < prazo_w:
+                                    concluidos_w = [f for f in list(pendentes_w) if f.done()]
+                                    if not concluidos_w:
+                                        time.sleep(0.02)
+                                        continue
+                                    for futuro_w in concluidos_w:
+                                        pendentes_w.discard(futuro_w)
+                                        ticker_w = futuros_w[futuro_w]
+                                        try:
+                                            ticker_ret, cache_key_w, data_w, exc_w = futuro_w.result(timeout=0)
+                                        except Exception as exc_w:
+                                            ticker_ret, cache_key_w, data_w = ticker_w, f"{ticker_w}_{tf}", None
+                                            exc_w = exc_w
+
+                                        aliases_w = grupos_ticker.get(ticker_w, [])
+                                        valido_w = data_w is not None and len(data_w.get("close", [])) >= 30
+                                        if valido_w:
+                                            ohlc_cache[cache_key_w] = {"data": data_w, "time": time.time()}
+                                            try:
+                                                diag_w = _indicadores_confluencia(data_w, None)
+                                                for ativo_w in aliases_w:
+                                                    warmup_analysis[ativo_w] = {
+                                                        "confluencia": float(diag_w.get("confluencia", 0)),
+                                                        "tendencia": diag_w.get("tendencia"),
+                                                        "rsi": float(diag_w.get("rsi", 50)),
+                                                        "timestamp": time.time()
+                                                    }
+                                                    warmup_set.add(ativo_w)
+                                            except Exception as exc_diag:
+                                                print(f"⚠️ Warmup diagnóstico {ticker_w}: {exc_diag}")
+                                                indisponiveis.update(aliases_w)
+                                        else:
+                                            indisponiveis.update(aliases_w)
+                                            if exc_w:
+                                                print(f"⚠️ Warmup {ticker_w}: {exc_w}")
+
+                                # O que não respondeu dentro do limite é isolado.
+                                # Os outros ativos continuam imediatamente.
+                                if pendentes_w:
+                                    for futuro_w in pendentes_w:
+                                        ticker_w = futuros_w[futuro_w]
+                                        futuro_w.cancel()
+                                        aliases_w = grupos_ticker.get(ticker_w, [])
+                                        indisponiveis.update(aliases_w)
+                                        print(f"⚠️ Pré-análise excedeu o tempo: {ticker_w} — ignorado nesta rodada.")
+                        finally:
+                            if executor_w:
+                                executor_w.shutdown(wait=False, cancel_futures=True)
 
                         processados_w = len(warmup_set) + len(indisponiveis)
                         st["warmup_status"] = (
@@ -3197,45 +3261,72 @@ def bot_loop():
                         if cached_scan and cached_scan.get("data") is not None:
                             dados_para_scan[ativo_scan] = cached_scan.get("data")
 
-                    workers_scan = max(1, min(12, total_ativos_scan))
+                    # Executor sem contexto bloqueante: se uma fonte/rotina externa
+                    # ficar presa, o loop principal NÃO espera indefinidamente por ela.
+                    # O ativo problemático entra em quarentena curta e os demais seguem.
+                    workers_scan = max(1, min(16, total_ativos_scan))
                     resultados_scan = []
-                    st["ativo_atual"] = f"VARREDURA PARALELA • 0/{total_ativos_scan} ATIVOS"
-                    st["ultimo_sinal"] = (
-                        "<div class='system-console'>⚡ <b>MOTOR DE ANÁLISE DINÂMICA</b><br>"
-                        f"[ANALISANDO {total_ativos_scan} ATIVOS EM PARALELO...]<br>"
-                        "<span style='color:#00d9ff;'>Nenhum ativo pode travar os demais.</span></div>"
-                    )
-
-                    with ThreadPoolExecutor(max_workers=workers_scan, thread_name_prefix="scan") as pool_scan:
-                        futuros_scan = {
-                            pool_scan.submit(
+                    executor_scan = ThreadPoolExecutor(max_workers=workers_scan, thread_name_prefix="scan")
+                    futuros_scan = {}
+                    try:
+                        for ativo_scan in ativos_scan:
+                            futuros_scan[executor_scan.submit(
                                 _processar_ativo_scan,
                                 ativo_scan,
                                 tf,
                                 user_est,
                                 dados_para_scan.get(ativo_scan)
-                            ): ativo_scan
-                            for ativo_scan in ativos_scan
-                        }
-                        concluidos_scan = 0
-                        for futuro_scan in as_completed(futuros_scan):
-                            ativo_result = futuros_scan[futuro_scan]
-                            concluidos_scan += 1
-                            try:
-                                resultado_scan = futuro_scan.result()
-                            except Exception as exc_scan:
-                                print(f"⚠️ Worker de {ativo_result} falhou: {exc_scan}")
-                                resultado_scan = {
+                            )] = ativo_scan
+
+                        prazo_scan = time.time() + max(4.0, min(12.0, 4.0 + total_ativos_scan * 0.08))
+                        pendentes_scan = set(futuros_scan)
+                        while pendentes_scan and time.time() < prazo_scan:
+                            concluidos_agora = [f for f in list(pendentes_scan) if f.done()]
+                            if not concluidos_agora:
+                                time.sleep(0.02)
+                                continue
+                            for futuro_scan in concluidos_agora:
+                                pendentes_scan.discard(futuro_scan)
+                                ativo_result = futuros_scan[futuro_scan]
+                                try:
+                                    resultado_scan = futuro_scan.result(timeout=0)
+                                except Exception as exc_scan:
+                                    print(f"⚠️ Worker de {ativo_result} falhou: {exc_scan}")
+                                    resultado_scan = {
+                                        "ativo": ativo_result,
+                                        "data": None,
+                                        "cache_key": f"{MAPA_TICKERS.get(ativo_result, ativo_result)}_{tf}",
+                                        "candidatos": [],
+                                        "diagnostico": None,
+                                        "erro": str(exc_scan)
+                                    }
+                                resultados_scan.append(resultado_scan)
+                                st["ativo_atual"] = (
+                                    f"VARREDURA PARALELA • {len(resultados_scan)}/{total_ativos_scan} ATIVOS"
+                                )
+
+                        # Tudo que não terminou dentro do prazo é descartado desta rodada.
+                        # Cancelar evita que uma tarefa pendente seja reutilizada como se
+                        # tivesse travado o motor inteiro.
+                        if pendentes_scan:
+                            for futuro_scan in pendentes_scan:
+                                ativo_result = futuros_scan[futuro_scan]
+                                futuro_scan.cancel()
+                                print(f"⚠️ Ativo isolado excedeu o tempo: {ativo_result} — ignorado nesta rodada.")
+                                resultados_scan.append({
                                     "ativo": ativo_result,
-                                    "data": None,
+                                    "data": dados_para_scan.get(ativo_result),
+                                    "cache_key": f"{MAPA_TICKERS.get(ativo_result, ativo_result)}_{tf}",
                                     "candidatos": [],
                                     "diagnostico": None,
-                                    "erro": str(exc_scan)
-                                }
-                            resultados_scan.append(resultado_scan)
-                            st["ativo_atual"] = (
-                                f"VARREDURA PARALELA • {concluidos_scan}/{total_ativos_scan} ATIVOS"
-                            )
+                                    "erro": "timeout isolado"
+                                })
+                    finally:
+                        # Não esperar por uma tarefa problemática. O bot precisa
+                        # continuar o próximo ciclo imediatamente.
+                        executor_scan.shutdown(wait=False, cancel_futures=True)
+
+                    st["ativo_atual"] = f"VARREDURA CONCLUÍDA • {total_ativos_scan} ATIVOS"
 
                     # Atualiza o cache somente no thread principal para evitar
                     # concorrência desnecessária no dicionário compartilhado.
@@ -3261,8 +3352,9 @@ def bot_loop():
                                 melhor_diag_chave = chave_diag
                                 diagnostico_melhor = diag_result
 
+                    concluidos_reais = sum(1 for r in resultados_scan if not r.get("erro"))
                     st["ativo_atual"] = (
-                        f"VARREDURA CONCLUÍDA • {total_ativos_scan} ATIVOS"
+                        f"VARREDURA CONCLUÍDA • {concluidos_reais}/{total_ativos_scan} ATIVOS VÁLIDOS"
                     )
 
                     if diagnostico_melhor is not None and (
