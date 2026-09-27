@@ -1739,82 +1739,117 @@ def _indicadores_confluencia(data, direcao=None):
             "volume_disponivel":volume_disponivel,"tendencia":tendencia,"suporte":suporte,"resistencia":resistencia,
             "confluencia":confluencia,"confluencias":itens}
 
+def _resumo_confluencias_direcionais(diag):
+    """Conta confirmações direcionais reais, sem transformar volatilidade neutra em sinal."""
+    itens = diag.get("confluencias", []) if isinstance(diag, dict) else []
+    nomes_direcionais = {"MAs", "RSI", "MACD", "Volume", "Price Action", "Zona técnica"}
+    fortes = [x for x in itens if x.get("nome") in nomes_direcionais and x.get("status") == "ok" and int(x.get("pontos", 0)) >= 10]
+    return fortes
+
+
 def _painel_decisao(data):
-    """Monta o painel comparativo CALL x PUT sem depender de existir sinal.
-    A decisão é apenas o diagnóstico do motor: exige tendência compatível,
-    confluência mínima e vantagem suficiente entre as duas direções.
+    """Painel de decisão em camadas: tendência + 2/3 confirmações.
+    Duas confirmações direcionais já podem gerar pré-alerta; três ou mais
+    elevam a força do alerta. Mercado lateral e conflito direcional continuam bloqueados.
     """
     try:
         call = _indicadores_confluencia(data, "CALL")
         put = _indicadores_confluencia(data, "PUT")
     except Exception as exc:
-        return {"veredito":"AGUARDAR","call":{"score":0},"put":{"score":0},
+        return {"veredito":"AGUARDAR","nivel":"BLOQUEADO","call":{"score":0,"confirmacoes":0},"put":{"score":0,"confirmacoes":0},
                 "explicacao":"Não foi possível concluir o diagnóstico deste snapshot.",
                 "gate":f"Filtro técnico indisponível: {exc}","motivos":[]}
 
     cs=float(call.get("confluencia",0) or 0)
     ps=float(put.get("confluencia",0) or 0)
     tendencia=call.get("tendencia") or put.get("tendencia") or "INDEFINIDA"
+    call_fortes=_resumo_confluencias_direcionais(call)
+    put_fortes=_resumo_confluencias_direcionais(put)
+    call_n=len(call_fortes)
+    put_n=len(put_fortes)
     diferenca=abs(cs-ps)
-    minimo=72.0
 
-    def leitura(diag, lado):
-        itens=diag.get("confluencias",[])
-        fortes=sum(1 for x in itens if x.get("status")=="ok" and int(x.get("pontos",0))>=10)
-        fracos=sum(1 for x in itens if x.get("status")!="ok")
-        return f"{fortes} confirmações fortes • {fracos} filtros pendentes"
-
-    # Tendência é um bloqueio estrutural: não basta o score geral ser alto.
+    # Tendência é obrigatória. Volatilidade apenas filtra condições ruins;
+    # ela não conta como confirmação direcional.
     call_tend_ok=tendencia=="ALTA"
     put_tend_ok=tendencia=="BAIXA"
-    call_apto=call_tend_ok and cs>=minimo
-    put_apto=put_tend_ok and ps>=minimo
+    call_apto=call_tend_ok and call_n>=2
+    put_apto=put_tend_ok and put_n>=2
 
-    if call_apto and (not put_apto or (cs>ps and diferenca>=8)):
+    # Score mínimo baixo o suficiente para permitir 2 confirmações, mas evita
+    # validar combinações muito fracas. A contagem de confirmações é o gatilho principal.
+    score_minimo=65.0
+    call_apto = call_apto and cs>=score_minimo
+    put_apto = put_apto and ps>=score_minimo
+
+    # Nível de força do diagnóstico.
+    def nivel(n):
+        if n>=4: return "FORTE"
+        if n>=3: return "CONFIRMADO"
+        if n>=2: return "PRÉ-ALERTA"
+        return "INSUFICIENTE"
+
+    # Conflito: duas direções com confirmação suficiente não podem ser resolvidas
+    # apenas pelo maior score. O motor aguarda nova definição.
+    conflito=(call_apto and put_apto)
+    if conflito:
+        veredito="AGUARDAR"
+        nivel_decisao="CONFLITO"
+        explicacao=f"CALL e PUT atingiram confirmações suficientes ({call_n} × {put_n}); o motor aguarda desempate técnico."
+        gate="BLOQUEADO • conflito direcional."
+    elif call_apto:
         veredito="CALL"
-        explicacao=f"CALL tem maior confluência ({cs:.0f}/100) e a tendência está em ALTA."
-        gate="LIBERADO pelo diagnóstico técnico; estratégias ainda precisam confirmar a entrada."
-    elif put_apto and (not call_apto or (ps>cs and diferenca>=8)):
+        nivel_decisao=nivel(call_n)
+        explicacao=f"CALL: tendência de alta + {call_n} confirmações direcionais ({', '.join(x.get('nome','') for x in call_fortes[:4])})."
+        gate="PRÉ-ALERTA liberado" if call_n==2 else "ALERTA liberado • aguardando confirmação temporal."
+    elif put_apto:
         veredito="PUT"
-        explicacao=f"PUT tem maior confluência ({ps:.0f}/100) e a tendência está em BAIXA."
-        gate="LIBERADO pelo diagnóstico técnico; estratégias ainda precisam confirmar a entrada."
+        nivel_decisao=nivel(put_n)
+        explicacao=f"PUT: tendência de baixa + {put_n} confirmações direcionais ({', '.join(x.get('nome','') for x in put_fortes[:4])})."
+        gate="PRÉ-ALERTA liberado" if put_n==2 else "ALERTA liberado • aguardando confirmação temporal."
     else:
         veredito="AGUARDAR"
+        nivel_decisao="AGUARDAR"
         if tendencia=="LATERAL":
-            explicacao="Mercado lateral: o motor não encontrou tendência estrutural suficiente para escolher uma direção."
+            explicacao="Mercado lateral: sem direção estrutural para liberar entrada."
             gate="BLOQUEADO • tendência sem direção clara."
-        elif not call_apto and not put_apto:
-            explicacao=f"Nenhum lado atingiu a confluência mínima de {minimo:.0f}/100."
-            gate="BLOQUEADO • confirmação insuficiente."
+        elif tendencia=="ALTA":
+            explicacao=f"CALL em tendência de alta, mas encontrou apenas {call_n} confirmação(ões) direcional(is); mínimo: 2."
+            gate="AGUARDAR • falta confirmação."
+        elif tendencia=="BAIXA":
+            explicacao=f"PUT em tendência de baixa, mas encontrou apenas {put_n} confirmação(ões) direcional(is); mínimo: 2."
+            gate="AGUARDAR • falta confirmação."
         else:
-            explicacao=f"Existe direção dominante, mas a vantagem entre os lados é pequena ({diferenca:.0f} pontos)."
-            gate="BLOQUEADO • conflito técnico; aguardando confirmação."
+            explicacao="Dados insuficientes para definir uma direção segura."
+            gate="AGUARDAR • dados insuficientes."
 
     motivos=[]
     if tendencia=="ALTA":
-        motivos.append({"tipo":"Tendência","texto":"Fluxo principal favorece alta; PUT contra-tendência fica bloqueado."})
+        motivos.append({"tipo":"Tendência","texto":"Fluxo principal favorece alta; PUT contra-tendência permanece bloqueado."})
     elif tendencia=="BAIXA":
-        motivos.append({"tipo":"Tendência","texto":"Fluxo principal favorece baixa; CALL contra-tendência fica bloqueado."})
+        motivos.append({"tipo":"Tendência","texto":"Fluxo principal favorece baixa; CALL contra-tendência permanece bloqueado."})
     else:
         motivos.append({"tipo":"Tendência","texto":"Estrutura lateral; nenhuma direção recebe prioridade estrutural."})
-    motivos.append({"tipo":"Confluência","texto":f"CALL {cs:.0f}/100 × PUT {ps:.0f}/100 • diferença {diferenca:.0f} pontos."})
-    if veredito=="AGUARDAR":
-        motivos.append({"tipo":"Filtro","texto":"O motor exige combinação de tendência + indicadores antes de validar uma direção."})
-    else:
+    motivos.append({"tipo":"Confirmações","texto":f"CALL: {call_n} • PUT: {put_n} • gatilho mínimo: 2 confirmações direcionais."})
+    if veredito in ("CALL","PUT"):
         vencedor=call if veredito=="CALL" else put
-        bons=[x.get("nome") for x in vencedor.get("confluencias",[]) if x.get("status")=="ok"]
-        if bons:
-            motivos.append({"tipo":"Confirmações","texto":"Ativos: "+", ".join(bons[:4])+ ("..." if len(bons)>4 else "")})
+        bons=[x.get("nome") for x in _resumo_confluencias_direcionais(vencedor)]
+        motivos.append({"tipo":"Confirmações ativas","texto":", ".join(bons) if bons else "Nenhuma"})
+    elif conflito:
+        motivos.append({"tipo":"Filtro","texto":"As duas direções apresentam confirmações; o motor não força uma escolha."})
 
     return {
         "veredito":veredito,
-        "call":{"score":round(cs,1),"leitura":leitura(call,"CALL"),"tendencia_ok":call_tend_ok},
-        "put":{"score":round(ps,1),"leitura":leitura(put,"PUT"),"tendencia_ok":put_tend_ok},
+        "nivel":nivel_decisao,
+        "call":{"score":round(cs,1),"leitura":f"{call_n} confirmações direcionais • {nivel(call_n)}","tendencia_ok":call_tend_ok,"confirmacoes":call_n,"confirmacoes_nomes":[x.get("nome") for x in call_fortes]},
+        "put":{"score":round(ps,1),"leitura":f"{put_n} confirmações direcionais • {nivel(put_n)}","tendencia_ok":put_tend_ok,"confirmacoes":put_n,"confirmacoes_nomes":[x.get("nome") for x in put_fortes]},
         "vantagem":round(diferenca,1),
         "tendencia":tendencia,
         "explicacao":explicacao,
         "gate":gate,
         "motivos":motivos,
+        "min_confirmacoes":2,
+        "score_minimo":score_minimo,
     }
 
 def analisar_estrategia(data, estrategia, i=-1):
@@ -1852,18 +1887,37 @@ def analisar_estrategia(data, estrategia, i=-1):
     return sinal,probabilidade
 
 def analisar_estrategia_detalhada(data, estrategia):
+    """Analisa a estratégia e aplica o novo gatilho de 2+ confirmações.
+    A tendência continua obrigatória; 2 confirmações geram oportunidade,
+    3+ elevam a força e 4+ são consideradas fortes.
+    """
     sinal, base_prob = analisar_estrategia(data, estrategia)
     indicadores = _indicadores_confluencia(data, sinal)
     if not sinal:
         return None, 0, indicadores
+
     tendencia=indicadores.get("tendencia")
-    # Regra estrutural: nunca validar CALL em tendência de baixa ou PUT em tendência de alta.
     if (sinal=="CALL" and tendencia!="ALTA") or (sinal=="PUT" and tendencia!="BAIXA"):
         return None, 0, indicadores
-    if indicadores.get("confluencia",0) < 72:
+
+    fortes=_resumo_confluencias_direcionais(indicadores)
+    qtd=len(fortes)
+    if qtd < 2:
         return None, 0, indicadores
-    ajuste=round((indicadores["confluencia"]-72)*0.18)
-    prob=int(max(80,min(98,base_prob+ajuste)))
+
+    conf=float(indicadores.get("confluencia",0) or 0)
+    if conf < 65:
+        return None, 0, indicadores
+
+    # Probabilidade interna de força do setup; não representa taxa real de acerto.
+    # O aumento é progressivo com o número de confirmações, mas sem criar 90%+
+    # artificialmente só porque o filtro mínimo foi atingido.
+    bonus_conf={2:0,3:4,4:7,5:9,6:11}.get(min(qtd,6),11)
+    ajuste=max(0, min(8, int((conf-65)*0.10)))
+    prob=int(max(78,min(98,base_prob+bonus_conf+ajuste)))
+    indicadores["confirmacoes_fortes"]=qtd
+    indicadores["confirmacoes_nomes"]=[x.get("nome") for x in fortes]
+    indicadores["nivel_confluencia"]="FORTE" if qtd>=4 else "CONFIRMADO" if qtd>=3 else "PRÉ-ALERTA"
     return sinal,prob,indicadores
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
@@ -2907,11 +2961,10 @@ def bot_loop():
                                     print(f"⚠️ Estratégia ignorada em {ativo} ({est_nome}): {exc_est}")
                                     continue
 
-                            # Quando TODAS está selecionado, uma única estratégia isolada não libera sinal.
-                            # Exigimos concordância real de pelo menos 2 estratégias para reduzir ruído.
-                            if user_est == "TODAS":
-                                direcoes_validas = {d for d in ("CALL", "PUT") if sum(1 for x in candidatos if x["sinal"] == d) >= 2}
-                                candidatos = [x for x in candidatos if x["sinal"] in direcoes_validas]
+                            # Em TODAS, cada estratégia continua sendo testada de forma independente.
+                            # A liberação agora depende principalmente da confluência técnica: 2 confirmações
+                            # direcionais já podem criar oportunidade; 3+ aumentam a força. Concordância entre
+                            # estratégias continua sendo um bônus, não um bloqueio absoluto.
 
                             # Bônus somente quando há concordância real entre estratégias.
                             for cand in candidatos:
@@ -2934,7 +2987,7 @@ def bot_loop():
                                     "motivos": ana.get("confluencias", []),
                                     "estrategias_concordantes": [NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"]) for x in candidatos if x["sinal"] == melhor_local["sinal"]]
                                 })
-                                candidatos_globais.append({"ativo":ativo,"sinal":melhor_local["sinal"],"probabilidade":int(melhor_local["prob_final"]),"confluencia":float(ana.get("confluencia",0)),"concordantes":int(melhor_local["concordantes"]),"estrategia":melhor_local["estrategia"],"estrategia_fmt":ana["estrategia_fmt"],"analise":ana,"data":data})
+                                candidatos_globais.append({"ativo":ativo,"sinal":melhor_local["sinal"],"probabilidade":int(melhor_local["prob_final"]),"confluencia":float(ana.get("confluencia",0)),"confirmacoes":int(ana.get("confirmacoes_fortes",0)),"concordantes":int(melhor_local["concordantes"]),"estrategia":melhor_local["estrategia"],"estrategia_fmt":ana["estrategia_fmt"],"analise":ana,"data":data})
                                 chave_diag=(int(melhor_local["prob_final"]),float(ana.get("confluencia",0)),int(melhor_local["concordantes"]))
                                 if chave_diag>melhor_diag_chave:
                                     melhor_diag_chave=chave_diag; diagnostico_melhor=ana
@@ -2968,7 +3021,7 @@ def bot_loop():
                         # Ordena todas as oportunidades pela mesma regra usada pelo Vision Pro.
                         candidatos_ordenados = sorted(
                             candidatos_globais,
-                            key=lambda x: (x["probabilidade"], x["confluencia"], x["concordantes"]),
+                            key=lambda x: (x["confirmacoes"], x["probabilidade"], x["confluencia"], x["concordantes"]),
                             reverse=True
                         )
 
@@ -2985,7 +3038,7 @@ def bot_loop():
                         if ultimo_ativo and ultimo_candle == candle_atual_ts and melhor_candidato.get("ativo") == ultimo_ativo:
                             alternativas = [
                                 c for c in candidatos_ordenados
-                                if c.get("ativo") != ultimo_ativo and int(c.get("probabilidade", 0)) >= 80
+                                if c.get("ativo") != ultimo_ativo and int(c.get("probabilidade", 0)) >= 78
                             ]
                             if alternativas:
                                 melhor_candidato = alternativas[0]
@@ -2996,7 +3049,7 @@ def bot_loop():
                     else:
                         melhor_candidato = None
 
-                    if melhor_candidato and melhor_candidato["probabilidade"] >= 80 and not st.get("aguardando_confirmacao"):
+                    if melhor_candidato and melhor_candidato.get("confirmacoes",0) >= 2 and melhor_candidato["probabilidade"] >= 78 and not st.get("aguardando_confirmacao"):
                         agora = agora_brasilia()
                         total_seg = tf * 60
                         seg_pass = (agora.minute % tf) * 60 + agora.second
@@ -3048,6 +3101,7 @@ def bot_loop():
                                 f"🔥 <b>PROBABILIDADE ESTIMADA:</b> {maior_prob}%\n"
                                 f"🧠 <b>Estratégia:</b> {nome_est_formatado}\n"
                                 f"📊 <b>Confluência:</b> {melhor_analise.get('confluencia',0):.0f}/100\n"
+                                f"🧩 <b>Confirmações:</b> {melhor_analise.get('confirmacoes_fortes',0)}\n"
                                 f"🤝 <b>Concordância:</b> {len(melhor_analise.get('estrategias_concordantes',[]))} estratégia(s)\n"
                                 f"🕐 <b>Entrada prevista:</b> {str_entrada}\n"
                                 f"⏳ <b>Confirmação:</b> 5s antes da entrada\n"
