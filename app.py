@@ -1326,101 +1326,106 @@ def _extrair_eventos_investing(html_resposta):
     return eventos
 
 
-def atualizar_calendario_investing(force=False):
+def _atualizar_calendario_investing_bloqueante(force=False):
     """Consulta o Investing.com e mantém apenas eventos reais de 2/3 touros."""
     agora_ts = time.time()
+    # Nunca mantenha o lock durante requests HTTP. O bot principal só precisa
+    # proteger leituras/escritas curtas do cache; a rede fica totalmente fora do lock.
     with INVESTING_CALENDAR_LOCK:
-        if not force and (agora_ts - INVESTING_CALENDAR_CACHE.get("updated", 0)) < NEWS_CACHE_TTL:
-            return INVESTING_CALENDAR_CACHE.get("ok", False)
+        cache_updated = float(INVESTING_CALENDAR_CACHE.get("updated", 0) or 0)
+        cache_ok = bool(INVESTING_CALENDAR_CACHE.get("ok", False))
+    if not force and (agora_ts - cache_updated) < NEWS_CACHE_TTL:
+        return cache_ok
 
-        hoje = agora_brasilia().date()
-        amanha = hoje + timedelta(days=1)
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/140.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-            "X-Requested-With": "XMLHttpRequest",
-            "Origin": "https://www.investing.com",
-            "Referer": "https://www.investing.com/economic-calendar/",
-        }
+    hoje = agora_brasilia().date()
+    amanha = hoje + timedelta(days=1)
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/140.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": "https://www.investing.com",
+        "Referer": "https://www.investing.com/economic-calendar/",
+    }
 
-        eventos = []
-        erro = ""
-        sucesso_fonte = False
+    eventos = []
+    erro = ""
+    sucesso_fonte = False
 
-        # 1) Endpoint oficial usado pelo calendário.
-        urls_api = [
-            "https://br.investing.com/economic-calendar/Service/getCalendarFilteredData",
-            "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData",
-        ]
+    # 1) Endpoint oficial usado pelo calendário.
+    urls_api = [
+        "https://br.investing.com/economic-calendar/Service/getCalendarFilteredData",
+        "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData",
+    ]
 
-        for url in urls_api:
-            try:
-                with requests.Session() as sess:
-                    base = url.split("/Service/")[0] + "/"
-                    sess.headers.update({"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]})
-                    try:
-                        sess.get(base, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=8)
-                    except Exception:
-                        pass
-
-                    payload = {
-                        "country[]": INVESTING_COUNTRIES.split(","),
-                        "dateFrom": hoje.strftime("%Y-%m-%d"),
-                        "dateTo": amanha.strftime("%Y-%m-%d"),
-                        "timeZone": INVESTING_TIMEZONE,
-                        "timeFilter": "timeRemain",
-                        "currentTab": "custom",
-                        "submitFilters": "1",
-                        "limit_from": "0",
-                    }
-                    resp = sess.post(url, data=payload, headers=headers, timeout=12)
-                    if resp.status_code == 200 and resp.text:
-                        sucesso_fonte = True
-                        eventos = _extrair_eventos_investing(resp.text)
-                        # Resposta válida sem eventos de 2/3 touros é normal.
-                        break
-                    erro = f"HTTP {resp.status_code} em {url}"
-            except Exception as exc:
-                erro = str(exc)
-
-        # 2) Página oficial do calendário como fallback.
-        if not sucesso_fonte:
-            for url in ("https://br.investing.com/economic-calendar/", "https://www.investing.com/economic-calendar/"):
+    for url in urls_api:
+        try:
+            with requests.Session() as sess:
+                base = url.split("/Service/")[0] + "/"
+                sess.headers.update({"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]})
                 try:
-                    resp = requests.get(url, headers={**headers, "X-Requested-With": ""}, timeout=12)
-                    if resp.status_code == 200 and resp.text:
-                        sucesso_fonte = True
-                        eventos = _extrair_eventos_investing(resp.text)
-                        break
-                    erro = f"HTTP {resp.status_code} em {url}"
-                except Exception as exc:
-                    erro = str(exc)
+                    sess.get(base, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=8)
+                except Exception:
+                    pass
 
-        # 3) Widget oficial do Investing.com: alternativa quando o endpoint principal
-        # estiver protegido/indisponível no servidor do Render.
-        if not sucesso_fonte:
-            widget_url = (
-                "https://sslecal2.investing.com/?"
-                "columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous&"
-                "features=datepicker,timezone&"
-                f"countries={INVESTING_COUNTRIES}&"
-                "calType=week&"
-                f"timeZone={INVESTING_TIMEZONE}&"
-                "lang=12"
-            )
-            try:
-                resp = requests.get(widget_url, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=12)
+                payload = {
+                    "country[]": INVESTING_COUNTRIES.split(","),
+                    "dateFrom": hoje.strftime("%Y-%m-%d"),
+                    "dateTo": amanha.strftime("%Y-%m-%d"),
+                    "timeZone": INVESTING_TIMEZONE,
+                    "timeFilter": "timeRemain",
+                    "currentTab": "custom",
+                    "submitFilters": "1",
+                    "limit_from": "0",
+                }
+                resp = sess.post(url, data=payload, headers=headers, timeout=12)
                 if resp.status_code == 200 and resp.text:
                     sucesso_fonte = True
                     eventos = _extrair_eventos_investing(resp.text)
+                    # Resposta válida sem eventos de 2/3 touros é normal.
+                    break
+                erro = f"HTTP {resp.status_code} em {url}"
+        except Exception as exc:
+            erro = str(exc)
+
+    # 2) Página oficial do calendário como fallback.
+    if not sucesso_fonte:
+        for url in ("https://br.investing.com/economic-calendar/", "https://www.investing.com/economic-calendar/"):
+            try:
+                resp = requests.get(url, headers={**headers, "X-Requested-With": ""}, timeout=12)
+                if resp.status_code == 200 and resp.text:
+                    sucesso_fonte = True
+                    eventos = _extrair_eventos_investing(resp.text)
+                    break
+                erro = f"HTTP {resp.status_code} em {url}"
             except Exception as exc:
                 erro = str(exc)
 
+    # 3) Widget oficial do Investing.com: alternativa quando o endpoint principal
+    # estiver protegido/indisponível no servidor do Render.
+    if not sucesso_fonte:
+        widget_url = (
+            "https://sslecal2.investing.com/?"
+            "columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous&"
+            "features=datepicker,timezone&"
+            f"countries={INVESTING_COUNTRIES}&"
+            "calType=week&"
+            f"timeZone={INVESTING_TIMEZONE}&"
+            "lang=12"
+        )
+        try:
+            resp = requests.get(widget_url, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=12)
+            if resp.status_code == 200 and resp.text:
+                sucesso_fonte = True
+                eventos = _extrair_eventos_investing(resp.text)
+        except Exception as exc:
+            erro = str(exc)
+
+    with INVESTING_CALENDAR_LOCK:
         INVESTING_CALENDAR_CACHE["updated"] = agora_ts
 
         if sucesso_fonte:
@@ -1433,7 +1438,31 @@ def atualizar_calendario_investing(force=False):
             INVESTING_CALENDAR_CACHE["ok"] = False
             INVESTING_CALENDAR_CACHE["error"] = erro or "Fonte indisponível"
 
-        return sucesso_fonte
+    return sucesso_fonte
+
+
+INVESTING_REFRESH_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="investing")
+INVESTING_REFRESH_FUTURE = None
+INVESTING_REFRESH_LOCK = threading.Lock()
+
+def atualizar_calendario_investing(force=False):
+    """Versão não bloqueante: nunca espera a rede dentro do bot_loop."""
+    global INVESTING_REFRESH_FUTURE
+    agora_ts = time.time()
+    with INVESTING_CALENDAR_LOCK:
+        atualizado = float(INVESTING_CALENDAR_CACHE.get("updated", 0) or 0)
+        cache_ok = bool(INVESTING_CALENDAR_CACHE.get("ok", False))
+
+    if not force and (agora_ts - atualizado) < NEWS_CACHE_TTL:
+        return cache_ok
+
+    with INVESTING_REFRESH_LOCK:
+        if INVESTING_REFRESH_FUTURE is None or INVESTING_REFRESH_FUTURE.done():
+            INVESTING_REFRESH_FUTURE = INVESTING_REFRESH_EXECUTOR.submit(
+                _atualizar_calendario_investing_bloqueante, force
+            )
+    # FAIL-OPEN: enquanto a atualização estiver em andamento, não bloqueia o mercado.
+    return cache_ok
 
 
 def moedas_do_ativo(ativo):
@@ -1516,6 +1545,74 @@ def _normalizar_candles_fechados(ohlc, tf):
         return ohlc if len(ohlc["close"]) >= 30 else None
     except Exception:
         return None
+
+# ================= GERENCIADOR DE DADOS NÃO BLOQUEANTE =================
+# O motor principal NUNCA faz HTTP de candles dentro da varredura.
+# As consultas são feitas em segundo plano e o resultado é colocado em cache
+# assim que chegar. Isso impede que um ativo lento trave todos os outros.
+DATA_FETCH_MAX_WORKERS = 16
+DATA_FETCH_EXECUTOR = ThreadPoolExecutor(
+    max_workers=DATA_FETCH_MAX_WORKERS,
+    thread_name_prefix="dados"
+)
+DATA_FETCH_LOCK = threading.Lock()
+DATA_FETCH_FUTURES = {}
+DATA_FETCH_ERRORS = {}
+DATA_FETCH_RETRY_AFTER = {}
+SHARED_OHLC_CACHE = {}
+SHARED_OHLC_LOCK = threading.Lock()
+DATA_FETCH_ERROR_COOLDOWN = 4.0
+
+def _finalizar_fetch_dados(futuro, chave, ticker, tf):
+    try:
+        data = futuro.result()
+        if data is not None and len(data.get("close", [])) >= 30:
+            with SHARED_OHLC_LOCK:
+                SHARED_OHLC_CACHE[chave] = {"data": data, "time": time.time()}
+            DATA_FETCH_ERRORS.pop(chave, None)
+            DATA_FETCH_RETRY_AFTER.pop(chave, None)
+        else:
+            DATA_FETCH_ERRORS[chave] = "sem histórico público suficiente"
+            DATA_FETCH_RETRY_AFTER[chave] = time.time() + DATA_FETCH_ERROR_COOLDOWN
+    except Exception as exc:
+        DATA_FETCH_ERRORS[chave] = str(exc)
+        DATA_FETCH_RETRY_AFTER[chave] = time.time() + DATA_FETCH_ERROR_COOLDOWN
+        print(f"⚠️ Coleta isolada de {ticker} falhou: {exc}")
+    finally:
+        with DATA_FETCH_LOCK:
+            DATA_FETCH_FUTURES.pop(chave, None)
+
+def solicitar_dados_background(ticker, tf):
+    """Agenda uma única coleta por ticker/timeframe e retorna somente cache pronto."""
+    chave = f"{ticker}_{tf}"
+    agora_ts = time.time()
+    with SHARED_OHLC_LOCK:
+        item = SHARED_OHLC_CACHE.get(chave)
+        if item and item.get("data") is not None and agora_ts - item.get("time", 0) < 15:
+            return item.get("data")
+
+    with DATA_FETCH_LOCK:
+        futuro = DATA_FETCH_FUTURES.get(chave)
+        if futuro is None:
+            retry_after = DATA_FETCH_RETRY_AFTER.get(chave, 0)
+            if agora_ts >= retry_after:
+                futuro = DATA_FETCH_EXECUTOR.submit(get_data_v2, ticker, tf, 30)
+                DATA_FETCH_FUTURES[chave] = futuro
+                futuro.add_done_callback(
+                    lambda f, _ch=chave, _ticker=ticker, _tf=tf: _finalizar_fetch_dados(
+                        f, _ch, _ticker, _tf
+                    )
+                )
+
+    return None
+
+def obter_cache_ohlc_background(ticker, tf):
+    chave = f"{ticker}_{tf}"
+    with SHARED_OHLC_LOCK:
+        item = SHARED_OHLC_CACHE.get(chave)
+        if item and item.get("data") is not None and time.time() - item.get("time", 0) < 15:
+            return item.get("data")
+    return None
 
 def get_data_v2(ticker, tf, velas_minimas=30):
     """Obtém candles reais. Nunca cria candles aleatórios quando uma fonte falha."""
@@ -2826,8 +2923,9 @@ def _processar_ativo_scan(ativo, tf, user_est, data_inicial=None):
     cache_key = f"{ticker}_{tf}"
     data = data_inicial
     try:
-        if data is None:
-            data = get_data_v2(ticker, tf, velas_minimas=30)
+        # CRÍTICO: a varredura é somente CPU. Se o candle não estiver no cache,
+        # o ativo é ignorado nesta rodada e a coleta continua em background.
+        # Nunca faça requests HTTP aqui: um endpoint lento não pode congelar o bot.
         if data is None or len(data.get("close", [])) < 30:
             return {"ativo": ativo, "data": None, "candidatos": [], "diagnostico": None, "erro": None}
 
@@ -3052,118 +3150,62 @@ def bot_loop():
                     # Os dados válidos ficam no cache e são reutilizados imediatamente
                     # pela varredura de confluência abaixo.
                     ativos = list(dict.fromkeys(ativos))
-                    if not st.get("warmup_concluido"):
-                        warmup_set = st.setdefault("warmup_ativos_analisados", set())
-                        indisponiveis = st.setdefault("warmup_ativos_indisponiveis", set())
-                        warmup_analysis = st.setdefault("warmup_analysis", {})
+                    # PRÉ-CARGA NÃO BLOQUEANTE
+                    # Agenda os candles em segundo plano e analisa imediatamente tudo
+                    # que já estiver no cache. O bot não espera nenhum request.
+                    warmup_set = st.setdefault("warmup_ativos_analisados", set())
+                    warmup_analysis = st.setdefault("warmup_analysis", {})
+                    indisponiveis = st.setdefault("warmup_ativos_indisponiveis", set())
 
-                        # Deduplica por ticker. Aberto e OTC podem usar o mesmo
-                        # proxy público; fazer a mesma requisição duas vezes só aumenta
-                        # latência e pode provocar rate-limit. Uma única coleta alimenta
-                        # todos os ativos que compartilham o ticker público.
-                        grupos_ticker = {}
-                        for ativo_w in ativos:
-                            if ativo_w in warmup_set or ativo_w in indisponiveis:
-                                continue
-                            ticker_w = MAPA_TICKERS.get(ativo_w, ativo_w)
-                            grupos_ticker.setdefault(ticker_w, []).append(ativo_w)
+                    grupos_ticker = {}
+                    for ativo_w in ativos:
+                        ticker_w = MAPA_TICKERS.get(ativo_w, ativo_w)
+                        grupos_ticker.setdefault(ticker_w, []).append(ativo_w)
 
-                        def _carregar_30_ticker(ticker_w):
-                            cache_key_w = f"{ticker_w}_{tf}"
-                            cached_w = ohlc_cache.get(cache_key_w)
-                            if cached_w and cached_w.get("data") is not None:
-                                return ticker_w, cache_key_w, cached_w.get("data"), None
-                            try:
-                                data_w = get_data_v2(ticker_w, tf, velas_minimas=30)
-                                return ticker_w, cache_key_w, data_w, None
-                            except Exception as exc_w:
-                                return ticker_w, cache_key_w, None, exc_w
-
-                        tickers_pendentes = list(grupos_ticker.keys())
-                        workers_w = max(1, min(20, len(tickers_pendentes)))
-                        executor_w = ThreadPoolExecutor(max_workers=workers_w, thread_name_prefix="warmup") if tickers_pendentes else None
-                        futuros_w = {}
-                        try:
-                            if executor_w:
-                                for ticker_w in tickers_pendentes:
-                                    futuros_w[executor_w.submit(_carregar_30_ticker, ticker_w)] = ticker_w
-
-                                # A pré-análise tem limite próprio. Uma fonte lenta não
-                                # pode congelar a sessão inteira esperando resposta HTTP.
-                                prazo_w = time.time() + max(5.0, min(10.0, 5.0 + len(tickers_pendentes) * 0.04))
-                                pendentes_w = set(futuros_w)
-                                while pendentes_w and time.time() < prazo_w:
-                                    concluidos_w = [f for f in list(pendentes_w) if f.done()]
-                                    if not concluidos_w:
-                                        time.sleep(0.02)
-                                        continue
-                                    for futuro_w in concluidos_w:
-                                        pendentes_w.discard(futuro_w)
-                                        ticker_w = futuros_w[futuro_w]
-                                        try:
-                                            ticker_ret, cache_key_w, data_w, exc_w = futuro_w.result(timeout=0)
-                                        except Exception as exc_w:
-                                            ticker_ret, cache_key_w, data_w = ticker_w, f"{ticker_w}_{tf}", None
-                                            exc_w = exc_w
-
-                                        aliases_w = grupos_ticker.get(ticker_w, [])
-                                        valido_w = data_w is not None and len(data_w.get("close", [])) >= 30
-                                        if valido_w:
-                                            ohlc_cache[cache_key_w] = {"data": data_w, "time": time.time()}
-                                            try:
-                                                diag_w = _indicadores_confluencia(data_w, None)
-                                                for ativo_w in aliases_w:
-                                                    warmup_analysis[ativo_w] = {
-                                                        "confluencia": float(diag_w.get("confluencia", 0)),
-                                                        "tendencia": diag_w.get("tendencia"),
-                                                        "rsi": float(diag_w.get("rsi", 50)),
-                                                        "timestamp": time.time()
-                                                    }
-                                                    warmup_set.add(ativo_w)
-                                            except Exception as exc_diag:
-                                                print(f"⚠️ Warmup diagnóstico {ticker_w}: {exc_diag}")
-                                                indisponiveis.update(aliases_w)
-                                        else:
-                                            indisponiveis.update(aliases_w)
-                                            if exc_w:
-                                                print(f"⚠️ Warmup {ticker_w}: {exc_w}")
-
-                                # O que não respondeu dentro do limite é isolado.
-                                # Os outros ativos continuam imediatamente.
-                                if pendentes_w:
-                                    for futuro_w in pendentes_w:
-                                        ticker_w = futuros_w[futuro_w]
-                                        futuro_w.cancel()
-                                        aliases_w = grupos_ticker.get(ticker_w, [])
-                                        indisponiveis.update(aliases_w)
-                                        print(f"⚠️ Pré-análise excedeu o tempo: {ticker_w} — ignorado nesta rodada.")
-                        finally:
-                            if executor_w:
-                                executor_w.shutdown(wait=False, cancel_futures=True)
-
-                        processados_w = len(warmup_set) + len(indisponiveis)
-                        st["warmup_status"] = (
-                            f"30 VELAS VALIDADAS • {len(warmup_set)} DISPONÍVEIS"
-                            + (f" • {len(indisponiveis)} SEM HISTÓRICO PÚBLICO" if indisponiveis else "")
-                        )
-                        if processados_w >= len(ativos):
-                            st["warmup_concluido"] = True
-                            st["warmup_status"] = (
-                                f"30 VELAS VALIDADAS • {len(warmup_set)} DISPONÍVEIS"
-                                + (f" • {len(indisponiveis)} SEM HISTÓRICO PÚBLICO" if indisponiveis else "")
-                            )
-
-                        # Mesmo se alguma fonte não responder, o motor não fica parado:
-                        # basta existir pelo menos um ativo com 30 velas válidas para
-                        # a análise de confluência começar imediatamente.
-                        if not warmup_set:
-                            st["ativo_atual"] = "CARREGANDO 30 VELAS EM PARALELO"
-                            st["ultimo_sinal"] = (
-                                f"<div class='system-console' style='color:#f59e0b;'>⚡ <b>PRÉ-ANÁLISE RÁPIDA</b><br>"
-                                f"Carregando as últimas <b>30 velas</b> simultaneamente...<br>"
-                                f"<span style='color:#00f2fe;'>{processados_w}/{len(ativos)} ativos processados.</span></div>"
-                            )
+                    disponiveis_agora = 0
+                    for ticker_w, aliases_w in grupos_ticker.items():
+                        # Se já há dados prontos, usa imediatamente; caso contrário
+                        # apenas agenda a coleta e segue sem esperar.
+                        data_w = obter_cache_ohlc_background(ticker_w, tf)
+                        if data_w is None:
+                            solicitar_dados_background(ticker_w, tf)
                             continue
+
+                        disponiveis_agora += len(aliases_w)
+                        cache_key_w = f"{ticker_w}_{tf}"
+                        ohlc_cache[cache_key_w] = {"data": data_w, "time": time.time()}
+                        try:
+                            diag_w = _indicadores_confluencia(data_w, None)
+                            for ativo_w in aliases_w:
+                                warmup_analysis[ativo_w] = {
+                                    "confluencia": float(diag_w.get("confluencia", 0)),
+                                    "tendencia": diag_w.get("tendencia"),
+                                    "rsi": float(diag_w.get("rsi", 50)),
+                                    "timestamp": time.time()
+                                }
+                                warmup_set.add(ativo_w)
+                                indisponiveis.discard(ativo_w)
+                        except Exception as exc_diag:
+                            print(f"⚠️ Warmup diagnóstico {ticker_w}: {exc_diag}")
+
+                    processados_w = len(warmup_set)
+                    pendentes_w = max(0, len(ativos) - processados_w)
+                    st["warmup_concluido"] = bool(processados_w > 0)
+                    st["warmup_status"] = (
+                        f"DADOS EM BACKGROUND • {processados_w}/{len(ativos)} ATIVOS PRONTOS"
+                        + (f" • {pendentes_w} CARREGANDO" if pendentes_w else "")
+                    )
+                    if processados_w == 0:
+                        st["ativo_atual"] = "CARREGANDO DADOS EM BACKGROUND"
+                        st["ultimo_sinal"] = (
+                            "<div class='system-console' style='color:#f59e0b;'>"
+                            "⚡ <b>COLETA NÃO BLOQUEANTE</b><br>"
+                            "Os dados estão sendo carregados em segundo plano. "
+                            "A análise começa automaticamente assim que os primeiros ativos estiverem prontos."
+                            "</div>"
+                        )
+                    # Não existe trava temporal. O loop segue para a análise dos
+                    # ativos que já possuem 30 candles; os demais continuam carregando.
 
                     # Sem trava temporal: assim que a pré-análise paralela termina (ou
                     # existe pelo menos um ativo válido), a varredura de confluência pode
@@ -3257,9 +3299,13 @@ def bot_loop():
                     for ativo_scan in ativos_scan:
                         ticker_scan = MAPA_TICKERS.get(ativo_scan, ativo_scan)
                         cache_key_scan = f"{ticker_scan}_{tf}"
-                        cached_scan = ohlc_cache.get(cache_key_scan)
-                        if cached_scan and cached_scan.get("data") is not None:
-                            dados_para_scan[ativo_scan] = cached_scan.get("data")
+                        data_scan = obter_cache_ohlc_background(ticker_scan, tf)
+                        if data_scan is not None:
+                            dados_para_scan[ativo_scan] = data_scan
+                            ohlc_cache[cache_key_scan] = {"data": data_scan, "time": time.time()}
+                        else:
+                            # Mantém a coleta em background sem bloquear esta rodada.
+                            solicitar_dados_background(ticker_scan, tf)
 
                     # Executor sem contexto bloqueante: se uma fonte/rotina externa
                     # ficar presa, o loop principal NÃO espera indefinidamente por ela.
@@ -3278,7 +3324,7 @@ def bot_loop():
                                 dados_para_scan.get(ativo_scan)
                             )] = ativo_scan
 
-                        prazo_scan = time.time() + max(4.0, min(12.0, 4.0 + total_ativos_scan * 0.08))
+                        prazo_scan = time.time() + max(1.5, min(4.0, 1.5 + len(dados_para_scan) * 0.03))
                         pendentes_scan = set(futuros_scan)
                         while pendentes_scan and time.time() < prazo_scan:
                             concluidos_agora = [f for f in list(pendentes_scan) if f.done()]
@@ -3352,9 +3398,10 @@ def bot_loop():
                                 melhor_diag_chave = chave_diag
                                 diagnostico_melhor = diag_result
 
-                    concluidos_reais = sum(1 for r in resultados_scan if not r.get("erro"))
+                    concluidos_reais = sum(1 for r in resultados_scan if not r.get("erro") and r.get("data") is not None)
+                    prontos_total = len(dados_para_scan)
                     st["ativo_atual"] = (
-                        f"VARREDURA CONCLUÍDA • {concluidos_reais}/{total_ativos_scan} ATIVOS VÁLIDOS"
+                        f"VARREDURA CONCLUÍDA • {prontos_total}/{total_ativos_scan} COM DADOS • {concluidos_reais} ANALISADOS"
                     )
 
                     if diagnostico_melhor is not None and (
