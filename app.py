@@ -82,6 +82,16 @@ def get_user_state(email):
             "news_blocked_assets": [],
             "news_guard_updated": 0.0,
             "analise_atual": None,
+            "scan_status": "AGUARDANDO VARREDURA",
+            "scan_total": 0,
+            "scan_analisados": 0,
+            "scan_calls": 0,
+            "scan_puts": 0,
+            "scan_sem_sinal": 0,
+            "scan_melhor": None,
+            "scan_atualizado": 0.0,
+            "scan_atual": "AGUARDANDO",
+            "scan_atual_analise": None,
             "sessao_resultados": [],
             "sinais_sessao_total": 0,
             "warmup_concluido": False,
@@ -959,15 +969,17 @@ function renderSignal(d){
     // Prioridade: confirmado > alerta > análise corrente. Assim outro ativo analisado
     // pelo bot nunca substitui o ativo da entrada confirmada.
     const fonte=confirmado||alerta||a;
+    const scan=d.scan_atual_analise||a||{};
     const dir=(fonte.direcao||fonte.sinal||null);
     const prob=Number(fonte.probabilidade||0);
     const ativo=fonte.ativo||d.ativo_atual||'AGUARDANDO';
+    const ativoScan=d.scan_atual||scan.ativo||ativo||'AGUARDANDO';
     const tf=Number(fonte.tf||d.timeframe||5);
     const entrada=fonte.str_entrada||fonte.entrada||d.entry_time||'--:--:--';
     const expiracao=fonte.str_saida||fonte.expiracao||'--:--';
     const est=fonte.estrategia_fmt||a.estrategia_fmt||'Motor aguardando análise';
     const conf=fonte.confluencia!=null?fonte.confluencia:a.confluencia;
-    const analise=fonte.analise||a;
+    const analise=scan;
 
     const panel=document.getElementById('panel-text');
     if(panel){
@@ -986,8 +998,8 @@ function renderSignal(d){
         }
     }
 
-    setText('asset-tag',ativo);
-    setText('analysis-asset',ativo);
+    setText('asset-tag',confirmado||alerta?ativo:ativoScan);
+    setText('analysis-asset',ativoScan);
     setText('signal-asset-2',ativo);
     setText('signal-tf','M'+tf);
     setText('signal-tf-2','M'+tf);
@@ -1002,8 +1014,9 @@ function renderSignal(d){
     renderProbability(prob);
     renderProbability(prob,'prob-value-3','prob-fill-3');
     setText('prob-value-2',prob?prob+'%':'--%');
-    setText('confluence-overall',conf!=null?'Confluência técnica: '+Number(conf).toFixed(0)+'/100':'Confluência técnica: --/100');
-    setText('confluence-overall-2',conf!=null?'Confluência '+Number(conf).toFixed(0)+'/100':'Confluência --/100');
+    const confScan=scan.confluencia!=null?scan.confluencia:conf;
+    setText('confluence-overall',confScan!=null?'Confluência técnica: '+Number(confScan).toFixed(0)+'/100':'Confluência técnica: --/100');
+    setText('confluence-overall-2',confScan!=null?'Confluência '+Number(confScan).toFixed(0)+'/100':'Confluência --/100');
     setText('signal-strategy',est);
     setText('signal-strategy-2',est);
     setText('analysis-direction',dir||'Sem sinal');
@@ -1949,6 +1962,18 @@ def _indicadores_confluencia(data, direcao=None):
     atr = _atr_atual(h, l, c, 14)
     preco = float(c[-1])
     atr_pct = (atr / preco * 100) if preco else 0.0
+    atr_series = []
+    if len(c) >= 30:
+        tr_all = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
+        if len(tr_all) >= 14:
+            atr_series = np.convolve(tr_all, np.ones(14) / 14, mode='valid')
+    atr_med = float(np.median(atr_series[-30:])) if len(atr_series) else atr
+    atr_ratio = float(atr / max(atr_med, 1e-12))
+    candle_range = max(float(h[-1] - l[-1]), 1e-12)
+    recent_ranges = np.asarray(h[-21:-1] - l[-21:-1], dtype=float) if len(c) >= 22 else np.asarray([candle_range])
+    median_range = float(np.median(recent_ranges)) if len(recent_ranges) else candle_range
+    candle_range_ratio = float(candle_range / max(median_range, 1e-12))
+    ema_spread_pct = abs(float(ema9[-1] - ema21[-1])) / max(preco, 1e-12) * 100
     adx, pdi, mdi = _adx_atual(h, l, c, 14)
     stoch_k, stoch_d = _estocastico_atual(h, l, c, 14, 3)
 
@@ -1960,6 +1985,13 @@ def _indicadores_confluencia(data, direcao=None):
     pavio_sup = float(h[-1]-max(o[-1], c[-1])); pavio_inf = float(min(o[-1], c[-1])-l[-1])
     bullish = c[-1] > o[-1]; bearish = c[-1] < o[-1]
     tendencia = 'ALTA' if ema9[-1] > ema21[-1] and ema21[-1] >= ema21[-4] else ('BAIXA' if ema9[-1] < ema21[-1] and ema21[-1] <= ema21[-4] else 'LATERAL')
+    if atr_ratio >= 1.80 or candle_range_ratio >= 2.20:
+        regime = 'VOLATILIDADE_ALTA'
+    elif adx < 16 or ema_spread_pct < max(0.015, atr_pct * 0.18):
+        regime = 'LATERAL'
+    else:
+        regime = 'TENDÊNCIA'
+    impulso = 'CALL' if pdi > mdi and macd_hist > 0 else 'PUT' if mdi > pdi and macd_hist < 0 else 'NEUTRO'
 
     itens=[]
     def add(nome, pontos, detalhe, status):
@@ -2037,6 +2069,9 @@ def _indicadores_confluencia(data, direcao=None):
     pattern_ok = engulf_call if direcao == 'CALL' else engulf_put if direcao == 'PUT' else False
     add('Padrão', 10 if pattern_ok else 4, 'Engolfo confirmado' if pattern_ok else 'Sem padrão forte', 'ok' if pattern_ok else 'warn')
 
+    regime_pontos = 10 if regime == 'TENDÊNCIA' else 5 if regime == 'LATERAL' else 0
+    add('Regime', regime_pontos, f'{regime} • ATR relativo {atr_ratio:.2f}x • faixa {candle_range_ratio:.2f}x', 'ok' if regime=='TENDÊNCIA' else 'warn' if regime=='LATERAL' else 'bad')
+
     soma = sum(x['pontos'] for x in itens); maximo = len(itens)*10
     confluencia = round((soma/maximo)*100,1) if maximo else 0.0
     conflitos = 0
@@ -2050,6 +2085,8 @@ def _indicadores_confluencia(data, direcao=None):
         'macd':macd,'macd_signal':macd_signal,'macd_hist':macd_hist,'atr':atr,'atr_pct':atr_pct,
         'adx':adx,'plus_di':pdi,'minus_di':mdi,'stoch_k':stoch_k,'stoch_d':stoch_d,
         'tendencia':tendencia,'suporte':suporte,'resistencia':resistencia,
+        'atr_ratio':atr_ratio,'candle_range_ratio':candle_range_ratio,'ema_spread_pct':ema_spread_pct,
+        'regime':regime,'impulso':impulso,
         'conflitos':conflitos,'confluencia':confluencia,'confluencias':itens
     }
 
@@ -2209,53 +2246,96 @@ def analisar_estrategia(data, estrategia, i=-1):
     return sinal, probabilidade
 
 def analisar_estrategia_detalhada(data, estrategia):
-    sinal, base_prob = analisar_estrategia(data, estrategia)
-    indicadores = _indicadores_confluencia(data, sinal)
-    if not sinal:
-        return None, 0, indicadores
+    """Valida um sinal em camadas, com filtros de regime e direção.
 
+    O objetivo aqui não é aumentar artificialmente a porcentagem. O motor fica
+    mais seletivo: evita lateralização, picos anormais de volatilidade e sinais
+    em que a direção escolhida não possui vantagem clara sobre a direção oposta.
+    """
+    sinal, base_prob = analisar_estrategia(data, estrategia)
+    if not sinal:
+        return None, 0, _indicadores_confluencia(data, None)
+
+    indicadores = _indicadores_confluencia(data, sinal)
     conf = float(indicadores.get('confluencia', 0))
     conflitos = int(indicadores.get('conflitos', 0))
     adx = float(indicadores.get('adx', 0))
-    macd_hist = float(indicadores.get('macd_hist', 0))
     rsi = float(indicadores.get('rsi', 50))
+    atr_pct = float(indicadores.get('atr_pct', 0))
 
-    # Penaliza conflito técnico em vez de simplesmente inflar a porcentagem.
-    ajuste = (conf - 60.0) * 0.18
+    # Leitura neutra para saber se a direção do sinal realmente se destaca.
+    neutro = _indicadores_confluencia(data, None)
+    call_conf = float(_indicadores_confluencia(data, 'CALL').get('confluencia', 0))
+    put_conf = float(_indicadores_confluencia(data, 'PUT').get('confluencia', 0))
+    vantagem = (call_conf - put_conf) if sinal == 'CALL' else (put_conf - call_conf)
+
+    regime = str(indicadores.get('regime', 'LATERAL'))
+    impulso = str(indicadores.get('impulso', 'NEUTRO'))
+    candle_ratio = float(indicadores.get('candle_range_ratio', 1.0))
+
+    # Filtros duros: são os principais responsáveis por tirar sinais ruins.
+    # Pico de volatilidade: candle atual muito acima da faixa média recente.
+    if regime == 'VOLATILIDADE_ALTA' or candle_ratio >= 2.20:
+        return None, 0, indicadores
+
+    # Em lateralização, só aceitamos REVERSAO/RETRACAO quando existe vantagem
+    # direcional e contexto de extremo. As demais estratégias são descartadas.
+    if regime == 'LATERAL' and estrategia not in ('REVERSAO', 'RETRACAO'):
+        return None, 0, indicadores
+
+    # A direção precisa vencer a direção oposta por uma margem mínima.
+    margem_minima = 7.0 if estrategia in ('REVERSAO', 'RETRACAO') else 10.0
+    if vantagem < margem_minima:
+        return None, 0, indicadores
+
+    # ADX baixo significa ausência de tendência. Não permitimos sinais de
+    # continuação nesse cenário; reversão precisa de extremo + vantagem.
+    if adx < 15 and estrategia not in ('REVERSAO', 'RETRACAO'):
+        return None, 0, indicadores
+
+    if conflitos >= 2:
+        return None, 0, indicadores
+
+    # Cálculo conservador da estimativa. Continua sendo heurístico, não uma
+    # probabilidade estatística calibrada.
+    ajuste = (conf - 65.0) * 0.22
     bonus = 0.0
-    if conf >= 75: bonus += 3
-    elif conf >= 68: bonus += 1
-    if adx >= 25: bonus += 2
-    if conflitos: bonus -= conflitos * 4
+    if conf >= 78: bonus += 4
+    elif conf >= 72: bonus += 2
+    if adx >= 25: bonus += 3
+    elif adx >= 20: bonus += 1
+    if vantagem >= 18: bonus += 3
+    elif vantagem >= 13: bonus += 2
+    if impulso == sinal: bonus += 2
+    if conflitos: bonus -= conflitos * 5
 
-    # Confirmações específicas da própria estratégia.
     c = np.asarray(data['close'], dtype=float)
     o = np.asarray(data['open'], dtype=float)
     if estrategia == 'RSI_MACD_MA':
         ema9 = calcular_ema(c,9)[-1]; ema21 = calcular_ema(c,21)[-1]
-        if sinal == 'CALL' and macd_hist > 0 and ema9 > ema21 and 42 <= rsi <= 65: bonus += 3
-        if sinal == 'PUT' and macd_hist < 0 and ema9 < ema21 and 35 <= rsi <= 58: bonus += 3
+        if sinal == 'CALL' and indicadores.get('macd_hist',0) > 0 and ema9 > ema21 and 45 <= rsi <= 65: bonus += 3
+        if sinal == 'PUT' and indicadores.get('macd_hist',0) < 0 and ema9 < ema21 and 35 <= rsi <= 55: bonus += 3
     elif estrategia == 'MHI1':
         if len(c) >= 3:
             cores=['G' if c[j]>o[j] else 'R' if c[j]<o[j] else 'D' for j in range(len(c)-3,len(c))]
             if len(cores)==3 and 'D' not in cores:
-                if sinal=='CALL' and cores.count('R')>=2: bonus += 3
-                if sinal=='PUT' and cores.count('G')>=2: bonus += 3
+                if sinal=='CALL' and cores.count('R')>=2: bonus += 2
+                if sinal=='PUT' and cores.count('G')>=2: bonus += 2
     elif estrategia in ('REVERSAO','RETRACAO'):
         ma20=float(np.mean(c[-20:])); std20=max(float(np.std(c[-20:])),1e-12)
-        if sinal=='CALL' and c[-1] <= ma20-1.5*std20: bonus += 3
-        if sinal=='PUT' and c[-1] >= ma20+1.5*std20: bonus += 3
-    elif estrategia == 'LOGICA_DO_PRECO':
-        # Sem bônus artificial. Price Action compete nas mesmas condições.
-        bonus += 0
+        if sinal=='CALL' and c[-1] <= ma20-1.5*std20: bonus += 4
+        if sinal=='PUT' and c[-1] >= ma20+1.5*std20: bonus += 4
 
-    prob = int(max(75, min(97, round(base_prob + ajuste + bonus))))
+    prob = int(max(76, min(96, round(base_prob + ajuste + bonus))))
+    indicadores['confluencia_call'] = round(call_conf, 1)
+    indicadores['confluencia_put'] = round(put_conf, 1)
+    indicadores['vantagem_direcional'] = round(vantagem, 1)
     indicadores['estrategia_base_probabilidade'] = int(base_prob)
     indicadores['estrategia_bonus'] = int(round(bonus))
     indicadores['estrategia'] = estrategia
     indicadores['direcao'] = sinal
-    # Abaixo deste nível o setup é tratado como fraco pelo ensemble.
-    indicadores['qualidade_minima'] = 64.0
+    indicadores['qualidade_minima'] = 70.0
+    indicadores['regime'] = regime
     return sinal, prob, indicadores
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
@@ -2470,6 +2550,16 @@ def status():
         "news_guard_event": st.get("news_guard_event"),
         "news_blocked_assets": st.get("news_blocked_assets", []),
         "analise_atual": st.get("analise_atual"),
+        "scan_status": st.get("scan_status", "AGUARDANDO VARREDURA"),
+        "scan_total": st.get("scan_total", 0),
+        "scan_analisados": st.get("scan_analisados", 0),
+        "scan_calls": st.get("scan_calls", 0),
+        "scan_puts": st.get("scan_puts", 0),
+        "scan_sem_sinal": st.get("scan_sem_sinal", 0),
+        "scan_melhor": st.get("scan_melhor"),
+        "scan_atual": st.get("scan_atual", "AGUARDANDO"),
+        "scan_atual_analise": st.get("scan_atual_analise"),
+        "scan_atualizado": st.get("scan_atualizado", 0),
         "alerta": st.get("alerta_ativo"),
         "sinal_confirmado": st.get("sinal_confirmado"),
         "sinais_sessao_total": st.get("sinais_sessao_total", 0),
@@ -3408,6 +3498,16 @@ def bot_loop():
                     candidatos_globais = []
                     diagnostico_melhor = None
                     melhor_diag_chave = (-1, -1, -1)
+                    scan_calls = 0
+                    scan_puts = 0
+                    scan_sem_sinal = 0
+                    st["scan_total"] = len(ativos_scan)
+                    st["scan_analisados"] = 0
+                    st["scan_calls"] = 0
+                    st["scan_puts"] = 0
+                    st["scan_sem_sinal"] = 0
+                    st["scan_status"] = f"VARRENDO {len(ativos_scan)} ATIVOS"
+                    st["scan_atualizado"] = time.time()
 
                     for ativo in ativos_scan:
                         if not st.get("bot_iniciado") or st.get("bot_pausado"):
@@ -3421,7 +3521,23 @@ def bot_loop():
                             if data:
                                 ohlc_cache[cache_key] = {"data": data, "time": time.time()}
                         if not data:
+                            st["scan_analisados"] = int(st.get("scan_analisados",0)) + 1
                             continue
+
+                        st["scan_analisados"] = int(st.get("scan_analisados",0)) + 1
+                        st["scan_atual"] = ativo
+                        st["scan_status"] = f"ANALISANDO {ativo} • {st['scan_analisados']}/{len(ativos_scan)}"
+                        try:
+                            scan_diag = _indicadores_confluencia(data, None)
+                            scan_diag.update({
+                                "ativo": ativo, "direcao": None, "probabilidade": 0,
+                                "estrategia": None, "estrategia_fmt": "Leitura em andamento",
+                                "grafico": [float(x) for x in data["close"][-30:]],
+                                "motivos": scan_diag.get("confluencias", [])
+                            })
+                            st["scan_atual_analise"] = scan_diag
+                        except Exception:
+                            pass
 
                         if user_est == "TODAS":
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
@@ -3449,18 +3565,38 @@ def bot_loop():
                             discordantes = sum(1 for x in candidatos if x["sinal"] != cand["sinal"] and x["estrategia"] != cand["estrategia"])
                             cand["concordantes"] = concordantes
                             cand["discordantes"] = discordantes
-                            if conf < 64 or conflitos >= 3:
+                            regime_cand = str(cand["analise"].get("regime", "LATERAL"))
+                            vantagem_cand = float(cand["analise"].get("vantagem_direcional", 0))
+                            # Em TODAS, uma única estratégia não é suficiente para gerar entrada.
+                            # O objetivo é reduzir G1 por exigir confirmação independente.
+                            if conf < 70 or conflitos >= 2:
                                 continue
-                            consenso_bonus = min(8, concordantes * 3)
+                            if regime_cand == 'VOLATILIDADE_ALTA':
+                                continue
+                            if regime_cand == 'LATERAL' and cand["estrategia"] not in ('REVERSAO','RETRACAO'):
+                                continue
+                            if vantagem_cand < (7 if cand["estrategia"] in ('REVERSAO','RETRACAO') else 10):
+                                continue
+                            if user_est == "TODAS" and concordantes < 1:
+                                continue
+                            consenso_bonus = min(10, concordantes * 4)
                             conflito_penal = min(8, discordantes * 2)
                             # Em mercado muito lateral, exigimos mais confluência.
                             adx = float(cand["analise"].get("adx", 0))
-                            if adx < 14 and cand["estrategia"] not in ('REVERSAO','RETRACAO'):
-                                conflito_penal += 3
-                            cand["prob_final"] = max(75, min(97, int(cand["prob"]) + consenso_bonus - conflito_penal))
-                            cand["qualidade_ensemble"] = round(conf + consenso_bonus - conflito_penal, 1)
+                            if adx < 16 and cand["estrategia"] not in ('REVERSAO','RETRACAO'):
+                                conflito_penal += 4
+                            cand["prob_final"] = max(76, min(96, int(cand["prob"]) + consenso_bonus - conflito_penal))
+                            cand["qualidade_ensemble"] = round(conf + consenso_bonus - conflito_penal + min(6, vantagem_cand * 0.25), 1)
                             candidatos_filtrados.append(cand)
                         candidatos = candidatos_filtrados
+                        if candidatos:
+                            scan_calls += sum(1 for x in candidatos if x["sinal"] == "CALL")
+                            scan_puts += sum(1 for x in candidatos if x["sinal"] == "PUT")
+                        else:
+                            scan_sem_sinal += 1
+                        st["scan_calls"] = scan_calls
+                        st["scan_puts"] = scan_puts
+                        st["scan_sem_sinal"] = scan_sem_sinal
 
                         if candidatos:
                             melhor_local = max(candidatos, key=lambda x:(x["qualidade_ensemble"], x["prob_final"], x["concordantes"]))
@@ -3483,8 +3619,18 @@ def bot_loop():
                             if diagnostico_melhor is None:
                                 diagnostico_melhor=diag
 
-                    if diagnostico_melhor is not None and (not st.get("aguardando_confirmacao") or st.get("analise_atual") is None):
+                    if diagnostico_melhor is not None:
                         st["analise_atual"] = diagnostico_melhor
+                        st["scan_melhor"] = {
+                            "ativo": diagnostico_melhor.get("ativo"),
+                            "direcao": diagnostico_melhor.get("direcao"),
+                            "probabilidade": diagnostico_melhor.get("probabilidade", 0),
+                            "confluencia": diagnostico_melhor.get("confluencia", 0),
+                            "regime": diagnostico_melhor.get("regime", "--"),
+                            "vantagem_direcional": diagnostico_melhor.get("vantagem_direcional", 0)
+                        }
+                    st["scan_status"] = f"VARREDURA CONCLUÍDA • {len(ativos_scan)} ativos • CALL {scan_calls} • PUT {scan_puts}"
+                    st["scan_atualizado"] = time.time()
 
                     # Enquanto há alerta confirmado/pendente, a varredura continua,
                     # porém só pode substituir o alerta se a oportunidade nova for
