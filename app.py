@@ -1622,12 +1622,21 @@ def get_data_v2(ticker, tf, velas_minimas=30):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36',
             'Accept': 'application/json, text/plain, */*'
         }
-        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d"
-        res = requests.get(url, headers=headers, timeout=5.0)
-        if res.status_code == 200:
-            payload = res.json()
-            result = (payload.get('chart') or {}).get('result')
-            if result:
+        # Yahoo possui mais de um endpoint de distribuição. Tentar query1/query2
+        # reduz falhas transitórias sem transformar a análise em uma operação bloqueante.
+        yahoo_urls = [
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d",
+            f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d",
+        ]
+        for url in yahoo_urls:
+            try:
+                res = requests.get(url, headers=headers, timeout=4.0)
+                if res.status_code != 200:
+                    continue
+                payload = res.json()
+                result = (payload.get('chart') or {}).get('result')
+                if not result:
+                    continue
                 result = result[0]
                 timestamps = result.get('timestamp') or []
                 quote = (result.get('indicators') or {}).get('quote', [{}])[0]
@@ -1641,6 +1650,8 @@ def get_data_v2(ticker, tf, velas_minimas=30):
                 fechado = _normalizar_candles_fechados(ohlc, tf)
                 if fechado is not None and len(fechado["close"]) >= velas_minimas:
                     return fechado
+            except Exception:
+                continue
 
         if "-USD" in base_ticker or "USD" in ticker:
             crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
@@ -3274,25 +3285,16 @@ def bot_loop():
                         )
                         continue
 
-                    # 2. VARREDURA GLOBAL PARALELA
-                    # Cada ativo é isolado em uma tarefa própria. Se EURUSD-OTC,
-                    # qualquer outro OTC ou qualquer estratégia apresentar erro,
-                    # somente aquela tarefa é descartada; o restante continua.
+                    # 2. VARREDURA PROFISSIONAL: SOMENTE ATIVOS COM DADOS PRONTOS
+                    #
+                    # A coleta de candles acontece exclusivamente em background.
+                    # A varredura nunca dispara HTTP e nunca cria uma fila de futures
+                    # por ativo. Isso elimina o principal ponto de travamento observado
+                    # no painel: "VARREDURA CONCLUÍDA 0/63" enquanto os dados ainda
+                    # estavam sendo carregados.
                     candidatos_globais = []
                     diagnostico_melhor = None
                     melhor_diag_chave = (-1, -1, -1, -1)
-
-                    if user_est == "TODAS":
-                        estrategias_global = LISTA_ESTRATEGIAS.copy()
-                    elif "," in str(user_est):
-                        estrategias_global = [
-                            e.strip() for e in user_est.split(",")
-                            if e.strip() in LISTA_ESTRATEGIAS
-                        ]
-                    elif user_est in LISTA_ESTRATEGIAS:
-                        estrategias_global = [user_est]
-                    else:
-                        estrategias_global = LISTA_ESTRATEGIAS.copy()
 
                     total_ativos_scan = len(ativos_scan)
                     dados_para_scan = {}
@@ -3300,82 +3302,66 @@ def bot_loop():
                         ticker_scan = MAPA_TICKERS.get(ativo_scan, ativo_scan)
                         cache_key_scan = f"{ticker_scan}_{tf}"
                         data_scan = obter_cache_ohlc_background(ticker_scan, tf)
-                        if data_scan is not None:
+                        if data_scan is not None and len(data_scan.get("close", [])) >= 30:
                             dados_para_scan[ativo_scan] = data_scan
                             ohlc_cache[cache_key_scan] = {"data": data_scan, "time": time.time()}
                         else:
-                            # Mantém a coleta em background sem bloquear esta rodada.
                             solicitar_dados_background(ticker_scan, tf)
 
-                    # Executor sem contexto bloqueante: se uma fonte/rotina externa
-                    # ficar presa, o loop principal NÃO espera indefinidamente por ela.
-                    # O ativo problemático entra em quarentena curta e os demais seguem.
-                    workers_scan = max(1, min(16, total_ativos_scan))
+                    prontos_scan = list(dados_para_scan.keys())
+                    aguardando_dados = max(0, total_ativos_scan - len(prontos_scan))
+
+                    # Nenhum dado pronto: não existe "varredura concluída".
+                    # Apenas mantemos a coleta em background e voltamos ao loop.
+                    if not prontos_scan:
+                        st["ativo_atual"] = (
+                            f"COLETANDO DADOS • 0/{total_ativos_scan} ATIVOS PRONTOS"
+                        )
+                        st["warmup_status"] = (
+                            f"COLETA EM BACKGROUND • 0/{total_ativos_scan} PRONTOS"
+                        )
+                        st["ultimo_sinal"] = (
+                            "<div class='system-console' style='color:#f59e0b;'>"
+                            "⚡ <b>COLETANDO DADOS REAIS</b><br>"
+                            f"Nenhum dos {total_ativos_scan} ativos possui 30 velas fechadas prontas nesta rodada.<br>"
+                            "A coleta continua em segundo plano; a varredura será iniciada automaticamente "
+                            "assim que os primeiros dados chegarem."
+                            "</div>"
+                        )
+                        continue
+
+                    # Os ativos prontos são processados um a um de forma determinística.
+                    # _processar_ativo_scan não faz rede, portanto nenhum ativo externo
+                    # pode prender a análise. Um erro fica isolado no próprio ativo.
+                    st["ativo_atual"] = (
+                        f"VARREDURA EM EXECUÇÃO • 0/{len(prontos_scan)} ATIVOS"
+                        + (f" • {aguardando_dados} AGUARDANDO DADOS" if aguardando_dados else "")
+                    )
+
                     resultados_scan = []
-                    executor_scan = ThreadPoolExecutor(max_workers=workers_scan, thread_name_prefix="scan")
-                    futuros_scan = {}
-                    try:
-                        for ativo_scan in ativos_scan:
-                            futuros_scan[executor_scan.submit(
-                                _processar_ativo_scan,
-                                ativo_scan,
-                                tf,
-                                user_est,
-                                dados_para_scan.get(ativo_scan)
-                            )] = ativo_scan
+                    for indice_scan, ativo_scan in enumerate(prontos_scan, start=1):
+                        try:
+                            resultado_scan = _processar_ativo_scan(
+                                ativo_scan, tf, user_est, dados_para_scan[ativo_scan]
+                            )
+                        except Exception as exc_scan:
+                            print(f"⚠️ Worker de {ativo_scan} falhou: {exc_scan}")
+                            resultado_scan = {
+                                "ativo": ativo_scan,
+                                "data": dados_para_scan.get(ativo_scan),
+                                "cache_key": f"{MAPA_TICKERS.get(ativo_scan, ativo_scan)}_{tf}",
+                                "candidatos": [],
+                                "diagnostico": None,
+                                "erro": str(exc_scan)
+                            }
 
-                        prazo_scan = time.time() + max(1.5, min(4.0, 1.5 + len(dados_para_scan) * 0.03))
-                        pendentes_scan = set(futuros_scan)
-                        while pendentes_scan and time.time() < prazo_scan:
-                            concluidos_agora = [f for f in list(pendentes_scan) if f.done()]
-                            if not concluidos_agora:
-                                time.sleep(0.02)
-                                continue
-                            for futuro_scan in concluidos_agora:
-                                pendentes_scan.discard(futuro_scan)
-                                ativo_result = futuros_scan[futuro_scan]
-                                try:
-                                    resultado_scan = futuro_scan.result(timeout=0)
-                                except Exception as exc_scan:
-                                    print(f"⚠️ Worker de {ativo_result} falhou: {exc_scan}")
-                                    resultado_scan = {
-                                        "ativo": ativo_result,
-                                        "data": None,
-                                        "cache_key": f"{MAPA_TICKERS.get(ativo_result, ativo_result)}_{tf}",
-                                        "candidatos": [],
-                                        "diagnostico": None,
-                                        "erro": str(exc_scan)
-                                    }
-                                resultados_scan.append(resultado_scan)
-                                st["ativo_atual"] = (
-                                    f"VARREDURA PARALELA • {len(resultados_scan)}/{total_ativos_scan} ATIVOS"
-                                )
+                        resultados_scan.append(resultado_scan)
+                        st["ativo_atual"] = (
+                            f"VARREDURA EM EXECUÇÃO • {indice_scan}/{len(prontos_scan)} ATIVOS"
+                            + (f" • {aguardando_dados} AGUARDANDO DADOS" if aguardando_dados else "")
+                        )
 
-                        # Tudo que não terminou dentro do prazo é descartado desta rodada.
-                        # Cancelar evita que uma tarefa pendente seja reutilizada como se
-                        # tivesse travado o motor inteiro.
-                        if pendentes_scan:
-                            for futuro_scan in pendentes_scan:
-                                ativo_result = futuros_scan[futuro_scan]
-                                futuro_scan.cancel()
-                                print(f"⚠️ Ativo isolado excedeu o tempo: {ativo_result} — ignorado nesta rodada.")
-                                resultados_scan.append({
-                                    "ativo": ativo_result,
-                                    "data": dados_para_scan.get(ativo_result),
-                                    "cache_key": f"{MAPA_TICKERS.get(ativo_result, ativo_result)}_{tf}",
-                                    "candidatos": [],
-                                    "diagnostico": None,
-                                    "erro": "timeout isolado"
-                                })
-                    finally:
-                        # Não esperar por uma tarefa problemática. O bot precisa
-                        # continuar o próximo ciclo imediatamente.
-                        executor_scan.shutdown(wait=False, cancel_futures=True)
-
-                    st["ativo_atual"] = f"VARREDURA CONCLUÍDA • {total_ativos_scan} ATIVOS"
-
-                    # Atualiza o cache somente no thread principal para evitar
-                    # concorrência desnecessária no dicionário compartilhado.
+                    # Atualiza o cache e consolida candidatos/diagnósticos.
                     for resultado_scan in resultados_scan:
                         data_result = resultado_scan.get("data")
                         cache_key_result = resultado_scan.get("cache_key")
@@ -3398,10 +3384,13 @@ def bot_loop():
                                 melhor_diag_chave = chave_diag
                                 diagnostico_melhor = diag_result
 
-                    concluidos_reais = sum(1 for r in resultados_scan if not r.get("erro") and r.get("data") is not None)
-                    prontos_total = len(dados_para_scan)
+                    concluidos_reais = sum(
+                        1 for r in resultados_scan
+                        if not r.get("erro") and r.get("data") is not None
+                    )
                     st["ativo_atual"] = (
-                        f"VARREDURA CONCLUÍDA • {prontos_total}/{total_ativos_scan} COM DADOS • {concluidos_reais} ANALISADOS"
+                        f"VARREDURA CONCLUÍDA • {concluidos_reais}/{total_ativos_scan} ANALISADOS"
+                        + (f" • {aguardando_dados} AGUARDANDO DADOS" if aguardando_dados else "")
                     )
 
                     if diagnostico_melhor is not None and (
