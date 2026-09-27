@@ -883,6 +883,16 @@ def init_db():
                 atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_web_push_user ON web_push_subscriptions(user_email);
+
+            -- Chave VAPID persistente gerada pelo próprio servidor quando a
+            -- variável do Render estiver ausente/inválida. Isso evita que um
+            -- erro de cópia de Base64URL impeça o Web Push de funcionar.
+            CREATE TABLE IF NOT EXISTS web_push_vapid_keys (
+                id INTEGER PRIMARY KEY,
+                private_key TEXT NOT NULL,
+                criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
         conn.commit()
         cur.close()
@@ -2186,16 +2196,11 @@ def _selecionar_candidato_diversificado(candidatos, st):
     ))
 
 # ================= WEB PUSH / NOTIFICAÇÕES EM SEGUNDO PLANO =================
-def _vapid_private_key_normalized():
-    """Normaliza uma VAPID private key para o formato aceito pelo py_vapid.
+def _vapid_env_private_key_normalized():
+    """Tenta normalizar a chave privada informada no Render.
 
-    Aceita:
-      - raw 32 bytes em Base64URL (formato recomendado);
-      - Base64 padrão;
-      - 64 caracteres hexadecimais (conveniência);
-      - PEM/DER Base64;
-      - valores copiados com aspas, espaços ou prefixo VAPID_PRIVATE_KEY=.
-    Retorna uma string raw Base64URL de 32 bytes ou ''.
+    Retorna uma private key P-256 em Base64URL (32 bytes) ou '' quando o
+    conteúdo do ambiente não é uma chave utilizável.
     """
     import base64 as _b64
     import re as _re
@@ -2210,22 +2215,21 @@ def _vapid_private_key_normalized():
     raw = raw.replace('\\n', '\n').strip()
 
     try:
-        from cryptography.hazmat.primitives.serialization import load_pem_private_key, load_der_private_key, Encoding, PrivateFormat, NoEncryption
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key, load_der_private_key
         from cryptography.hazmat.primitives.asymmetric import ec
 
         key = None
         if '-----BEGIN' in raw:
             key = load_pem_private_key(raw.encode('utf-8'), password=None)
         elif _re.fullmatch(r'[0-9a-fA-F]{64}', raw):
-            # Conveniência para quem colou uma chave hexadecimal de 32 bytes.
             private_value = int(raw, 16)
             if not 1 <= private_value < 2**256:
                 return ''
             key = ec.derive_private_key(private_value, ec.SECP256R1())
         else:
             compact = ''.join(raw.split())
-            # Primeiro tenta Base64URL/Base64 como o py_vapid espera.
             padded = compact + '=' * ((4 - len(compact) % 4) % 4)
+            private_bytes = None
             try:
                 private_bytes = _b64.urlsafe_b64decode(padded.encode('ascii'))
             except Exception:
@@ -2236,12 +2240,8 @@ def _vapid_private_key_normalized():
                     return ''
                 key = ec.derive_private_key(private_value, ec.SECP256R1())
             else:
-                # Permite DER/PKCS8 codificado em Base64URL/Base64.
-                try:
-                    der = _b64.urlsafe_b64decode(padded.encode('ascii'))
-                    key = load_der_private_key(der, password=None)
-                except Exception:
-                    return ''
+                der = _b64.urlsafe_b64decode(padded.encode('ascii'))
+                key = load_der_private_key(der, password=None)
 
         if not isinstance(key, ec.EllipticCurvePrivateKey):
             return ''
@@ -2251,8 +2251,65 @@ def _vapid_private_key_normalized():
         private_bytes = private_value.to_bytes(32, 'big')
         return _b64.urlsafe_b64encode(private_bytes).rstrip(b'=').decode('ascii')
     except Exception as exc:
-        print(f'⚠️ VAPID: não foi possível normalizar a chave privada: {exc}')
+        print(f'⚠️ VAPID env: chave informada no Render inválida; será usado o gerador persistente: {exc}')
         return ''
+
+
+def _vapid_persistent_private_key():
+    """Obtém uma chave VAPID válida e persistente.
+
+    Prioridade: chave válida do Render. Se ela estiver ausente ou inválida,
+    gera uma nova P-256 uma única vez e salva no PostgreSQL. Assim o Web Push
+    não depende de o usuário acertar manualmente o formato da chave.
+    """
+    import base64 as _b64
+    env_key = _vapid_env_private_key_normalized()
+    if env_key:
+        return env_key
+
+    if not WEBPUSH_DISPONIVEL:
+        return ''
+
+    try:
+        conn = get_db_connection(); cur = conn.cursor()
+        cur.execute("SELECT private_key FROM web_push_vapid_keys WHERE id=1 LIMIT 1")
+        row = cur.fetchone()
+        if row and row[0]:
+            candidate = str(row[0]).strip()
+            cur.close(); conn.close()
+            return candidate
+        cur.close(); conn.close()
+    except Exception as e:
+        print(f'⚠️ VAPID: não foi possível ler a chave persistente: {e}')
+
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec
+        key = ec.generate_private_key(ec.SECP256R1())
+        private_value = key.private_numbers().private_value
+        private_bytes = private_value.to_bytes(32, 'big')
+        generated = _b64.urlsafe_b64encode(private_bytes).rstrip(b'=').decode('ascii')
+
+        conn = get_db_connection(); cur = conn.cursor()
+        # Se duas requisições chegarem simultaneamente, a primeira chave ganha.
+        cur.execute("""
+            INSERT INTO web_push_vapid_keys(id, private_key, criado_em, atualizado_em)
+            VALUES(1,%s,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO NOTHING
+        """, (generated,))
+        conn.commit()
+        cur.execute("SELECT private_key FROM web_push_vapid_keys WHERE id=1 LIMIT 1")
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        final_key = str(row[0]).strip() if row and row[0] else generated
+        print('✅ VAPID: chave P-256 persistente disponível no PostgreSQL.')
+        return final_key
+    except Exception as e:
+        print(f'❌ VAPID: não foi possível gerar/salvar chave persistente: {e}')
+        return ''
+
+
+def _vapid_private_key_normalized():
+    return _vapid_persistent_private_key()
 
 
 def _vapid_public_key_canonical():
@@ -2266,6 +2323,8 @@ def _vapid_public_key_canonical():
         from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
         padded = private_normalized + '=' * ((4 - len(private_normalized) % 4) % 4)
         private_bytes = _b64.urlsafe_b64decode(padded.encode('ascii'))
+        if len(private_bytes) != 32:
+            return ''
         key = ec.derive_private_key(int.from_bytes(private_bytes, 'big'), ec.SECP256R1())
         public = key.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
         if len(public) != 65 or public[0] != 4:
@@ -2277,7 +2336,6 @@ def _vapid_public_key_canonical():
 
 
 def _push_configurado():
-    # A pública é derivada da privada; não exigimos mais VAPID_PUBLIC_KEY no Render.
     return bool(WEBPUSH_DISPONIVEL and _vapid_private_key_normalized() and _vapid_public_key_canonical())
 
 def salvar_push_subscription(user_email, subscription):
@@ -2352,7 +2410,7 @@ def push_config():
     private_normalized = _vapid_private_key_normalized()
     public_key = _vapid_public_key_canonical()
     if not private_normalized or not public_key:
-        return jsonify({"ok":False,"error":"VAPID_PRIVATE_KEY inválida. Use uma chave P-256 válida de 32 bytes em Base64URL ou PEM. Não cole o nome VAPID_PRIVATE_KEY= junto do valor."}),503
+        return jsonify({"ok":False,"error":"Não foi possível criar/validar uma chave VAPID P-256 no servidor. Verifique o banco PostgreSQL e o pacote pywebpush/cryptography no Render."}),503
     # A pública retornada ao Chrome é sempre derivada da privada, garantindo
     # formato P-256 uncompressed de 65 bytes e correspondência entre as chaves.
     return jsonify({"ok":True,"public_key":public_key})
