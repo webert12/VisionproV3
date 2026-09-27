@@ -3,7 +3,6 @@ import time
 import math
 import pytz
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import sys
 import random
@@ -11,7 +10,6 @@ import os
 import logging
 import numpy as np
 import re
-import html as html_lib
 from datetime import datetime, timedelta
 from flask import Flask, render_template_string, request, jsonify, session, redirect, abort, Response
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -65,7 +63,6 @@ def get_user_state(email):
             "bot_pausado": True,
             "aguardando_confirmacao": False,
             "sinal_permanente": None,
-            "sinal_confirmado": None,  # Estado fixo do último sinal confirmado até registrar o resultado
             "ultimo_sinal": "Aguardando Comando...",
             "ativo_atual": "AGUARDANDO...",
             "inicio_varredura": 0,
@@ -78,36 +75,7 @@ def get_user_state(email):
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
             "candle_remaining": 0,
-            "news_guard_status": "AGUARDANDO CALENDÁRIO",
-            "news_guard_event": None,
-            "news_blocked_assets": [],
-            "news_guard_updated": 0.0,
-            "analise_atual": None,
-            "scan_status": "AGUARDANDO VARREDURA",
-            "scan_total": 0,
-            "scan_analisados": 0,
-            "scan_calls": 0,
-            "scan_puts": 0,
-            "scan_sem_sinal": 0,
-            "scan_melhor": None,
-            "scan_atualizado": 0.0,
-            "scan_atual": "AGUARDANDO",
-            "scan_atual_analise": None,
-            "sessao_resultados": [],
-            "sinais_sessao_total": 0,
-            "warmup_concluido": False,
-            "warmup_ativos_analisados": set(),
-            "warmup_analysis": {},
-            "warmup_ativos_indisponiveis": set(),
-            "warmup_inicio": 0.0,
-            "startup_lock_until": 0.0,
-            "startup_lock_seconds": 300,
-            "warmup_status": "AGUARDANDO 30 VELAS",
-            "selected_assets": [],
-            # Controle de diversificação: evita repetir o mesmo ativo na mesma vela
-            # quando existem outras oportunidades válidas. Não força um ativo sem sinal.
-            "ultimo_sinal_ativo": None,
-            "ultimo_sinal_candle_ts": 0.0
+            "sessao_resultados": []
         }
     return DADOS_USUARIOS[email_clean]
 
@@ -373,694 +341,422 @@ HTML_INDEX = """
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#070b12">
-    <title>VISION PRO V4 — Terminal de Análise</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VISION PRO V3 - HIGH FREQUENCY BOT ANALYTICS</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --bg:#070b12; --panel:#0b111b; --panel2:#0f1724; --line:#1d2938;
-            --text:#e8eef6; --muted:#8290a3; --cyan:#00d9ff; --green:#22c55e;
-            --red:#ef4444; --amber:#f59e0b; --blue:#60a5fa; --purple:#a78bfa;
-            --shadow:0 18px 55px rgba(0,0,0,.35);
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+        body { background-color: #060913; color: #f1f5f9; display: flex; justify-content: center; min-height: 100vh; padding: 15px 10px; }
+        
+        .container {
+            width: 100%;
+            max-width: 520px;
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(0, 242, 254, 0.2);
+            border-radius: 24px;
+            padding: 20px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 242, 254, 0.05);
+            backdrop-filter: blur(12px);
         }
-        *{box-sizing:border-box;margin:0;padding:0;font-family:Inter,sans-serif}
-        html,body{min-height:100%;background:var(--bg);color:var(--text)}
-        body{overflow-x:hidden}
-        button,select{font:inherit}
-        button{cursor:pointer}
-        .app-shell{min-height:100vh;display:flex}
-        .sidebar{position:fixed;inset:0 auto 0 0;width:238px;background:rgba(8,13,21,.96);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;z-index:50}
-        .logo{display:flex;align-items:center;gap:10px;padding:4px 8px 22px;border-bottom:1px solid var(--line)}
-        .logo-mark{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(145deg,#0b2530,#0b1520);border:1px solid rgba(0,217,255,.4);color:var(--cyan);font-weight:900;box-shadow:0 0 25px rgba(0,217,255,.08)}
-        .logo-title{font-size:15px;font-weight:900;letter-spacing:1.2px}.logo-sub{font-size:9px;color:var(--muted);margin-top:2px;letter-spacing:.7px}
-        .nav{padding-top:18px;display:grid;gap:6px}.nav button{width:100%;border:1px solid transparent;background:transparent;color:#91a0b4;text-align:left;padding:11px 12px;border-radius:10px;font-size:11px;font-weight:800;display:flex;align-items:center;gap:10px;transition:.18s}.nav button:hover,.nav button.active{background:rgba(0,217,255,.07);border-color:rgba(0,217,255,.18);color:#eafcff}.nav button.active{box-shadow:inset 3px 0 0 var(--cyan)}
-        .sidebar-footer{margin-top:auto;color:#586679;font-size:9px;line-height:1.6;padding:12px 8px}
-        .main{width:calc(100% - 238px);margin-left:238px;min-height:100vh;padding:20px 24px 90px}
-        .topbar{display:flex;align-items:center;justify-content:space-between;gap:15px;max-width:1500px;margin:0 auto 16px}
-        .page-title{font-size:20px;font-weight:900;letter-spacing:.2px}.page-title span{color:var(--cyan)}
-        .top-meta{display:flex;align-items:center;gap:8px}.status-pill{padding:7px 10px;border:1px solid rgba(34,197,94,.25);background:rgba(34,197,94,.07);border-radius:999px;color:#86efac;font-size:10px;font-weight:900}.logout{padding:7px 11px;border-radius:9px;text-decoration:none;color:#fca5a5;border:1px solid rgba(239,68,68,.22);background:rgba(239,68,68,.06);font-size:10px;font-weight:800}
-        .workspace{max-width:1500px;margin:auto}.view{display:none}.view.active{display:block}
-        .grid-main{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,.85fr);gap:14px;align-items:start}.central-layout{grid-template-columns:1fr}.central-layout>aside{width:100%;min-width:0}.central-layout>aside>.card{width:100%}
-        .card{background:linear-gradient(145deg,rgba(15,23,36,.98),rgba(9,15,24,.98));border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}.card-pad{padding:16px}.card-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}.eyebrow{font-size:9px;color:#718096;font-weight:900;letter-spacing:1.1px;text-transform:uppercase}.card-title{font-size:13px;font-weight:900;margin-top:4px}.mini{font-size:10px;color:var(--muted)}
-        .hero{min-height:300px;position:relative;background:radial-gradient(circle at 50% 0%,rgba(0,217,255,.07),transparent 50%),linear-gradient(145deg,#0d1724,#090e17);border-color:rgba(0,217,255,.18)}
-        .hero-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.asset-tag{font-family:'JetBrains Mono';font-size:12px;color:#d8f9ff;background:rgba(0,217,255,.08);border:1px solid rgba(0,217,255,.18);padding:7px 9px;border-radius:9px}.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px rgba(34,197,94,.8);margin-right:5px}
-        .signal-center{text-align:center;padding:18px 8px 12px}.signal-direction{font-size:40px;font-weight:900;letter-spacing:1px}.signal-call{color:#34d399;text-shadow:0 0 24px rgba(34,197,94,.18)}.signal-put{color:#fb7185;text-shadow:0 0 24px rgba(239,68,68,.18)}.signal-wait{color:#7f8da0;font-size:25px}.prob-label{font-size:10px;color:#7d8ba0;font-weight:800;text-transform:uppercase;letter-spacing:1px}.prob-value{font-family:'JetBrains Mono';font-size:31px;font-weight:900;margin-top:2px}.prob-bar{height:8px;background:#182231;border-radius:99px;overflow:hidden;margin:10px auto 12px;max-width:330px}.prob-fill{height:100%;width:0%;background:linear-gradient(90deg,#0ea5e9,#22c55e);border-radius:99px;transition:width .4s}.candle-timer{margin-top:12px;background:#070d15;border:1px solid #1a2a3b;border-radius:12px;padding:12px}.timer-head{display:flex;justify-content:space-between;align-items:center;gap:8px}.timer-title{font-size:9px;color:#7d8ba0;font-weight:900;text-transform:uppercase;letter-spacing:1px}.timer-value{font-family:'JetBrains Mono';font-size:18px;font-weight:900;color:#e8f7ff}.timer-track{height:8px;background:#172231;border-radius:99px;overflow:hidden;margin-top:8px}.timer-fill{height:100%;width:0%;background:linear-gradient(90deg,#00d9ff,#22c55e);border-radius:99px;transition:width .25s linear}.timer-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:9px}.timer-box{background:#0b121d;border:1px solid #182536;border-radius:9px;padding:8px;text-align:center}.timer-k{font-size:7px;color:#66758a;text-transform:uppercase;font-weight:900}.timer-v{font-family:'JetBrains Mono';font-size:11px;font-weight:900;color:#dce6f2;margin-top:3px}.timer-note{font-size:8px;color:#718096;text-align:center;margin-top:8px;line-height:1.4}.timer-alert{color:#fbbf24!important}.timer-confirm{color:#4ade80!important}
-        .signal-meta{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.metric{background:#0b121d;border:1px solid #182536;border-radius:10px;padding:9px;text-align:center}.metric .k{font-size:8px;color:#66758a;text-transform:uppercase;font-weight:900}.metric .v{font-size:11px;font-weight:900;margin-top:4px;color:#dce6f2}
-        .console{margin-top:12px;background:#070c13;border:1px solid #182333;border-radius:10px;padding:10px;font-family:'JetBrains Mono';font-size:10px;color:#7de3f5;min-height:34px;line-height:1.5}
-        .chart-wrap{padding:10px 12px 12px}.chart{width:100%;height:150px;display:block;background:#080e16;border:1px solid #172333;border-radius:10px}.chart-grid{stroke:#172333;stroke-width:1}.chart-line{fill:none;stroke:#00d9ff;stroke-width:2.2;vector-effect:non-scaling-stroke}.chart-area{fill:url(#areaGrad);opacity:.25}.chart-empty{fill:#657489;font-size:11px}
-        .confluence{display:grid;gap:7px}.conf-row{display:grid;grid-template-columns:110px 1fr 42px;align-items:center;gap:8px;font-size:9px}.conf-name{color:#a6b3c4;font-weight:800}.conf-bar{height:7px;background:#172231;border-radius:99px;overflow:hidden}.conf-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,#38bdf8,#22c55e)}.conf-points{text-align:right;color:#d9e5f1;font-family:'JetBrains Mono';font-size:9px}
-        .analysis-reasons{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.reason{padding:9px;border:1px solid #182536;background:#0b121c;border-radius:10px}.reason b{font-size:9px}.reason div{font-size:9px;color:#75859a;margin-top:3px;line-height:1.4}.ok{color:#4ade80}.warn{color:#fbbf24}.bad{color:#fb7185}
-        .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.stat-box{background:#0b121d;border:1px solid #182536;border-radius:12px;padding:11px;text-align:center}.stat-k{font-size:8px;color:#66758a;font-weight:900;text-transform:uppercase}.stat-v{font-family:'JetBrains Mono';font-size:19px;font-weight:900;margin-top:3px}.win{color:#4ade80}.loss{color:#fb7185}.blue{color:#60a5fa}
-        .session-bar{height:7px;background:#182231;border-radius:99px;overflow:hidden;margin-top:10px}.session-fill{height:100%;background:linear-gradient(90deg,#16a34a,#4ade80);width:0%;transition:.4s}
-        .protection{display:grid;gap:8px}.protection-main{display:flex;justify-content:space-between;gap:8px;align-items:center}.guard-badge{padding:6px 8px;border-radius:8px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.18);font-size:9px;font-weight:900;color:#86efac}.locked-btn{width:100%;padding:10px;border:1px solid rgba(239,68,68,.25);background:rgba(239,68,68,.06);color:#fca5a5;border-radius:9px;font-size:9px;font-weight:900;text-transform:uppercase}.locked-panel{display:none;border:1px solid rgba(239,68,68,.2);background:#080e15;border-radius:10px;padding:8px}.locked-panel.open{display:block}.locked-item{padding:8px;border-left:3px solid #ef4444;background:rgba(239,68,68,.05);border-radius:7px;margin-top:5px;font-size:9px;line-height:1.5}.locked-item:first-child{margin-top:0}.empty{font-size:9px;color:#66758a;text-align:center;padding:8px}
-        .controls{display:grid;gap:12px}.action-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.action{border:0;border-radius:10px;padding:11px 5px;color:white;font-size:10px;font-weight:900}.start{background:linear-gradient(135deg,#16a34a,#059669)}.pause{background:linear-gradient(135deg,#f59e0b,#d97706)}.stop{background:linear-gradient(135deg,#ef4444,#dc2626)}.action:active{transform:scale(.98)}.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.field label{display:block;color:#728197;font-size:8px;font-weight:900;text-transform:uppercase;margin-bottom:4px}.select{width:100%;background:#0a111b;border:1px solid #1b2a3b;color:#dce6f2;padding:10px;border-radius:9px;font-size:10px;outline:none}.select:focus{border-color:rgba(0,217,255,.55)}
-        .tool-btn,.history-btn,.admin-btn{width:100%;padding:10px;border-radius:9px;background:#0b131f;border:1px solid #1c2b3d;color:#8edff0;font-size:9px;font-weight:900;text-transform:uppercase}.tool-btn:hover,.history-btn:hover{border-color:rgba(0,217,255,.35)}.admin-btn{color:#8ab4ff;border-color:rgba(96,165,250,.25)}.tools-content,.history{display:none;margin-top:8px}.tools-content.open,.history.open{display:grid;gap:7px}.tg-btn,.notify-btn{width:100%;padding:9px;border-radius:8px;background:#0a111a;border:1px solid #1d2b3c;color:#94a3b8;font-size:9px;font-weight:900}.history-list{max-height:220px;overflow:auto}.history-item{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);font-family:'JetBrains Mono';font-size:9px}.history-item:last-child{border-bottom:0}.history-result{font-weight:900;padding:4px 7px;border-radius:7px;border:1px solid transparent}.history-win,.history-g1{color:#4ade80;background:rgba(34,197,94,.08);border-color:rgba(34,197,94,.22)}.history-red{color:#fb7185;background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.22)}
-        .section{display:none}.section.active{display:block}.section-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.section-head h2{font-size:15px}.section-head p{font-size:9px;color:#69798d}.table-card{overflow:auto}.data-table{width:100%;border-collapse:collapse;min-width:620px}.data-table th{font-size:8px;color:#66758a;text-transform:uppercase;text-align:left;padding:10px;border-bottom:1px solid var(--line)}.data-table td{font-size:9px;padding:10px;border-bottom:1px solid rgba(255,255,255,.045)}
-        .asset-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;max-height:290px;overflow:auto;padding:8px;background:#080e16;border:1px solid #182536;border-radius:10px}.asset-check{display:flex;align-items:center;gap:6px;padding:7px 8px;background:#0b121d;border:1px solid #182536;border-radius:8px;color:#aebdcd;font-size:8px;font-weight:800}.asset-check input{accent-color:#00d9ff}.asset-check.selected{border-color:rgba(0,217,255,.35);color:#dffbff;background:rgba(0,217,255,.05)}.picker-actions{display:flex;gap:7px}.picker-actions button{flex:1;padding:9px;border-radius:8px;background:#0b131f;border:1px solid #1c2b3d;color:#9fe7f5;font-size:8px;font-weight:900}.backtest-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.backtest-results{display:grid;gap:10px}.bt-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}.bt-table{width:100%;border-collapse:collapse;min-width:760px}.bt-table th,.bt-table td{padding:9px;border-bottom:1px solid rgba(255,255,255,.05);font-size:8px;text-align:left}.bt-table th{color:#66758a;text-transform:uppercase}.bt-win{color:#4ade80;font-weight:900}.bt-loss{color:#fb7185;font-weight:900}.bt-g1{color:#fbbf24;font-weight:900}.bt-note{font-size:8px;color:#718096;line-height:1.5}.warmup-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 8px;border-radius:8px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:8px;font-weight:900}
-        .calc-top-btn{margin-top:7px;display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:9px;background:rgba(0,217,255,.06);border:1px solid rgba(0,217,255,.2);color:#9fe7f5;font-size:9px;font-weight:900;text-transform:uppercase}
-        .calc-top-btn:hover{border-color:rgba(0,217,255,.45);background:rgba(0,217,255,.1)}
-        .calc-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr);gap:12px}.calc-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.calc-result-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.calc-stat{background:#0b121d;border:1px solid #182536;border-radius:12px;padding:11px;text-align:center}.calc-stat .k{font-size:8px;color:#66758a;font-weight:900;text-transform:uppercase}.calc-stat .v{font-family:'JetBrains Mono';font-size:17px;font-weight:900;margin-top:4px;color:#dce6f2}.calc-profile{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.calc-profile label{cursor:pointer}.calc-profile input{display:none}.calc-profile span{display:block;text-align:center;padding:10px 7px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-profile input:checked+span{border-color:rgba(0,217,255,.45);background:rgba(0,217,255,.08);color:#dffbff}.calc-mode{display:grid;grid-template-columns:1fr 1fr;gap:7px}.calc-mode label{cursor:pointer}.calc-mode input{display:none}.calc-mode span{display:block;text-align:center;padding:10px;border-radius:10px;background:#0b121d;border:1px solid #182536;color:#8c9bad;font-size:9px;font-weight:900}.calc-mode input:checked+span{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.07);color:#bbf7d0}.calc-plan{display:grid;gap:7px}.calc-plan-row{display:flex;justify-content:space-between;gap:10px;padding:9px 10px;border-radius:9px;background:#0b121d;border:1px solid #182536;font-size:9px}.calc-plan-row b{color:#dce6f2}.calc-plan-row span{color:#7f8da0;text-align:right}.calc-entry-table{width:100%;border-collapse:separate;border-spacing:0 5px;font-size:9px}.calc-entry-table th{color:#66758a;text-transform:uppercase;font-size:7px;text-align:left;padding:5px 7px}.calc-entry-table td{padding:8px 7px;background:#0b121d;border-top:1px solid #182536;border-bottom:1px solid #182536;color:#b8c4d3}.calc-entry-table td:first-child{border-left:1px solid #182536;border-radius:8px 0 0 8px;color:#dce6f2;font-weight:900}.calc-entry-table td:last-child{border-right:1px solid #182536;border-radius:0 8px 8px 0}.calc-entry-table .entry-value{color:#dffbff;font-family:'JetBrains Mono';font-weight:900}.calc-entry-table .win-next{color:#86efac}.calc-entry-table .loss-next{color:#fca5a5}.calc-entry-note{margin-top:8px;padding:9px;border-radius:9px;background:rgba(0,217,255,.04);border:1px solid rgba(0,217,255,.12);color:#8da0b5;font-size:8px;line-height:1.5}.calc-warning{padding:10px;border-radius:10px;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);color:#fbbf24;font-size:9px;line-height:1.5}.calc-ok{padding:10px;border-radius:10px;background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.18);color:#86efac;font-size:9px;line-height:1.5}.calc-note{font-size:8px;color:#718096;line-height:1.55}
-        .calc-modal{position:fixed!important;inset:0;z-index:200;display:none!important;padding:22px;overflow:auto;background:rgba(2,6,12,.82);backdrop-filter:blur(8px)}
-        .calc-modal.active{display:block!important}
-        .calc-modal-inner{max-width:1180px;margin:0 auto;padding-bottom:40px}
-        .calc-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
-        .calc-close{border:1px solid rgba(239,68,68,.25);background:rgba(239,68,68,.07);color:#fca5a5;border-radius:9px;padding:8px 12px;font-size:10px;font-weight:900;cursor:pointer}
-        @media(max-width:700px){.calc-modal{padding:12px 10px 28px}.calc-modal-inner{width:100%}.calc-modal-head{position:sticky;top:0;z-index:3;padding:4px 0 8px;background:rgba(2,6,12,.92);backdrop-filter:blur(8px)}}
-.calc-section-title{font-size:10px;font-weight:900;color:#dce6f2;margin-bottom:8px}.calc-input-suffix{position:relative}.calc-input-suffix input{padding-right:35px}.calc-input-suffix span{position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:9px;color:#66758a;font-weight:900}
 
-        .mobile-nav{display:none}.mobile-only{display:none}.desktop-only{display:block}
-        .toast{position:fixed;right:20px;bottom:20px;background:#101a28;border:1px solid #24354a;border-radius:10px;padding:10px 13px;font-size:10px;color:#dbe8f5;opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s;z-index:100}.toast.show{opacity:1;transform:none}
-        @media(max-width:1100px){.grid-main{grid-template-columns:1fr}.sidebar{width:210px}.main{width:calc(100% - 210px);margin-left:210px}.signal-meta{grid-template-columns:repeat(2,1fr)}}
-        @media(max-width:760px){
-            body{padding:0;background:#070b12}.app-shell{display:block}.sidebar{display:none}.main{width:100%;margin:0;padding:12px 10px 86px}.topbar{margin-bottom:11px}.page-title{font-size:16px}.status-pill{font-size:8px;padding:6px 8px}.logout{font-size:8px;padding:6px 8px}.mobile-only{display:block}.desktop-only{display:none}
-            .grid-main{display:flex;flex-direction:column;gap:10px}.card{border-radius:13px}.card-pad{padding:12px}.hero{min-height:280px}.signal-direction{font-size:35px}.prob-value{font-size:28px}.signal-meta{grid-template-columns:repeat(2,1fr)}.analysis-reasons{grid-template-columns:1fr}.conf-row{grid-template-columns:92px 1fr 36px}.chart{height:135px}.stat-grid{grid-template-columns:repeat(2,1fr)}.field-grid{grid-template-columns:1fr}.action-grid{position:sticky;bottom:72px;z-index:20;background:rgba(7,11,18,.92);padding:7px;border:1px solid #182333;border-radius:12px;backdrop-filter:blur(12px)}
-            .mobile-nav{position:fixed;display:grid;grid-template-columns:repeat(7,1fr);left:8px;right:8px;bottom:8px;height:60px;background:rgba(8,14,22,.96);border:1px solid #203044;border-radius:16px;z-index:60;box-shadow:0 10px 35px rgba(0,0,0,.45);padding:4px}.mobile-nav button{border:0;background:transparent;color:#65758a;font-size:7px;font-weight:900;border-radius:11px;min-width:0}.mobile-nav button.active{background:rgba(0,217,255,.08);color:#dffbff}.mobile-nav span{display:block;font-size:15px;margin-bottom:2px}
-            .topbar .top-meta{gap:5px}.topbar{gap:6px}.hero-top .mini{max-width:160px}.locked-btn{padding:11px}.section-head{margin-top:2px}.table-card{border-radius:12px}.asset-picker{grid-template-columns:repeat(2,minmax(0,1fr));max-height:360px}.backtest-grid{grid-template-columns:1fr 1fr}.bt-summary{grid-template-columns:repeat(2,1fr)}
-        }
-        @media(max-width:900px){.calc-grid{grid-template-columns:1fr}.calc-result-grid{grid-template-columns:repeat(2,1fr)}}
-        @media(max-width:560px){.calc-fields{grid-template-columns:1fr}.calc-profile{grid-template-columns:1fr}.calc-mode{grid-template-columns:1fr}.calc-top-btn{font-size:8px;padding:6px 8px}}
-        @media(min-width:1400px){.main{padding-left:32px;padding-right:32px}.grid-main{grid-template-columns:minmax(0,1.65fr) minmax(350px,.8fr)}}
-        @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+        .brand { font-size: 17px; font-weight: 900; letter-spacing: 1px; color: #00f2fe; display: flex; align-items: center; gap: 8px; text-shadow: 0 0 10px rgba(0,242,254,0.4); }
+        .brand span { background: rgba(0, 242, 254, 0.15); color: #38ef7d; font-size: 10px; padding: 3px 8px; border-radius: 12px; border: 1px solid rgba(56, 239, 125, 0.4); font-weight: 700; }
+        .btn-logout { font-size: 12px; color: #ef4444; text-decoration: none; font-weight: 700; padding: 6px 14px; border-radius: 10px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); transition: 0.2s; }
+        .btn-logout:hover { background: rgba(239, 68, 68, 0.2); }
+
+        .placar-card { background: #0b1120; border: 1px solid #1e293b; border-radius: 16px; padding: 16px; margin-bottom: 16px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); }
+        .placar-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; text-align: center; }
+        .placar-item .title { font-size: 11px; text-transform: uppercase; color: #64748b; font-weight: 700; margin-bottom: 4px; letter-spacing: 0.5px; }
+        .placar-item .val { font-size: 20px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+        .win-color { color: #10b981; text-shadow: 0 0 10px rgba(16,185,129,0.3); }
+        .loss-color { color: #ef4444; text-shadow: 0 0 10px rgba(239,68,68,0.3); }
+        .wr-color { color: #3b82f6; text-shadow: 0 0 10px rgba(59,130,246,0.3); }
+        .winrate-bar { height: 6px; background: #1e293b; border-radius: 10px; overflow: hidden; margin-top: 14px; }
+        .winrate-fill { height: 100%; background: linear-gradient(90deg, #059669, #10b981); width: 0%; transition: width 0.5s ease-in-out; }
+
+        #broker-view-container { display: none; width: 100%; height: 350px; border-radius: 16px; overflow: hidden; flex-direction: column; margin-bottom: 16px; background: #0b1120; border: 1px solid #1e293b; padding: 8px; }
+        .broker-iframe-inline { width: 100%; height: 100%; border: none; background: #0b1120; border-radius: 10px; }
+        .btn-close-broker { background: #1e293b; border: 1px solid #334155; color: #00f2fe; padding: 6px 12px; font-size: 11px; font-weight: 700; border-radius: 6px; cursor: pointer; margin-bottom: 8px; width: 100%; text-align: center; }
+
+        .status-box { background: linear-gradient(145deg, #0f172a, #0b1120); border: 1px solid rgba(0, 242, 254, 0.3); padding: 18px; border-radius: 16px; margin-bottom: 16px; min-height: 100px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 15px rgba(0, 242, 254, 0.08); }
+        
+        .system-console { font-family: 'JetBrains Mono', monospace; color: #38ef7d; font-size: 13px; text-shadow: 0 0 5px rgba(56, 239, 125, 0.5); width: 100%; }
+
+        .result-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
+        .btn-res { border: none; padding: 12px; border-radius: 10px; font-weight: 800; font-size: 12px; cursor: pointer; color: white; transition: transform 0.1s, box-shadow 0.2s; text-transform: uppercase; }
+        .btn-res:active { transform: scale(0.95); }
+        .btn-res-win { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
+        .btn-res-g1 { background: linear-gradient(135deg, #f59e0b, #d97706); color: #000; box-shadow: 0 4px 12px rgba(245,158,11,0.3); }
+        .btn-res-red { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 12px rgba(239,68,68,0.3); }
+        .btn-res-skip { background: #334155; box-shadow: 0 4px 12px rgba(51,65,85,0.3); }
+
+        .control-panel { background: #0b1120; border: 1px solid #1e293b; border-radius: 16px; padding: 15px; margin-bottom: 16px; }
+        .section-label { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 10px; letter-spacing: 1px; display: block; border-bottom: 1px solid #1e293b; padding-bottom: 5px;}
+        
+        .action-flex { display: flex; gap: 8px; margin-bottom: 15px; }
+        .btn-action { flex: 1; padding: 12px 5px; border: none; border-radius: 10px; font-weight: 800; font-size: 12px; color: white; cursor: pointer; transition: 0.2s; text-transform: uppercase; }
+        .btn-action:active { transform: scale(0.95); }
+        .btn-start { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 12px rgba(16,185,129,0.2); }
+        .btn-pause { background: linear-gradient(135deg, #f59e0b, #d97706); box-shadow: 0 4px 12px rgba(245,158,11,0.2); }
+        .btn-stop { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 12px rgba(239,68,68,0.2); }
+
+        .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        .settings-grid.full { grid-template-columns: 1fr; margin-bottom: 15px; }
+        .setting-group label { font-size: 10px; font-weight: 700; color: #94a3b8; margin-bottom: 4px; display: block; }
+        
+        .select-wrapper { position: relative; width: 100%; }
+        .select-wrapper::after { content: "▼"; position: absolute; right: 12px; top: 12px; color: #00f2fe; font-size: 10px; pointer-events: none; }
+        .modern-select { background: #0f172a; color: #f1f5f9; border: 1px solid #1e293b; padding: 10px 12px; border-radius: 8px; font-weight: 600; font-size: 12px; width: 100%; outline: none; appearance: none; cursor: pointer; transition: 0.2s; }
+        .modern-select:hover, .modern-select:focus { border-color: #00f2fe; box-shadow: 0 0 8px rgba(0,242,254,0.2); }
+.btn-toggle-hist { width: 100%; padding: 10px; background: rgba(0, 242, 254, 0.08); border: 1px dashed #00f2fe; color: #00f2fe; border-radius: 8px; font-weight: bold; font-size: 11px; cursor: pointer; margin-top: 10px; transition: 0.3s; }
+        .btn-toggle-hist:hover { background: rgba(0, 242, 254, 0.2); }
+
+        .btn-test-tg { width: 100%; padding: 10px; background: rgba(59, 130, 246, 0.15); border: 1px solid #3b82f6; color: #3b82f6; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 8px; transition: 0.3s; text-transform: uppercase; }
+        .btn-test-tg:hover { background: rgba(59, 130, 246, 0.3); }
+
+        .historico-box { display: none; background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; margin-top: 15px; }
+        .historico-scroll { max-height: 140px; overflow-y: auto; }
+        .historico-item { font-size: 11px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; font-family: 'JetBrains Mono', monospace; }
+        .historico-item:last-child { border-bottom: none; }
+
+        .tech-scanner { width: 28px; height: 28px; margin: 10px auto 0; border: 3px solid rgba(0, 242, 254, 0.2); border-top-color: #00f2fe; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .btn-notify { width: 100%; padding: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #10b981; font-weight: bold; font-size: 11px; border-radius: 8px; cursor: pointer; margin-bottom: 12px; transition: 0.3s; text-transform: uppercase; }
+        .btn-notify:hover { background: rgba(16, 185, 129, 0.3); }
     </style>
 </head>
 <body>
-<div class="app-shell">
-    <aside class="sidebar">
-        <div class="logo"><div class="logo-mark">VP</div><div><div class="logo-title">VISION PRO</div><div class="logo-sub">V4 ANALYTICS TERMINAL</div></div></div>
-        <nav class="nav">
-            <button class="active" data-view="central" onclick="abrirView('central',this)">🏠 <span>Central</span></button>
-            <button data-view="analise" onclick="abrirView('analise',this)">📊 <span>Análise</span></button>
-            <button data-view="sinais" onclick="abrirView('sinais',this)">🎯 <span>Sinais</span></button>
-            <button data-view="protecao" onclick="abrirView('protecao',this)">🛡️ <span>Proteção</span></button>
-            <button data-view="historico" onclick="abrirView('historico',this)">📈 <span>Histórico</span></button>
-            <button data-view="backtest" onclick="abrirView('backtest',this)">🧪 <span>Backtest</span></button>
-            <button data-view="config" onclick="abrirView('config',this)">⚙️ <span>Configurações</span></button>
-        </nav>
-        <div class="sidebar-footer">Sistema de análise estatística e técnica. Os alertas não garantem resultados financeiros. Opere com responsabilidade.</div>
-    </aside>
-
-    <main class="main">
-        <div class="topbar">
-            <div><div class="page-title">VISION <span>PRO</span></div><div class="mini">Terminal de análise em tempo real</div><button class="calc-top-btn" type="button" onclick="abrirCalculadora()">🧮 CALCULADORA DE GESTÃO DE BANCA</button></div>
-            <div class="top-meta"><div class="status-pill"><span class="live-dot"></span><span id="top-status">ONLINE</span></div><a class="logout" href="/logout">SAIR</a></div>
+    <div class="container">
+        <div class="header">
+            <div class="brand">VISION PRO <span>V3 ULTRA</span></div>
+            <a href="/logout" class="btn-logout">SAIR</a>
         </div>
 
-        <div class="workspace">
-            <section id="view-central" class="view active">
-                <div class="grid-main central-layout">
-                    <div>
-                        <div class="card hero">
-                            <div class="card-pad">
-                                <div class="hero-top">
-                                    <div><div class="eyebrow">Sinal operacional</div><div class="card-title">Monitoramento de mercado</div></div>
-                                    <div class="asset-tag" id="asset-tag">AGUARDANDO</div>
-                                </div>
-                                <div class="signal-center">
-                                    <div class="signal-direction signal-wait" id="signal-direction">AGUARDANDO</div>
-                                    <div class="prob-label">Probabilidade estimada</div>
-                                    <div class="prob-value" id="prob-value">--%</div>
-                                    <div class="mini" id="confluence-overall">Confluência técnica: --/100</div>
-                                    <div class="prob-bar"><div class="prob-fill" id="prob-fill"></div></div>
-                                    <div class="mini" id="signal-strategy">Motor aguardando análise</div>
-                                </div>
-                                <div class="signal-meta">
-                                    <div class="metric"><div class="k">Timeframe</div><div class="v" id="signal-tf">M5</div></div>
-                                    <div class="metric"><div class="k">Entrada</div><div class="v" id="signal-entry">--:--:--</div></div>
-                                    <div class="metric"><div class="k">Expiração</div><div class="v" id="signal-expiry">--:--</div></div>
-                                    <div class="metric"><div class="k">Status</div><div class="v" id="signal-status">AGUARDANDO</div></div>
-                                </div>
-                                <div class="candle-timer">
-                                    <div class="timer-head"><div class="timer-title">⏱ TEMPO EXATO DO CANDLE</div><div class="timer-value" id="candle-countdown">--:--</div></div>
-                                    <div class="timer-track"><div class="timer-fill" id="candle-fill"></div></div>
-                                    <div class="timer-grid">
-                                        <div class="timer-box"><div class="timer-k">Candle atual</div><div class="timer-v" id="candle-window">--:--:-- → --:--:--</div></div>
-                                        <div class="timer-box"><div class="timer-k">Entrada prevista</div><div class="timer-v" id="entry-countdown">--:--:--</div></div>
-                                    </div>
-                                    <div class="timer-note" id="timer-note">Aguardando sincronização do candle.</div>
-                                </div>
-                                <div class="console" id="panel-text">Aguardando Comando...</div>
-                            </div>
-                            <div class="chart-wrap"><canvas id="market-chart" class="chart"></canvas></div>
-                        </div>
-
-                        <div class="card" style="margin-top:12px">
-                            <div class="card-head"><div><div class="eyebrow">Confluência técnica</div><div class="card-title">Raio-X do sinal</div></div><div class="mini" id="analysis-direction">Sem sinal</div></div>
-                            <div class="card-pad">
-                                <div class="confluence" id="confluence-list"><div class="empty">Aguardando dados do mercado...</div></div>
-                                <div class="analysis-reasons" id="analysis-reasons"></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <aside>
-                        <div class="card">
-                            <div class="card-head"><div><div class="eyebrow">Sessão</div><div class="card-title">Desempenho atual</div></div><div class="mini" id="session-count">0 operações</div></div>
-                            <div class="card-pad">
-                                <div class="stat-grid">
-                                    <div class="stat-box"><div class="stat-k">Wins</div><div class="stat-v win" id="win-count">0</div></div>
-                                    <div class="stat-box"><div class="stat-k">Loss</div><div class="stat-v loss" id="loss-count">0</div></div>
-                                    <div class="stat-box"><div class="stat-k">Assert.</div><div class="stat-v blue" id="wr-text">0%</div></div>
-                                    <div class="stat-box"><div class="stat-k">G1</div><div class="stat-v" id="g1-count">0</div></div>
-                                </div>
-                                <div class="session-bar"><div class="session-fill" id="wr-fill"></div></div>
-                            </div>
-                        </div>
-
-                        <div class="card" style="margin-top:12px">
-                            <div class="card-head"><div><div class="eyebrow">Controle</div><div class="card-title">Robô</div></div><div class="mini" id="robot-status">PARADO</div></div>
-                            <div class="card-pad controls">
-                                <div class="action-grid"><button class="action start" onclick="sendCommand('start_bot')">▶ START</button><button class="action pause" onclick="sendCommand('pause_bot')">⏸ PAUSE</button><button class="action stop" onclick="sendCommand('stop_bot')">⏹ STOP</button></div>
-                                <button class="tool-btn" onclick="toggleBox('tools-content')">⚙️ FERRAMENTAS E NOTIFICAÇÕES</button>
-                                <div id="tools-content" class="tools-content">
-                                    <button class="notify-btn" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
-                                    {% if user == admin %}
-                                    <button class="tg-btn" onclick="sendCommand('test_telegram')">🧪 TESTAR TELEGRAM</button>
-                                    <button class="tg-btn" id="btn-telegram-toggle" onclick="toggleTelegram()">{{ '🟢 ENVIO TELEGRAM ATIVADO' if telegram_ativo else '🔴 ENVIO TELEGRAM DESATIVADO' }}</button>
-                                    <button class="admin-btn" onclick="location.href='/admin_panel'">🛡️ PAINEL ADMINISTRATIVO</button>
-                                    {% endif %}
-                                </div>
-                            </div>
-                        </div>
-                    </aside>
-                </div>
-            </section>
-
-            <section id="view-analise" class="view">
-                <div class="section-head"><div><h2>📊 Análise detalhada</h2><p>Indicadores e confluências usadas pelo motor.</p></div><div class="asset-tag" id="analysis-asset">AGUARDANDO</div></div>
-                <div class="grid-main">
-                    <div class="card"><div class="card-head"><div><div class="eyebrow">Mercado</div><div class="card-title">Leitura técnica</div></div></div><div class="chart-wrap"><canvas id="market-chart-2" class="chart"></canvas></div><div class="card-pad"><div class="confluence" id="confluence-list-2"></div></div></div>
-                    <div class="card"><div class="card-head"><div><div class="eyebrow">Diagnóstico</div><div class="card-title">Motivos do sinal</div></div></div><div class="card-pad"><div class="analysis-reasons" id="analysis-reasons-2"></div><div style="margin-top:12px" class="metric"><div class="k">Probabilidade estimada</div><div class="v" id="prob-value-2">--%</div></div></div></div>
-                </div>
-            </section>
-
-            <section id="view-sinais" class="view">
-                <div class="section-head"><div><h2>🎯 Sinais</h2><p>O sinal atual fica destacado e sincronizado com o Telegram.</p></div></div>
-                <div class="card"><div class="card-pad"><div class="signal-center"><div class="signal-direction signal-wait" id="signal-direction-2">AGUARDANDO</div><div class="prob-label">Probabilidade estimada</div><div class="prob-value" id="prob-value-3">--%</div><div class="prob-bar"><div class="prob-fill" id="prob-fill-3"></div></div><div class="mini" id="signal-strategy-2">--</div></div><div class="signal-meta"><div class="metric"><div class="k">Ativo</div><div class="v" id="signal-asset-2">--</div></div><div class="metric"><div class="k">Timeframe</div><div class="v" id="signal-tf-2">M5</div></div><div class="metric"><div class="k">Entrada</div><div class="v" id="signal-entry-2">--:--:--</div></div><div class="metric"><div class="k">Expiração</div><div class="v" id="signal-expiry-2">--:--</div></div></div></div></div>
-                <div id="result-area" class="action-grid" style="display:none;margin-top:12px"><button class="action start" onclick="registrarResultado('win')">WIN</button><button class="action pause" onclick="registrarResultado('g1')">G1</button><button class="action stop" onclick="registrarResultado('red')">RED</button></div>
-                <button class="history-btn" style="margin-top:8px" onclick="registrarResultado('pular')">⏭️ PULAR SINAL</button>
-            </section>
-
-            <section id="view-protecao" class="view">
-                <div class="section-head"><div><h2>🛡️ Proteção macro</h2><p>Eventos de impacto moderado/alto retiram somente os ativos afetados da análise.</p></div></div>
-                <div class="grid-main">
-                    <div class="card"><div class="card-head"><div><div class="eyebrow">Calendário econômico</div><div class="card-title" id="guard-detail-status">Aguardando atualização</div></div><div class="guard-badge" id="guard-badge-2">● ATIVO</div></div><div class="card-pad protection"><div class="protection-main"><span class="mini">Status da trava</span><b id="news-guard-status" style="font-size:9px;color:#fbbf24">AGUARDANDO CALENDÁRIO</b></div><button class="locked-btn" id="news-locked-toggle" onclick="toggleAtivosBloqueados()">🔒 VER ATIVOS BLOQUEADOS (0)</button><div id="news-locked-panel" class="locked-panel"><div id="news-locked-list"><div class="empty">Nenhum ativo bloqueado por notícia no momento.</div></div></div></div></div>
-                    <div class="card"><div class="card-head"><div><div class="eyebrow">Regra de segurança</div><div class="card-title">Proteção operacional</div></div></div><div class="card-pad"><div class="metric"><div class="k">Impacto</div><div class="v">🐂🐂 / 🐂🐂🐂</div></div><div class="metric" style="margin-top:8px"><div class="k">Janela</div><div class="v">30 min antes + 30 min depois</div></div><div class="metric" style="margin-top:8px"><div class="k">Comportamento</div><div class="v">Somente o ativo afetado é retirado</div></div><div class="metric" style="margin-top:8px"><div class="k">Fonte</div><div class="v">Investing.com Economic Calendar</div></div></div></div>
-                </div>
-                <div class="card" style="margin-top:12px"><div class="card-head"><div><div class="eyebrow">Proteção ativa</div><div class="card-title">Detalhes dos bloqueios</div></div></div><div class="card-pad" id="news-locked-list-2"><div class="empty">Nenhum ativo bloqueado por notícia no momento.</div></div></div>
-            </section>
-
-            <section id="view-historico" class="view">
-                <div class="section-head"><div><h2>📈 Histórico</h2><p>Últimos sinais registrados para esta conta.</p></div></div>
-                <div class="grid-main" style="margin-bottom:12px"><div class="card"><div class="card-head"><div><div class="eyebrow">Por estratégia</div><div class="card-title">Desempenho recente</div></div></div><div class="card-pad" id="strategy-summary"><div class="empty">Aguardando histórico.</div></div></div><div class="card"><div class="card-head"><div><div class="eyebrow">Por ativo</div><div class="card-title">Desempenho recente</div></div></div><div class="card-pad" id="asset-summary"><div class="empty">Aguardando histórico.</div></div></div></div><div class="card table-card"><table class="data-table"><thead><tr><th>ID</th><th>Sinal</th><th>Resultado</th></tr></thead><tbody id="history-table-body"><tr><td colspan="3" class="empty">Nenhum histórico.</td></tr></tbody></table></div>
-            </section>
-
-            <section id="view-backtest" class="view">
-                <div class="section-head"><div><h2>🧪 Backtest histórico</h2><p>Simulação sobre candles históricos disponíveis nas fontes do Vision Pro.</p></div><div class="warmup-badge">⚠️ Não é garantia de resultado futuro</div></div>
-                <div class="card"><div class="card-pad controls">
-                    <div class="backtest-grid">
-                        <div class="field"><label>Timeframe</label><select class="select" id="bt-tf"><option value="1">M1</option><option value="5" selected>M5</option><option value="15">M15</option></select></div>
-                        <div class="field"><label>Mercado</label><select class="select" id="bt-market"><option value="TODOS">Todos</option><option value="ABERTO_TODOS">Abertos</option><option value="OTC_TODOS">OTC</option><option value="FOREX_ABERTO">Forex Aberto</option><option value="CRIPTO_ABERTO">Cripto Aberto</option><option value="FOREX_OTC">Forex OTC</option><option value="CRIPTO_OTC">Cripto OTC</option></select></div>
-                        <div class="field"><label>Estratégia</label><select class="select" id="bt-est"><option value="TODAS">Todas</option><option value="LOGICA_DO_PRECO">Lógica do Preço</option><option value="RSI_MACD_MA">RSI + MACD + MA</option><option value="MHI1">MHI 1 + Tendência</option><option value="REVERSAO">Reversão de Bandas</option></select></div>
-                        <div class="field"><label>G1</label><select class="select" id="bt-g1"><option value="sim">Com G1</option><option value="nao">Sem G1</option></select></div>
-                    </div>
-                    <div class="field"><label>Quantidade de candles históricos</label><select class="select" id="bt-limit"><option value="200">200 candles</option><option value="300" selected>300 candles</option><option value="500">500 candles</option></select></div>
-                    <div class="field"><label>Ativos para o backtest</label><div class="picker-actions"><button type="button" onclick="btSelecionarTodos()">SELECIONAR TODOS</button><button type="button" onclick="btLimparAtivos()">LIMPAR</button></div><div id="bt-assets" class="asset-picker" style="margin-top:8px"></div></div>
-                    <button class="action start" style="width:100%;margin-top:2px" onclick="executarBacktest()">🧪 EXECUTAR BACKTEST</button>
-                    <div class="bt-note">O resultado é uma simulação histórica. Para ativos OTC, a fonte pública disponível pode usar o ticker equivalente do mercado aberto; o painel identifica essa limitação quando aplicável.</div>
-                </div></div>
-                <div id="backtest-results" class="backtest-results" style="margin-top:12px"><div class="card"><div class="card-pad empty">Escolha os parâmetros e execute o backtest.</div></div></div>
-            </section>
-
-            <section id="view-calculadora" class="view calc-modal" aria-hidden="true">
-                <div class="calc-modal-inner">
-                    <div class="calc-modal-head">
-                        <div class="section-head" style="margin:0"><div><h2>🧮 Calculadora de Gestão de Banca</h2><p>Simule uma trajetória de banca com mão fixa ou Soros usando parâmetros explícitos.</p></div><div class="warmup-badge">⚠️ Simulação, não garantia de resultado</div></div>
-                        <button type="button" class="calc-close" onclick="fecharCalculadora()">✕ FECHAR</button>
-                    </div>
-                <div class="calc-grid">
-                    <div class="card">
-                        <div class="card-head"><div><div class="eyebrow">Planejamento</div><div class="card-title">Defina a meta da banca</div></div></div>
-                        <div class="card-pad">
-                            <div class="calc-fields">
-                                <div class="field"><label>Banca inicial (R$)</label><input class="select" id="calc-bankroll" type="number" min="1" step="0.01" value="100"></div>
-                                <div class="field"><label>Lucro desejado (R$)</label><input class="select" id="calc-target" type="number" min="1" step="0.01" value="1000"></div>
-                                <div class="field"><label>Prazo (dias)</label><input class="select" id="calc-days" type="number" min="1" max="365" step="1" value="30"></div>
-                                <div class="field"><label>Payout líquido por WIN</label><div class="calc-input-suffix"><input class="select" id="calc-payout" type="number" min="1" max="99.99" step="0.1" value="80"><span>%</span></div></div>
-                                <div class="field"><label>Taxa de acerto estimada</label><div class="calc-input-suffix"><input class="select" id="calc-winrate" type="number" min="50" max="99.99" step="0.1" value="70"><span>%</span></div></div>
-                                <div class="field"><label>Níveis de Soros</label><select class="select" id="calc-soros-levels"><option value="1">1 nível (sem progressão)</option><option value="2" selected>2 níveis</option><option value="3">3 níveis</option><option value="4">4 níveis</option></select></div>
-                            </div>
-                            <div class="calc-section-title" style="margin-top:12px">Perfil de risco</div>
-                            <div class="calc-profile">
-                                <label><input type="radio" name="calc-profile" value="conservador" checked onchange="atualizarPerfilCalc()"><span>🟢 CONSERVADOR<br><small>2% por entrada</small></span></label>
-                                <label><input type="radio" name="calc-profile" value="moderado" onchange="atualizarPerfilCalc()"><span>🟡 MODERADO<br><small>5% por entrada</small></span></label>
-                                <label><input type="radio" name="calc-profile" value="agressivo" onchange="atualizarPerfilCalc()"><span>🔴 AGRESSIVO<br><small>9% por entrada</small></span></label>
-                            </div>
-                            <div class="calc-section-title" style="margin-top:12px">Método de entrada</div>
-                            <div class="calc-mode">
-                                <label><input type="radio" name="calc-mode" value="fixa" checked onchange="atualizarPerfilCalc()"><span>💵 MÃO FIXA</span></label>
-                                <label><input type="radio" name="calc-mode" value="soros" onchange="atualizarPerfilCalc()"><span>📈 SOROS</span></label>
-                            </div>
-                            <div id="calc-mode-help" class="calc-note" style="margin-top:8px">Mão fixa: o valor-base permanece igual em cada entrada. O resultado esperado depende da taxa de acerto e do payout informados.</div>
-                            <button class="action start" style="width:100%;margin-top:12px" onclick="calcularGestaoBanca()">🧮 CALCULAR PLANO</button>
-                        </div>
-                    </div>
-                    <div id="calc-results" class="card">
-                        <div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Plano de gestão</div></div><div class="mini">Aguardando cálculo</div></div>
-                        <div class="card-pad"><div class="empty">Preencha os parâmetros e clique em “Calcular plano”.</div></div>
-                    </div>
-                </div>
-                </div>
-            </section>
-
-            <section id="view-config" class="view">
-                <div class="section-head"><div><h2>⚙️ Configurações</h2><p>Parâmetros operacionais do motor.</p></div></div>
-                <div class="card"><div class="card-pad controls">
-                    <div class="field-grid">
-                        <div class="field"><label>Mercado</label><select class="select" onchange="sendCommand('mkt_'+this.value)"><option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>🌐 Todos</option><option value="ABERTO_TODOS" {% if modo == 'ABERTO_TODOS' %}selected{% endif %}>🟢 Aberto</option><option value="OTC_TODOS" {% if modo == 'OTC_TODOS' %}selected{% endif %}>🌙 OTC</option><option value="FOREX_ABERTO" {% if modo == 'FOREX_ABERTO' %}selected{% endif %}>📈 Forex Aberto</option><option value="CRIPTO_ABERTO" {% if modo == 'CRIPTO_ABERTO' %}selected{% endif %}>🪙 Cripto Aberto</option><option value="FOREX_OTC" {% if modo == 'FOREX_OTC' %}selected{% endif %}>📊 Forex OTC</option><option value="CRIPTO_OTC" {% if modo == 'CRIPTO_OTC' %}selected{% endif %}>⚡ Cripto OTC</option></select></div>
-                        <div class="field"><label>Timeframe</label><select class="select" onchange="sendCommand('tf_'+this.value)"><option value="1" {% if tf == 1 %}selected{% endif %}>M1</option><option value="5" {% if tf == 5 %}selected{% endif %}>M5</option><option value="15" {% if tf == 15 %}selected{% endif %}>M15</option></select></div>
-                    </div>
-                    <div class="field"><label>Estratégia operacional</label><select class="select" onchange="sendCommand('set_est_'+this.value)"><option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS — análise dinâmica múltipla</option><option value="LOGICA_DO_PRECO" {% if estrat == 'LOGICA_DO_PRECO' %}selected{% endif %}>Lógica do Preço</option><option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + MACD + MA</option><option value="MHI1" {% if estrat == 'MHI1' %}selected{% endif %}>MHI 1 + Tendência</option><option value="REVERSAO" {% if estrat == 'REVERSAO' %}selected{% endif %}>Reversão de Bandas</option></select></div>
-                    <div class="field"><label>Ativos para operar</label><div class="picker-actions"><button type="button" onclick="selecionarTodosAtivos()">TODOS DO MERCADO</button><button type="button" onclick="limparAtivosOperacao()">LIMPAR</button></div><div id="operating-assets" class="asset-picker" style="margin-top:8px"></div><div class="bt-note" style="margin-top:6px">Selecione um ou mais ativos. Se nenhum for selecionado, o Vision Pro usa todos os ativos do mercado escolhido.</div></div>
-                    <div class="metric"><div class="k">Regra de proteção</div><div class="v">🐂🐂 / 🐂🐂🐂 → trava ±30 min</div></div>
-                    <div class="metric"><div class="k">Dados</div><div class="v">Somente candles válidos e fechados</div></div>
-                </div></div>
-            </section>
+        <div class="tools-box">
+            <button class="btn-notify" onclick="toggleFerramentas()">⚙️ FERRAMENTAS E NOTIFICAÇÕES</button>
+            <div id="ferramentas-box" style="display:none;">
+                <button class="btn-notify" id="btn-enable-notify" onclick="solicitarPermissaoNotificacao()">🔔 ATIVAR NOTIFICAÇÕES NO CELULAR</button>
+                {% if user == admin %}
+                <button class="btn-test-tg" onclick="sendCommand('test_telegram')">🧪 TESTAR CONEXÃO TELEGRAM</button>
+                <button class="btn-test-tg" id="btn-telegram-toggle" onclick="toggleTelegram()">{{ '🟢 ENVIO TELEGRAM ATIVADO' if telegram_ativo else '🔴 ENVIO TELEGRAM DESATIVADO' }}</button>
+                <div style="font-size:10px;color:#94a3b8;text-align:center;margin:6px 0 10px;">Quando ativado pelo ADM, somente mensagens da sessão ADM são enviadas ao Telegram.</div>
+                {% endif %}
+            </div>
         </div>
-    </main>
-</div>
 
-<div class="mobile-nav">
-    <button class="active" data-view="central" onclick="abrirView('central',this)"><span>🏠</span>Início</button>
-    <button data-view="analise" onclick="abrirView('analise',this)"><span>📊</span>Análise</button>
-    <button data-view="sinais" onclick="abrirView('sinais',this)"><span>🎯</span>Sinais</button>
-    <button data-view="protecao" onclick="abrirView('protecao',this)"><span>🛡️</span>Proteção</button>
-    <button data-view="historico" onclick="abrirView('historico',this)"><span>📈</span>Histórico</button>
-    <button data-view="backtest" onclick="abrirView('backtest',this)"><span>🧪</span>Backtest</button>
-    <button data-view="config" onclick="abrirView('config',this)"><span>⚙️</span>Config</button>
-</div>
-<div id="toast" class="toast"></div>
+        <div class="placar-card">
+            <div class="placar-grid">
+                <div class="placar-item">
+                    <div class="title">WINS</div>
+                    <div class="val win-color" id="win-count">0</div>
+                </div>
+                <div class="placar-item">
+                    <div class="title">ASSERTIVIDADE</div>
+                    <div class="val wr-text" id="wr-text">0%</div>
+                </div>
+                <div class="placar-item">
+                    <div class="title">LOSS</div>
+                    <div class="val loss-color" id="loss-count">0</div>
+                </div>
+            </div>
+            <div class="winrate-bar"><div id="wr-fill" class="winrate-fill"></div></div>
+        </div>
+        <div id="ticker-live-status" style="background: rgba(0, 242, 254, 0.05); border: 1px solid rgba(0, 242, 254, 0.2); border-radius: 12px; padding: 10px; margin-bottom: 12px; text-align: center; font-size: 12px;">
+            MERCADO SELECIONADO: <b id="mkt-badge" style="color: #00f2fe;">{{ modo }}</b> | 
+            ANALISANDO AGORA: <b id="current-asset" style="color: #38ef7d;">AGUARDANDO...</b>
+        </div>
 
-<script>
-let lastNotifId=null;
-let latestData=null;
-const NATIVE_NOTIFICATION_COOLDOWN_MS=0;
+        <div id="timing-panel" style="background:rgba(16,185,129,0.06); border:1px solid rgba(16,185,129,0.28); border-radius:12px; padding:12px; margin-bottom:12px; text-align:center; font-size:12px; line-height:1.7;">
+            <div id="candle-timer" style="color:#00f2fe; font-weight:800;">⏳ FECHAMENTO DO CANDLE: --:--</div>
+            <div id="entry-timer" style="color:#38ef7d; font-weight:900; font-size:14px; margin-top:3px;">🎯 AGUARDANDO SINAL DE ENTRADA</div>
+            <div id="entry-clock" style="color:#94a3b8; font-size:11px;">Horário exato: --:--:--</div>
+        </div>
 
-function abrirCalculadora(){
-    const modal=document.getElementById('view-calculadora');
-    if(!modal)return;
-    modal.classList.add('active');
-    modal.setAttribute('aria-hidden','false');
-    document.body.style.overflow='hidden';
-    atualizarPerfilCalc();
-}
-function fecharCalculadora(){
-    const modal=document.getElementById('view-calculadora');
-    if(!modal)return;
-    modal.classList.remove('active');
-    modal.setAttribute('aria-hidden','true');
-    document.body.style.overflow='';
-}
-window.addEventListener('keydown',e=>{if(e.key==='Escape')fecharCalculadora()});
-function abrirView(name,btn){
-    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
-    const el=document.getElementById('view-'+name); if(el) el.classList.add('active');
-    document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===name));
-    window.scrollTo({top:0,behavior:'smooth'});
-    if(name==='analise' && latestData) renderAnalysis(latestData);
-    if(name==='historico' && latestData) renderHistory(latestData.historico||[]);
-    if(name==='backtest' && latestData) { const m=document.getElementById('bt-market'); if(m) renderAssetPicker('bt-assets',m.value,[]); }
-}
-function toggleBox(id){const e=document.getElementById(id); if(e)e.classList.toggle('open')}
-function toast(msg){const e=document.getElementById('toast');if(!e)return;e.innerText=msg;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2200)}
-function sendCommand(cmd){fetch('/command/'+cmd,{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d.redirect)location.href=d.redirect;else if(d.error)toast(d.error);else toast('Comando atualizado');}).catch(()=>toast('Falha de comunicação com o servidor'))}
+        <div class="status-box" id="panel-text">Aguardando Comando...</div>
 
-let assetsCatalog=[];
-function assetsForMarket(mkt){
-    const groups={TODOS:['FOREX_ABERTO','CRIPTO_ABERTO','FOREX_OTC','CRIPTO_OTC'],ABERTO_TODOS:['FOREX_ABERTO','CRIPTO_ABERTO'],OTC_TODOS:['FOREX_OTC','CRIPTO_OTC'],FOREX_ABERTO:['FOREX_ABERTO'],CRIPTO_ABERTO:['CRIPTO_ABERTO'],FOREX_OTC:['FOREX_OTC'],CRIPTO_OTC:['CRIPTO_OTC']};
-    const gs=groups[mkt]||groups.TODOS; const out=[]; gs.forEach(g=>(assetsCatalog[g]||[]).forEach(a=>{if(!out.includes(a))out.push(a)})); return out;
-}
-function renderAssetPicker(id,mkt,selected){const box=document.getElementById(id);if(!box)return;const assets=assetsForMarket(mkt);const sel=new Set(selected||[]);box.innerHTML=assets.map(a=>`<label class="asset-check ${sel.has(a)?'selected':''}"><input type="checkbox" value="${a}" ${sel.has(a)?'checked':''} onchange="this.parentElement.classList.toggle('selected',this.checked)"> ${a}</label>`).join('')||'<div class="empty">Nenhum ativo disponível.</div>';}
-function pickerValues(id){return Array.from(document.querySelectorAll('#'+id+' input[type=checkbox]:checked')).map(x=>x.value)}
-function saveOperatingAssets(){const assets=pickerValues('operating-assets');fetch('/set_assets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({assets})}).then(r=>r.json()).then(d=>{if(d.ok)toast(assets.length?assets.length+' ativo(s) selecionado(s)':'Todos os ativos do mercado serão analisados')})}
-function selecionarTodosAtivos(){const m=(latestData&&latestData.mercado)||'TODOS';renderAssetPicker('operating-assets',m,assetsForMarket(m));saveOperatingAssets()}
-function limparAtivosOperacao(){document.querySelectorAll('#operating-assets input').forEach(x=>{x.checked=false;x.parentElement.classList.remove('selected')});saveOperatingAssets()}
-function btSelecionarTodos(){const m=document.getElementById('bt-market').value;renderAssetPicker('bt-assets',m,assetsForMarket(m))}
-function btLimparAtivos(){document.querySelectorAll('#bt-assets input').forEach(x=>{x.checked=false;x.parentElement.classList.remove('selected')})}
-function executarBacktest(){const box=document.getElementById('backtest-results');const assets=pickerValues('bt-assets');if(!assets.length){toast('Selecione pelo menos um ativo para o backtest');return}box.innerHTML='<div class="card"><div class="card-pad empty">⏳ Executando backtest histórico...</div></div>';fetch('/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({timeframe:Number(document.getElementById('bt-tf').value),market:document.getElementById('bt-market').value,estrategia:document.getElementById('bt-est').value,g1:document.getElementById('bt-g1').value==='sim',limit:Number(document.getElementById('bt-limit').value),assets})}).then(r=>r.json()).then(d=>{if(!d.ok){box.innerHTML='<div class="card"><div class="card-pad empty">❌ '+(d.error||'Falha no backtest')+'</div></div>';return}renderBacktestResults(d)}).catch(()=>{box.innerHTML='<div class="card"><div class="card-pad empty">❌ Falha de comunicação com o servidor.</div></div>'})}
-function renderBacktestResults(d){const box=document.getElementById('backtest-results');const s=d.summary||{};const cards=[['Entradas',s.entradas||0,''],['Wins',s.wins||0,'bt-win'],['G1',s.g1||0,'bt-g1'],['Loss',s.losses||0,'bt-loss'],['Assertividade',((s.assertividade||0).toFixed? s.assertividade.toFixed(1):s.assertividade)+'%','']];let html='<div class="card"><div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Backtest histórico</div></div><div class="mini">'+(d.meta||'')+'</div></div><div class="card-pad"><div class="bt-summary">'+cards.map(c=>`<div class="stat-box"><div class="stat-k">${c[0]}</div><div class="stat-v ${c[2]}">${c[1]}</div></div>`).join('')+'</div></div></div>';const mk=(arr,key)=>'<div class="card"><div class="card-head"><div><div class="eyebrow">Ranking</div><div class="card-title">'+key+'</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Nome</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(arr||[]).map(x=>`<tr><td><b>${x.nome||x.ativo||x.estrategia||'--'}</b></td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+=mk(d.top_assets,'Melhores ativos');html+=mk(d.top_strategies,'Melhores estratégias');html+='<div class="card"><div class="card-head"><div><div class="eyebrow">Detalhamento</div><div class="card-title">Ativo × estratégia</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Ativo</th><th>Estratégia</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(d.rows||[]).map(x=>`<tr><td><b>${x.ativo}</b></td><td>${x.estrategia}</td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+='<div class="card"><div class="card-pad bt-note">Fonte: '+(d.source||'dados históricos públicos')+'. '+(d.note||'')+'</div></div>';box.innerHTML=html}
-function atualizarAssetPickers(d){assetsCatalog=d.assets_catalog||{};const m=d.mercado||'TODOS';const selected=d.selected_assets||[];const op=document.getElementById('operating-assets');if(op&&!op.dataset.userEditing){renderAssetPicker('operating-assets',m,selected)}const btM=document.getElementById('bt-market');if(btM&&!document.getElementById('bt-assets')?.dataset.initialized){document.getElementById('bt-assets').dataset.initialized='1';renderAssetPicker('bt-assets',btM.value,[])} }
-function atualizarPerfilCalc(){
-    const mode=document.querySelector('input[name="calc-mode"]:checked')?.value||'fixa';
-    const help=document.getElementById('calc-mode-help');
-    if(help) help.innerText=mode==='soros'
-        ? 'Soros: após um WIN, o próximo valor usa o valor da entrada mais o lucro daquele WIN. Um LOSS reinicia no valor-base. O cálculo mostra a exposição máxima e os níveis usados.'
-        : 'Mão fixa: o valor-base permanece igual em cada entrada. O resultado esperado depende da taxa de acerto e do payout informados.';
-}
-function moedaBR(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
-function pctBR(v){return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1})+'%';}
-function calcularGestaoBanca(){
-    // A calculadora roda localmente no navegador. Assim ela não depende de
-    // uma rota Flask, sessão ou chamada de rede para apresentar o resultado.
-    const getNum = id => {
-        const el=document.getElementById(id);
-        if(!el) return NaN;
-        const raw=String(el.value ?? '').trim().replace(',','.');
-        return Number(raw);
-    };
+        <div id="result-area" class="result-grid" style="display:none;">
+            <button class="btn-res btn-res-win" onclick="fetch('/resultado/win')">WIN</button>
+            <button class="btn-res btn-res-g1" onclick="fetch('/resultado/g1')">G1</button>
+            <button class="btn-res btn-res-red" onclick="fetch('/resultado/red')">RED</button>
+            <button class="btn-res btn-res-skip" onclick="fetch('/resultado/pular')">PULAR</button>
+        </div>
 
-    const banca=getNum('calc-bankroll');
-    const meta=getNum('calc-target');
-    const dias=Math.floor(getNum('calc-days'));
-    const payoutRaw=getNum('calc-payout');
-    const winrateRaw=getNum('calc-winrate');
-    const perfil=document.querySelector('input[name="calc-profile"]:checked')?.value||'conservador';
-    const modo=document.querySelector('input[name="calc-mode"]:checked')?.value||'fixa';
-    const niveis=Math.max(1,Math.min(4,Math.floor(getNum('calc-soros-levels'))||1));
-    const box=document.getElementById('calc-results');
-    if(!box)return;
+        <div class="control-panel">
+            <span class="section-label">Controles do Robô</span>
+            
+            <div class="action-flex">
+                <button class="btn-action btn-start" onclick="sendCommand('start_bot')">▶ START</button>
+                <button class="btn-action btn-pause" onclick="sendCommand('pause_bot')">⏸ PAUSE</button>
+                <button class="btn-action btn-stop" onclick="sendCommand('stop_bot')">⏹ STOP</button>
+            </div>
 
-    if(!Number.isFinite(banca)||banca<=0){
-        mostrarErroCalc('Informe uma banca inicial maior que R$ 0,00.'); return;
-    }
-    if(!Number.isFinite(meta)||meta<=0){
-        mostrarErroCalc('Informe um lucro desejado maior que R$ 0,00.'); return;
-    }
-    if(!Number.isFinite(dias)||dias<1||dias>365){
-        mostrarErroCalc('O prazo deve estar entre 1 e 365 dias.'); return;
-    }
-    if(!Number.isFinite(payoutRaw)||payoutRaw<=0||payoutRaw>=100){
-        mostrarErroCalc('O payout deve ficar entre 1% e 99,99%.'); return;
-    }
-    if(!Number.isFinite(winrateRaw)||winrateRaw<50||winrateRaw>=100){
-        mostrarErroCalc('A taxa de acerto estimada deve ficar entre 50% e 99,99%.'); return;
-    }
+            <span class="section-label">Configurações de Análise</span>
+            
+            <div class="settings-grid">
+                <div class="setting-group">
+                    <label>TIPO DE MERCADO</label>
+                    <div class="select-wrapper">
+                        <select class="modern-select" onchange="sendCommand('mkt_' + this.value)">
+                            <option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>🌐 Todos os Mercados (Aberto + OTC)</option>
+                            <option value="ABERTO_TODOS" {% if modo == 'ABERTO_TODOS' %}selected{% endif %}>🟢 Todo Mercado Aberto (Forex + Cripto)</option>
+                            <option value="OTC_TODOS" {% if modo == 'OTC_TODOS' %}selected{% endif %}>🌙 Todo Mercado OTC (Forex + Cripto)</option>
+                            <option value="FOREX_ABERTO" {% if modo == 'FOREX_ABERTO' %}selected{% endif %}>📈 Forex Aberto (Seg a Sex)</option>
+                            <option value="CRIPTO_ABERTO" {% if modo == 'CRIPTO_ABERTO' %}selected{% endif %}>🪙 Criptomoedas Aberto (24/7)</option>
+                            <option value="FOREX_OTC" {% if modo == 'FOREX_OTC' %}selected{% endif %}>📊 Forex OTC (Noite/FDS)</option>
+                            <option value="CRIPTO_OTC" {% if modo == 'CRIPTO_OTC' %}selected{% endif %}>⚡ Cripto OTC (Noite/FDS)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="setting-group">
+                    <label>TIMEFRAME</label>
+                    <div class="select-wrapper">
+                        <select class="modern-select" onchange="sendCommand('tf_' + this.value)">
+                            <option value="1" {% if tf == 1 %}selected{% endif %}>M1 (1 Minuto)</option>
+                            <option value="5" {% if tf == 5 %}selected{% endif %}>M5 (5 Minutos)</option>
+                            <option value="15" {% if tf == 15 %}selected{% endif %}>M15 (15 Minutos)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="settings-grid full">
+                <div class="setting-group">
+                    <label>ESTRATÉGIA OPERACIONAL</label>
+                    <div class="select-wrapper">
+                        <select class="modern-select" onchange="sendCommand('set_est_' + this.value)">
+                            <option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS (Analisar Todas as Estratégias)</option>
+                            <option value="LOGICA_DO_PRECO" {% if estrat == 'LOGICA_DO_PRECO' %}selected{% endif %}>Lógica do Preço</option>
+                            <option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + Cruzamento MACD + MA</option>
+                            <option value="MHI1" {% if estrat == 'MHI1' %}selected{% endif %}>MHI 1 (+ Filtro Tendência)</option>
+                            <option value="REVERSAO" {% if estrat == 'REVERSAO' %}selected{% endif %}>Reversão de Bandas</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            {% if user == admin %}
+            <button onclick="location.href='/admin_panel'" style="width:100%; margin-top:15px; padding:12px; background:rgba(0,242,254,0.1); border:1px solid #00f2fe; color:#00f2fe; font-weight:bold; border-radius:10px; cursor:pointer;">🛡️ ABRIR PAINEL ADMINISTRATIVO</button>
+            {% endif %}
 
-    const payout=payoutRaw/100;
-    const winrate=winrateRaw/100;
-    const riscoMap={conservador:0.02,moderado:0.05,agressivo:0.09};
-    const risco=riscoMap[perfil]||0.01;
-    const entradaBase=Math.max(0.01,Math.round(banca*risco*100)/100);
-    const evFator=winrate*payout-(1-winrate);
-    const lucroWinBase=entradaBase*payout;
+            <button class="btn-toggle-hist" onclick="toggleHistorico()">👁️ EXIBIR HISTÓRICO PASSADO</button>
 
-    let entradasEstimadas=null;
-    let entradasDia=null;
-    let lucroEsperadoPorEntrada=0;
-    let valorEsperadoEntrada=0;
-    let exposicaoMaxima=entradaBase;
-    let plan=[];
-    let ciclosEstimados=null;
+            <div class="historico-box" id="box-historico">
+                <span class="section-label">Histórico de Sinais Salvo</span>
+                <div class="historico-scroll" id="lista-sinais"></div>
+            </div>
+        </div>
 
-    if(modo==='fixa'){
-        valorEsperadoEntrada=entradaBase*evFator;
-        lucroEsperadoPorEntrada=valorEsperadoEntrada;
-        if(valorEsperadoEntrada>0){
-            entradasEstimadas=Math.ceil(meta/valorEsperadoEntrada);
-            entradasDia=Math.ceil(entradasEstimadas/dias);
+    </div>
+
+    <script>
+        let lastNotifId = null;
+        const NATIVE_NOTIFICATION_COOLDOWN_MS = 60000;
+
+        // Registra o Service Worker, mas não dispara nenhuma notificação automaticamente.
+        if ('serviceWorker' in navigator && 'Notification' in window) {
+            navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+                .then(() => console.log('Service Worker de notificações registrado.'))
+                .catch(err => console.warn('Falha ao registrar Service Worker:', err));
         }
-    }else{
-        // Soros: cada nível só é atingido se o nível anterior terminar em WIN.
-        // O lucro de cada ciclo é calculado por probabilidade, sem inventar
-        // uma sequência futura de resultados.
-        let stake=entradaBase;
-        let evCiclo=0;
-        let entradasEsperadasCiclo=0;
-        for(let nivel=1;nivel<=niveis;nivel++){
-            const probAlcance=Math.pow(winrate,nivel-1);
-            entradasEsperadasCiclo+=probAlcance;
-            // Se chegar a este nível, o resultado líquido esperado desta entrada.
-            evCiclo += probAlcance*stake*evFator;
-            exposicaoMaxima=Math.max(exposicaoMaxima,stake);
-            stake*=1+payout;
-        }
-        if(evCiclo>0){
-            ciclosEstimados=Math.ceil(meta/evCiclo);
-            entradasEstimadas=Math.ceil(ciclosEstimados*entradasEsperadasCiclo);
-            entradasDia=Math.ceil(entradasEstimadas/dias);
-            valorEsperadoEntrada=evCiclo/entradasEsperadasCiclo;
-            lucroEsperadoPorEntrada=valorEsperadoEntrada;
-        }
-    }
 
-    const winsSemLoss=lucroWinBase>0?Math.ceil(meta/lucroWinBase):null;
-    if(entradasEstimadas){
-        let restante=entradasEstimadas;
-        for(let dia=1;dia<=dias;dia++){
-            const restantesDias=dias-dia+1;
-            const hoje=Math.ceil(restante/restantesDias);
-            plan.push({dia:dia,entradas:hoje,entrada_base:entradaBase,nivel_maximo:modo==='soros'?exposicaoMaxima:null});
-            restante-=hoje;
-        }
-    }
-
-    const viavel=Number.isFinite(entradasEstimadas)&&entradasEstimadas>0&&valorEsperadoEntrada>0;
-    let mensagem='';
-    if(!viavel){
-        mensagem='Com os parâmetros informados, o valor esperado por entrada não é positivo. Para tornar a simulação matematicamente positiva, altere o payout ou a taxa de acerto estimada.';
-    }else if(entradasDia>50){
-        mensagem='A simulação é matematicamente positiva, mas exige um volume elevado de entradas por dia para a meta e o prazo informados.';
-    }else if(modo==='soros'&&exposicaoMaxima>banca*0.15){
-        mensagem='A simulação do Soros concentra mais de 15% da banca em uma única entrada nos níveis altos. Avalie essa exposição antes de utilizar o plano.';
-    }else{
-        mensagem='Simulação matemática baseada exclusivamente na banca, payout, taxa de acerto e perfil informados. Isso não é garantia de resultado futuro.';
-    }
-
-    const nota=(
-        'Perfil '+perfil+': '+(risco*100).toFixed(0)+'% da banca por entrada-base ('+moedaBR(entradaBase)+'). '+
-        'Payout: '+pctBR(payoutRaw)+' • Taxa de acerto usada: '+pctBR(winrateRaw)+'. '+
-        (modo==='soros'
-            ? 'Soros com '+niveis+' nível(is): após WIN o lucro é incorporado à próxima entrada; após LOSS retorna ao valor-base.'
-            : 'Mão fixa: cada entrada mantém o mesmo valor-base.')
-    );
-
-    // Roteiro condicional de entradas: mostra exatamente quanto usar e para onde
-    // ir depois de WIN/LOSS. Isso evita inventar uma sequência futura de resultados.
-    const entrySteps=[];
-    let roteiroStake=entradaBase;
-    let roteiroNivel=1;
-    const totalRoteiro=modo==='soros' ? Math.max(12, Math.min(30, niveis*6)) : Math.min(30, Math.max(12, entradasEstimadas||12));
-    for(let i=1;i<=totalRoteiro;i++){
-        let winNext=entradaBase, lossNext=entradaBase, levelLabel='Mão fixa';
-        if(modo==='soros'){
-            levelLabel='Nível '+roteiroNivel;
-            if(roteiroNivel<niveis){
-                winNext=Math.round(roteiroStake*(1+payout)*100)/100;
-            }else{
-                winNext=entradaBase;
+        function solicitarPermissaoNotificacao() {
+            if (!('Notification' in window)) {
+                alert('Este navegador não suporta notificações de sistema.');
+                return;
             }
-            lossNext=entradaBase;
-        }else{
-            winNext=entradaBase;
-            lossNext=entradaBase;
+
+            Notification.requestPermission().then(permission => {
+                if (permission === 'granted') {
+                    const btn = document.getElementById('btn-enable-notify');
+                    btn.innerText = "✅ NOTIFICAÇÕES NATIVAS ATIVADAS!";
+                    btn.style.borderColor = "#10b981";
+                    btn.style.color = "#10b981";
+
+                    // Não envia uma notificação de teste imediatamente após a permissão.
+                    // Isso evita uma notificação desnecessária no momento da ativação.
+                } else {
+                    alert('Permissão de Notificação Recusada.');
+                }
+            });
         }
-        entrySteps.push({numero:i,valor:Math.round(roteiroStake*100)/100,nivel:levelLabel,win_proxima:Math.round(winNext*100)/100,loss_proxima:Math.round(lossNext*100)/100});
-        if(modo==='soros'){
-            if(roteiroNivel<niveis){
-                roteiroStake=winNext;
-                roteiroNivel++;
-            }else{
-                roteiroStake=entradaBase;
-                roteiroNivel=1;
+
+        async function dispararNotificacaoNativa(titulo, corpo, notifId) {
+            if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+            const id = String(notifId || '');
+            const agora = Date.now();
+
+            // Evita repetir a mesma notificação após recarregar/consultar o painel.
+            const ultimoId = localStorage.getItem('vision_last_notif_id') || '';
+            const ultimaHora = Number(localStorage.getItem('vision_last_notif_at') || '0');
+
+            if (id && id === ultimoId) return;
+            if (ultimaHora && (agora - ultimaHora) < NATIVE_NOTIFICATION_COOLDOWN_MS) return;
+
+            try {
+                if ('serviceWorker' in navigator) {
+                    const reg = await navigator.serviceWorker.ready;
+
+                    await reg.showNotification(titulo, {
+                        body: corpo,
+                        // Sem vibração repetitiva e sem renotify: comportamento menos intrusivo.
+                        tag: 'vision-signal',
+                        renotify: false,
+                        requireInteraction: false
+                    });
+                } else {
+                    new Notification(titulo, { body: corpo });
+                }
+
+                if (id) localStorage.setItem('vision_last_notif_id', id);
+                localStorage.setItem('vision_last_notif_at', String(agora));
+            } catch (err) {
+                console.warn('Não foi possível exibir a notificação:', err);
             }
-        }else roteiroStake=entradaBase;
-    }
-
-    const sorosLevels=[];
-    if(modo==='soros'){
-        let st=entradaBase;
-        for(let n=1;n<=niveis;n++){
-            const lucro=st*payout;
-            const prox=n<niveis?st+lucro:entradaBase;
-            sorosLevels.push({nivel:n,valor:Math.round(st*100)/100,lucro_win:Math.round(lucro*100)/100,proxima_win:Math.round(prox*100)/100,proxima_loss:entradaBase});
-            st=prox;
         }
-    }
 
-    renderCalculadora({
-        ok:true,
-        parameters:{bankroll:banca,target_profit:meta,days:dias,payout:payout,winrate:winrate,profile:perfil,mode:modo,soros_levels:niveis},
-        summary:{
-            entrada_base:entradaBase,
-            entradas_estimadas:entradasEstimadas,
-            entradas_por_dia:entradasDia,
-            lucro_esperado_por_entrada:lucroEsperadoPorEntrada,
-            valor_esperado_entrada:valorEsperadoEntrada,
-            exposicao_maxima:exposicaoMaxima,
-            wins_sem_loss:winsSemLoss,
-            viavel:viavel
-        },
-        plan:plan,
-        entry_steps:entrySteps,
-        soros_levels_detail:sorosLevels,
-        message:mensagem,
-        note:nota
-    });
-}
-function mostrarErroCalc(msg){
-    const box=document.getElementById('calc-results');
-    if(!box)return;
-    box.innerHTML='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Verifique os parâmetros</div></div></div><div class="card-pad"><div class="calc-warning">❌ '+String(msg)+'</div></div>';
-}
-
-function renderCalculadora(d){
-    const box=document.getElementById('calc-results');
-    if(!box)return;
-    const s=d.summary||{}, p=d.parameters||{}, plan=Array.isArray(d.plan)?d.plan:[], steps=Array.isArray(d.entry_steps)?d.entry_steps:[], levels=Array.isArray(d.soros_levels_detail)?d.soros_levels_detail:[];
-    const cards=[
-        ['Entrada base',moedaBR(s.entrada_base)],
-        ['Entradas estimadas',s.entradas_estimadas||'--'],
-        ['Entradas/dia',s.entradas_por_dia||'--'],
-        ['Lucro esperado/entrada',moedaBR(s.lucro_esperado_por_entrada)],
-        ['Meta total',moedaBR(p.target_profit)],
-        ['Banca final alvo',moedaBR((Number(p.bankroll)||0)+(Number(p.target_profit)||0))],
-        ['Máx. exposição',moedaBR(s.exposicao_maxima)],
-        ['EV por entrada',moedaBR(s.valor_esperado_entrada)]
-    ];
-    let html='';
-    html+='<div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Plano '+String(p.profile||'').toUpperCase()+' • '+(p.mode==='soros'?'SOROS':'MÃO FIXA')+'</div></div><div class="mini">'+(p.days||0)+' dia(s)</div></div>';
-    html+='<div class="card-pad">';
-    html+='<div class="calc-result-grid">';
-    cards.forEach(function(c){html+='<div class="calc-stat"><div class="k">'+c[0]+'</div><div class="v">'+c[1]+'</div></div>';});
-    html+='</div>';
-
-    html+='<div style="margin-top:14px" class="calc-section-title">📋 Roteiro das entradas</div>';
-    html+='<div class="calc-entry-note">'+(p.mode==='soros'
-        ? 'Use a linha correspondente ao resultado da entrada anterior: <b>WIN</b> leva para o próximo nível; <b>LOSS</b> reinicia no valor-base. O roteiro é condicional e não presume que você terá WINs consecutivos.'
-        : 'Na mão fixa, cada entrada mantém o mesmo valor. Se der WIN ou LOSS, a próxima entrada continua no valor-base definido pelo perfil.')+'</div>';
-    html+='<div style="overflow-x:auto;margin-top:7px"><table class="calc-entry-table"><thead><tr><th>Entrada</th><th>Valor</th><th>Nível</th><th>Se WIN → próxima</th><th>Se LOSS → próxima</th></tr></thead><tbody>';
-    if(steps.length){
-        steps.forEach(function(x){html+='<tr><td>#'+x.numero+'</td><td class="entry-value">'+moedaBR(x.valor)+'</td><td>'+x.nivel+'</td><td class="win-next">'+moedaBR(x.win_proxima)+'</td><td class="loss-next">'+moedaBR(x.loss_proxima)+'</td></tr>';});
-    }else html+='<tr><td colspan="5" class="empty">Nenhuma entrada calculada.</td></tr>';
-    html+='</tbody></table></div>';
-
-    if(p.mode==='soros'&&levels.length){
-        html+='<div style="margin-top:14px" class="calc-section-title">📈 Ciclo Soros por nível</div>';
-        html+='<div style="overflow-x:auto;margin-top:7px"><table class="calc-entry-table"><thead><tr><th>Nível</th><th>Entrada</th><th>Lucro se WIN</th><th>Próxima se WIN</th><th>Próxima se LOSS</th></tr></thead><tbody>';
-        levels.forEach(function(x){html+='<tr><td>Nível '+x.nivel+'</td><td class="entry-value">'+moedaBR(x.valor)+'</td><td class="win-next">+'+moedaBR(x.lucro_win)+'</td><td class="win-next">'+moedaBR(x.proxima_win)+'</td><td class="loss-next">'+moedaBR(x.proxima_loss)+'</td></tr>';});
-        html+='</tbody></table></div>';
-    }
-
-    html+='<div style="margin-top:14px" class="calc-section-title">📅 Distribuição por dia</div><div class="calc-plan">';
-    if(plan.length){
-        plan.forEach(function(x){html+='<div class="calc-plan-row"><b>Dia '+(x.dia||'--')+'</b><span>'+(x.entradas||0)+' entrada(s) • base '+moedaBR(x.entrada_base)+(x.nivel_maximo?' • exposição máx. '+moedaBR(x.nivel_maximo):'')+'</span></div>';});
-    }else{
-        html+='<div class="empty">Nenhum plano diário calculado.</div>';
-    }
-    html+='</div>';
-    html+='<div style="margin-top:10px" class="'+(s.viavel?'calc-ok':'calc-warning')+'">'+(d.message||'')+'</div>';
-    html+='<div style="margin-top:9px" class="calc-note">'+(d.note||'')+'</div>';
-    html+='</div>';
-    box.innerHTML=html;
-}
-function registrarResultado(res){fetch('/resultado/'+res,{cache:'no-store'}).then(()=>toast('Resultado registrado')).catch(()=>toast('Falha ao registrar resultado'))}
-function toggleTelegram(){fetch('/command/telegram_toggle',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d.ok){const b=document.getElementById('btn-telegram-toggle');if(b)b.innerText=d.telegram_ativo?'🟢 ENVIO TELEGRAM ATIVADO':'🔴 ENVIO TELEGRAM DESATIVADO';}})}
-function solicitarPermissaoNotificacao(){if(!('Notification'in window)){alert('Este navegador não suporta notificações.');return}Notification.requestPermission().then(p=>{const b=document.getElementById('btn-enable-notify');if(p==='granted'){if(b)b.innerText='✅ NOTIFICAÇÕES NATIVAS ATIVADAS';toast('Notificações ativadas')}else alert('Permissão de notificação recusada.')})}
-if('serviceWorker'in navigator&&'Notification'in window){navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'}).catch(()=>{})}
-async function dispararNotificacaoNativa(titulo,corpo,id){if(!('Notification'in window)||Notification.permission!=='granted')return;const nid=String(id||''),now=Date.now(),last=localStorage.getItem('vision_last_notif_id')||'',lastAt=Number(localStorage.getItem('vision_last_notif_at')||0);if(nid&&nid===last)return;if(lastAt&&NATIVE_NOTIFICATION_COOLDOWN_MS>0&&now-lastAt<NATIVE_NOTIFICATION_COOLDOWN_MS)return;try{const opcoes={body:corpo,tag:nid?'vision-signal-'+nid:'vision-signal-'+now,renotify:true,requireInteraction:true,silent:false,vibrate:[250,120,250,120,400],timestamp:now};if('serviceWorker'in navigator){const reg=await navigator.serviceWorker.ready;await reg.showNotification(titulo,opcoes)}else new Notification(titulo,opcoes);if(nid)localStorage.setItem('vision_last_notif_id',nid);localStorage.setItem('vision_last_notif_at',String(now))}catch(e){console.warn('Notificação nativa indisponível:',e)}}
-function toggleAtivosBloqueados(){const p=document.getElementById('news-locked-panel');const b=document.getElementById('news-locked-toggle');if(!p||!b)return;p.classList.toggle('open');const n=(latestData&&latestData.news_blocked_assets||[]).length;b.innerText=(p.classList.contains('open')?'🔽 OCULTAR':'🔒 VER')+' ATIVOS BLOQUEADOS ('+n+')'}
-function atualizarAtivosBloqueados(lista){const itens=Array.isArray(lista)?lista:[];const b=document.getElementById('news-locked-toggle'),p=document.getElementById('news-locked-panel'),box=document.getElementById('news-locked-list');if(!b||!p||!box)return;b.innerText=(p.classList.contains('open')?'🔽 OCULTAR':'🔒 VER')+' ATIVOS BLOQUEADOS ('+itens.length+')';box.innerHTML=itens.length?itens.map(x=>{const imp=Math.max(1,Math.min(3,parseInt(x.impact||2,10)));return `<div class="locked-item"><b>🚫 ${x.ativo||'ATIVO'}</b><br>${'🐂'.repeat(imp)} ${x.currency||''} — ${x.event||'Evento econômico'}<br><span style="color:#6f8095">Notícia: ${x.horario||'--:--'} | Liberação: ${x.liberacao||'--:--'}</span></div>`}).join(''):'<div class="empty">Nenhum ativo bloqueado por notícia no momento.</div>';
-    const b2=document.getElementById('news-locked-list-2');if(b2)b2.innerHTML=itens.length?itens.map(x=>{const imp=Math.max(1,Math.min(3,parseInt(x.impact||2,10)));return `<div class="locked-item"><b>🚫 ${x.ativo||'ATIVO'}</b><br>${'🐂'.repeat(imp)} ${x.currency||''} — ${x.event||'Evento econômico'}<br><span style="color:#6f8095">Notícia: ${x.horario||'--:--'} | Liberação: ${x.liberacao||'--:--'}</span></div>`}).join(''):'<div class="empty">Nenhum ativo bloqueado por notícia no momento.</div>';
-}
-function setText(id,v){const e=document.getElementById(id);if(e)e.innerText=v}
-function renderProbability(prob,id='prob-value',fill='prob-fill'){const p=Math.max(0,Math.min(100,Number(prob)||0));setText(id,p?p+'%':'--%');const e=document.getElementById(fill);if(e)e.style.width=p+'%'}
-function renderSignal(d){
-    const a=d.analise_atual||{};
-    const alerta=d.alerta||null;
-    const confirmado=d.sinal_confirmado||null;
-    // Prioridade: confirmado > alerta > análise corrente. Assim outro ativo analisado
-    // pelo bot nunca substitui o ativo da entrada confirmada.
-    const fonte=confirmado||alerta||a;
-    const scan=d.scan_atual_analise||a||{};
-    const dir=(fonte.direcao||fonte.sinal||null);
-    const prob=Number(fonte.probabilidade||0);
-    const ativo=fonte.ativo||d.ativo_atual||'AGUARDANDO';
-    const ativoScan=d.scan_atual||scan.ativo||ativo||'AGUARDANDO';
-    const tf=Number(fonte.tf||d.timeframe||5);
-    const entrada=fonte.str_entrada||fonte.entrada||d.entry_time||'--:--:--';
-    const expiracao=fonte.str_saida||fonte.expiracao||'--:--';
-    const est=fonte.estrategia_fmt||a.estrategia_fmt||'Motor aguardando análise';
-    const conf=fonte.confluencia!=null?fonte.confluencia:a.confluencia;
-    const analise=scan;
-
-    const panel=document.getElementById('panel-text');
-    if(panel){
-        if(confirmado){
-            const corConfirmada=dir==='CALL'?'#34d399':dir==='PUT'?'#fb7185':'#67e8f9';
-            panel.innerHTML=`<div style=\"text-align:center;line-height:1.6\"><b style=\"color:#67e8f9\">🎯 SINAL CONFIRMADO — ENTRADA AGORA!</b><br><b style=\"font-size:15px;color:${corConfirmada}\">${ativo} • ${dir||'--'}</b><br><span style=\"color:#cbd5e1\">Probabilidade: ${prob||'--'}% • M${tf}</span><br><span style=\"color:#94a3b8\">Entrada: ${entrada} • Expiração: ${expiracao}</span></div>`;
-        }else if(alerta){
-            const corAlerta=dir==='CALL'?'#34d399':dir==='PUT'?'#fb7185':'#fbbf24';
-            panel.innerHTML=`<div style=\"text-align:center;line-height:1.6\"><b style=\"color:#fbbf24\">⚠️ PRÉ-ALERTA</b><br><b style=\"font-size:15px;color:${corAlerta}\">${ativo} • ${dir||'--'}</b><br><span style=\"color:#cbd5e1\">Probabilidade: ${prob||'--'}% • M${tf}</span><br><span style=\"color:#94a3b8\">Entrada prevista: ${entrada} • Expiração: ${expiracao}</span></div>`;
-        }else if(d.rodando && Number(d.startup_lock_remaining||0)>0){
-            panel.innerHTML=`<div style=\"text-align:center;color:#f59e0b;line-height:1.6\">🛡️ <b>TRAVA DE SEGURANÇA</b><br>30 VELAS VALIDADAS • AGUARDANDO 5 MINUTOS<br><span style=\"color:#00d9ff\">LIBERAÇÃO EM ${Math.ceil(Number(d.startup_lock_remaining))}s</span></div>`;
-        }else if(!d.warmup_concluido && d.rodando){
-            panel.innerHTML=`<div style=\"text-align:center;color:#f59e0b;line-height:1.6\">🛡️ <b>TRAVA DE SEGURANÇA</b><br>ANALISANDO AS ÚLTIMAS 30 VELAS<br><span style=\"color:#00d9ff\">${d.warmup_ativos_analisados||0} ATIVOS VALIDADOS</span></div>`;
-        }else{
-            panel.innerHTML=d.html||'Aguardando Comando...';
+        function openBroker(url) {
+            const brokerContainer = document.getElementById('broker-view-container');
+            document.getElementById('brokerIframe').src = url;
+            brokerContainer.style.display = 'flex';
         }
-    }
 
-    setText('asset-tag',confirmado||alerta?ativo:ativoScan);
-    setText('analysis-asset',ativoScan);
-    setText('signal-asset-2',ativo);
-    setText('signal-tf','M'+tf);
-    setText('signal-tf-2','M'+tf);
+        function closeBrokerView() {
+            document.getElementById('broker-view-container').style.display = 'none';
+            document.getElementById('brokerIframe').src = '';
+        }
 
-    ['signal-direction','signal-direction-2'].forEach(id=>{
-        const e=document.getElementById(id);
-        if(!e)return;
-        e.className='signal-direction '+(dir==='CALL'?'signal-call':dir==='PUT'?'signal-put':'signal-wait');
-        e.innerText=dir||'AGUARDANDO';
-    });
+        function toggleHistorico() {
+            const box = document.getElementById('box-historico');
+            if (box.style.display === 'block') {
+                box.style.display = 'none';
+            } else {
+                box.style.display = 'block';
+            }
+        }
 
-    renderProbability(prob);
-    renderProbability(prob,'prob-value-3','prob-fill-3');
-    setText('prob-value-2',prob?prob+'%':'--%');
-    const confScan=scan.confluencia!=null?scan.confluencia:conf;
-    setText('confluence-overall',confScan!=null?'Confluência técnica: '+Number(confScan).toFixed(0)+'/100':'Confluência técnica: --/100');
-    setText('confluence-overall-2',confScan!=null?'Confluência '+Number(confScan).toFixed(0)+'/100':'Confluência --/100');
-    setText('signal-strategy',est);
-    setText('signal-strategy-2',est);
-    setText('analysis-direction',dir||'Sem sinal');
-    setText('signal-entry',entrada);
-    setText('signal-entry-2',entrada);
-    setText('signal-expiry',expiracao);
-    setText('signal-expiry-2',expiracao);
+        function toggleFerramentas() {
+            const box = document.getElementById('ferramentas-box');
+            box.style.display = box.style.display === 'block' ? 'none' : 'block';
+        }
 
-    if(confirmado){
-        setText('signal-status','CONFIRMADO • '+ativo);
-    }else if(alerta){
-        setText('signal-status','⚠️ ALERTA • '+ativo);
-    }else{
-        setText('signal-status',d.rodando?'ANALISANDO':'PARADO');
-    }
-    setText('robot-status',d.rodando?'ONLINE':'PARADO');
-    setText('top-status',d.rodando?'ANALISANDO':'ONLINE');
+        function toggleTelegram() {
+            fetch('/command/telegram_toggle').then(r => r.json()).then(data => {
+                if (data.ok) {
+                    const b = document.getElementById('btn-telegram-toggle');
+                    b.innerText = data.telegram_ativo ? '🟢 ENVIO TELEGRAM ATIVADO' : '🔴 ENVIO TELEGRAM DESATIVADO';
+                } else if (data.error) alert(data.error);
+            });
+        }
 
-    renderConfluence(analise,'confluence-list');
-    renderReasons(analise,'analysis-reasons');
-    renderConfluence(analise,'confluence-list-2');
-    renderReasons(analise,'analysis-reasons-2');
-    drawChart(analise.grafico||[],'market-chart');
-    drawChart(analise.grafico||[],'market-chart-2');
-}
+        function sendCommand(cmd) {
+            fetch('/command/' + cmd).then(r => r.json()).then(data => {
+                if(data.redirect) window.location.href = data.redirect;
+            });
+        }
 
-function renderConfluence(a,id){const box=document.getElementById(id);if(!box)return;const items=Array.isArray(a.confluencias)?a.confluencias:[];box.innerHTML=items.length?items.map(x=>`<div class="conf-row"><div class="conf-name">${x.nome||'Indicador'}</div><div class="conf-bar"><div class="conf-fill" style="width:${Math.max(0,Math.min(100,Number(x.pontos)||0))*5}%"></div></div><div class="conf-points">${x.pontos||0}/20</div></div>`).join(''):'<div class="empty">Aguardando dados do mercado...</div>'}
-function renderReasons(a,id){const box=document.getElementById(id);if(!box)return;const items=Array.isArray(a.motivos)?a.motivos:[];box.innerHTML=items.length?items.map(x=>`<div class="reason"><b class="${x.status==='ok'?'ok':x.status==='warn'?'warn':'bad'}">${x.status==='ok'?'✓':x.status==='warn'?'•':'×'} ${x.nome||'Indicador'}</b><div>${x.detalhe||''}</div></div>`).join(''):'<div class="empty">Sem diagnóstico disponível.</div>'}
-function drawChart(vals,id){const c=document.getElementById(id);if(!c)return;const ctx=c.getContext('2d');const rect=c.getBoundingClientRect();const w=Math.max(300,Math.floor(rect.width)),h=Math.max(120,Math.floor(rect.height));const dpr=window.devicePixelRatio||1;c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.strokeStyle='#172333';ctx.lineWidth=1;for(let i=1;i<4;i++){const y=i*h/4;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}if(!Array.isArray(vals)||vals.length<2){ctx.fillStyle='#64748b';ctx.font='11px Inter';ctx.fillText('Aguardando candles válidos...',12,20);return}const min=Math.min(...vals),max=Math.max(...vals),range=max-min||1;const pts=vals.map((v,i)=>[i*(w-18)/(vals.length-1)+9,h-10-((v-min)/range)*(h-24)]);ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.strokeStyle='#00d9ff';ctx.lineWidth=2.2;ctx.stroke();ctx.lineTo(pts[pts.length-1][0],h-10);ctx.lineTo(pts[0][0],h-10);ctx.closePath();ctx.fillStyle='rgba(0,217,255,.07)';ctx.fill();const last=pts[pts.length-1];ctx.beginPath();ctx.arc(last[0],last[1],3.5,0,Math.PI*2);ctx.fillStyle='#22c55e';ctx.fill()}
-function renderHistory(hist){const body=document.getElementById('history-table-body');if(!body)return;if(!hist.length){body.innerHTML='<tr><td colspan="3" class="empty">Nenhum histórico.</td></tr>';return}body.innerHTML=hist.map(x=>{const raw=String(x.res||'--');const r=raw.toLowerCase();const cls=r.includes('red')?'history-red':(r.includes('win')?'history-win':'');const label=raw.replace('WinG1','WIN G1').replace('winG1','WIN G1');return `<tr><td>#${x.id||'--'}</td><td>${x.sinal||'--'}</td><td><span class="history-result ${cls}">${label}</span></td></tr>`}).join('')}
-function renderResumoHistorico(r){const make=(arr)=>arr&&arr.length?arr.map(x=>`<div class="history-item"><span>${x.nome}</span><b>${x.assertividade}% <span style="color:#66758a">(${x.wins}W/${x.reds}R)</span></b></div>`).join(''):'<div class="empty">Sem dados suficientes.</div>';const a=document.getElementById('strategy-summary'),b=document.getElementById('asset-summary');if(a)a.innerHTML=make((r||{}).estrategias||[]);if(b)b.innerHTML=make((r||{}).ativos||[])}
-function atualizarSessao(d){setText('win-count',d.wins||0);setText('loss-count',d.reds||0);setText('wr-text',(d.winrate||0)+'%');setText('g1-count',d.g1_sessao||0);setText('session-count',(d.sinais_sessao_total||0)+' operações');const f=document.getElementById('wr-fill');if(f)f.style.width=Math.max(0,Math.min(100,Number(d.winrate)||0))+'%'}
-function formatarTempo(seg){seg=Math.max(0,Math.floor(Number(seg)||0));const h=Math.floor(seg/3600),m=Math.floor((seg%3600)/60),s=seg%60;return h>0?String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'):String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')}
-function formatarHora(ts){if(!ts)return'--:--:--';return new Date(Number(ts)*1000).toLocaleTimeString('pt-BR',{hour12:false})}
-function atualizarTimerMercado(d){const end=Number(d.candle_end_ts||0),start=Number(d.candle_start_ts||0),server=Number(d.server_now||Date.now()/1000),now=server+((Date.now()/1000)-server);const remaining=Math.max(0,end-now);const elapsed=Math.max(0,Math.min(end-start,now-start));const total=Math.max(1,Number(d.candle_total||((d.timeframe||5)*60)));const pct=Math.max(0,Math.min(100,(elapsed/total)*100));setText('candle-countdown',formatarTempo(remaining));const fill=document.getElementById('candle-fill');if(fill)fill.style.width=pct+'%';setText('candle-window',formatarHora(start)+' → '+formatarHora(end));const entryTs=Number(d.entry_end_ts||0);const entryRemaining=entryTs?Math.max(0,entryTs-now):0;const confirmTs=Number(d.confirmation_ts||0);const confirmRemaining=confirmTs?Math.max(0,confirmTs-now):0;const entrada=d.entry_time||'--:--:--';setText('entry-countdown',entryTs?(entrada+' • '+formatarTempo(entryRemaining)):(entrada==='--:--:--'?'--:--:--':entrada));const note=document.getElementById('timer-note');if(note){if(d.sinal_confirmado){note.innerText='🎯 Entrada confirmada • expiração: '+((d.sinal_confirmado||{}).str_saida||'--:--:--');note.className='timer-note timer-confirm'}else if(d.alerta){note.innerText=confirmRemaining<=5&&confirmRemaining>0?'⚡ CONFIRMAÇÃO EM '+Math.ceil(confirmRemaining)+'s':'⚠️ Confirmação programada 5s antes da virada • entrada '+entrada;note.className='timer-note '+(confirmRemaining<=5&&confirmRemaining>0?'timer-alert':'')}else if(Number(d.startup_lock_remaining||0)>0){note.innerText='🛡️ Trava inicial: '+Math.ceil(Number(d.startup_lock_remaining))+'s restantes • analisando mercado';note.className='timer-note timer-alert'}else{note.innerText='Aguardando uma confluência válida para programar a entrada.';note.className='timer-note'}}}
-async function atualizarPainel(){try{const r=await fetch('/status',{cache:'no-store'});const d=await r.json();if(d.redirect){location.href=d.redirect;return}latestData=d;atualizarAssetPickers(d);renderSignal(d);atualizarSessao(d);atualizarTimerMercado(d);atualizarAtivosBloqueados(d.news_blocked_assets||[]);const ng=d.news_guard_status||'AGUARDANDO CALENDÁRIO';setText('news-guard-status',ng);setText('guard-detail-status',ng);const blocked=(d.news_blocked_assets||[]).length;const color=blocked?'#fb7185':ng.includes('INDISPONÍVEL')?'#fbbf24':'#86efac';['news-guard-status','guard-detail-status'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.color=color});const b=document.getElementById('guard-badge');if(b)b.innerText=blocked?'● PROTEGENDO':'● ATIVO';const b2=document.getElementById('guard-badge-2');if(b2)b2.innerText=blocked?'● PROTEGENDO':'● ATIVO';const result=document.getElementById('result-area');if(result)result.style.display=d.aguardando?'grid':'none';renderHistory(d.historico||[]);renderResumoHistorico(d.historico_resumo||{});if(d.notificacao&&d.notificacao.id!==lastNotifId){lastNotifId=d.notificacao.id;dispararNotificacaoNativa(d.notificacao.titulo,d.notificacao.corpo,d.notificacao.id)}}catch(e){setText('top-status','REDE');}finally{setTimeout(atualizarPainel,1000)}}
-window.addEventListener('resize',()=>{if(latestData){const f=latestData.sinal_confirmado||latestData.alerta||latestData.analise_atual||{};drawChart((f.analise||f).grafico||[],'market-chart');drawChart((f.analise||f).grafico||[],'market-chart-2')}});
-document.getElementById('bt-market')?.addEventListener('change',e=>renderAssetPicker('bt-assets',e.target.value,[]));
-const opPicker=document.getElementById('operating-assets'); if(opPicker) opPicker.addEventListener('change',()=>saveOperatingAssets());
-atualizarPainel();
-setInterval(()=>{if(latestData)atualizarTimerMercado(latestData)},1000);
-</script>
+        let timerState = { candleEnd: 0, entryEnd: 0, running: false, entryTime: null, aguardando: false };
+        let serverClockOffset = 0;
+
+        function formatarContagem(segundos) {
+            const total = Math.max(0, Math.ceil(Number(segundos) || 0));
+            const m = Math.floor(total / 60);
+            const sec = total % 60;
+            return String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+        }
+
+        function atualizarRelogios() {
+            const agora = (Date.now() / 1000) + serverClockOffset;
+            const candleEl = document.getElementById('candle-timer');
+            if (candleEl) {
+                candleEl.innerText = timerState.running
+                    ? ('⏳ FECHAMENTO DO CANDLE: ' + formatarContagem(timerState.candleEnd - agora))
+                    : '⏸ CANDLE: PAUSADO';
+            }
+
+            const entryEl = document.getElementById('entry-timer');
+            const clockEl = document.getElementById('entry-clock');
+            if (entryEl && clockEl) {
+                const restante = timerState.entryEnd ? (timerState.entryEnd - agora) : 0;
+                if (timerState.entryTime && restante > 0) {
+                    entryEl.innerText = '🎯 ENTRADA EM: ' + formatarContagem(restante);
+                    clockEl.innerText = '⏰ HORÁRIO EXATO DA ENTRADA: ' + timerState.entryTime;
+                } else if (timerState.entryTime && timerState.aguardando) {
+                    entryEl.innerText = '🎯 ENTRADA CONFIRMADA — EXECUTE NO HORÁRIO INDICADO';
+                    clockEl.innerText = '⏰ HORÁRIO DA ENTRADA: ' + timerState.entryTime;
+                } else {
+                    entryEl.innerText = '🎯 AGUARDANDO SINAL DE ENTRADA';
+                    clockEl.innerText = 'Horário exato: --:--:--';
+                }
+            }
+        }
+
+        setInterval(atualizarRelogios, 1000);
+
+        async function atualizarPainel() {
+            try {
+                const r = await fetch('/status', { cache: 'no-store' });
+                const data = await r.json();
+                // Sincroniza os relógios com o servidor apenas quando chega um novo estado.
+                serverClockOffset = Number(data.server_now || (Date.now() / 1000)) - (Date.now() / 1000);
+                timerState.running = !!data.rodando;
+                timerState.candleEnd = Number(data.candle_end_ts || 0);
+                timerState.entryEnd = data.entry_end_ts ? Number(data.entry_end_ts) : 0;
+                timerState.entryTime = data.entry_time || null;
+                timerState.aguardando = !!data.aguardando;
+                atualizarRelogios();
+                const panel = document.getElementById('panel-text');
+                if(panel && data.html) panel.innerHTML = data.html;
+                if(document.getElementById('win-count')) document.getElementById('win-count').innerText = data.wins;
+                if(document.getElementById('loss-count')) document.getElementById('loss-count').innerText = data.reds;
+                if(document.getElementById('wr-text')) document.getElementById('wr-text').innerText = data.winrate + "%";
+                if(document.getElementById('wr-fill')) document.getElementById('wr-fill').style.width = data.winrate + "%";
+                if(document.getElementById('result-area')) document.getElementById('result-area').style.display = data.aguardando ? 'grid' : 'none';
+                
+                if(document.getElementById('mkt-badge')) document.getElementById('mkt-badge').innerText = data.mercado || "TODOS";
+                if(document.getElementById('current-asset')) {
+                    if(data.rodando) {
+                        document.getElementById('current-asset').innerText = data.ativo_atual || "VARRENDO...";
+                    } else {
+                        document.getElementById('current-asset').innerText = "SISTEMA PAUSADO";
+                    }
+                }
+
+                if(data.notificacao && data.notificacao.id !== lastNotifId) {
+                    lastNotifId = data.notificacao.id;
+                    dispararNotificacaoNativa(data.notificacao.titulo, data.notificacao.corpo, data.notificacao.id);
+                }
+
+                let histHtml = "";
+                if(data.historico) {
+                    data.historico.forEach(item => {
+                        let cor = "#64748b";
+                        if(item.res.includes("Win")) cor = "#10b981";
+                        if(item.res.includes("Red")) cor = "#ef4444";
+                        histHtml += `<div class="historico-item"><span>🕒 ${item.sinal}</span><b style="color:${cor}">${item.res}</b></div>`;
+                    });
+                }
+                if(document.getElementById('lista-sinais')) document.getElementById('lista-sinais').innerHTML = histHtml || "<div style='text-align:center; font-size:11px; color:#64748b;'>Nenhum sinal no histórico.</div>";
+            } catch (err) {
+                console.warn('Falha ao atualizar o painel:', err);
+            } finally {
+                // Atualiza dados do painel sem usar a consulta HTTP como relógio.
+                // Os cronômetros continuam correndo localmente de 1 em 1 segundo.
+                setTimeout(atualizarPainel, 1000);
+            }
+        }
+
+        atualizarPainel();
+
+        window.addEventListener('load', () => {
+            if (window.Notification && Notification.permission === 'granted') {
+                document.getElementById('btn-enable-notify').innerText = "✅ NOTIFICAÇÕES NATIVAS ATIVADAS";
+                document.getElementById('btn-enable-notify').style.borderColor = "#10b981";
+                document.getElementById('btn-enable-notify').style.color = "#10b981";
+            }
+        });
+    </script>
 </body>
 </html>
 """
@@ -1369,31 +1065,6 @@ def atualizar_ultimo_sinal_bd(email, resultado):
     except Exception:
         pass
 
-def resumir_historico(historico):
-    """Resume os últimos registros por estratégia e ativo sem alterar o banco legado."""
-    por_estrategia = {}
-    por_ativo = {}
-    for item in historico or []:
-        sinal = str(item.get("sinal", ""))
-        resultado = str(item.get("res", "")).lower()
-        partes = [p.strip() for p in sinal.split("|")]
-        ativo = partes[0] if partes else "OUTRO"
-        estrategia = partes[2] if len(partes) >= 3 else "Não informado"
-        for mapa, chave in ((por_estrategia, estrategia), (por_ativo, ativo)):
-            reg = mapa.setdefault(chave, {"total": 0, "wins": 0, "reds": 0})
-            reg["total"] += 1
-            if "win" in resultado:
-                reg["wins"] += 1
-            elif "red" in resultado:
-                reg["reds"] += 1
-    def finalizar(mapa):
-        out=[]
-        for nome, reg in mapa.items():
-            concl=reg["wins"]+reg["reds"]
-            out.append({"nome":nome,"total":reg["total"],"wins":reg["wins"],"reds":reg["reds"],"assertividade":round(reg["wins"]/concl*100,1) if concl else 0})
-        return sorted(out,key=lambda x:(-x["total"],-x["assertividade"],x["nome"]))[:8]
-    return {"estrategias":finalizar(por_estrategia),"ativos":finalizar(por_ativo)}
-
 # ================= BOT CONFIGS & ESTRATÉGIAS =================
 LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
 
@@ -1406,488 +1077,103 @@ NOME_ESTRATEGIAS_DISPLAY = {
 }
 
 # ================= ATIVOS DIVIDIDOS ABERTO E OTC =================
-# Lista ampliada de instrumentos encontrados em fontes públicas relacionadas à Quotex.
-# A disponibilidade pode variar por região, horário e pelo ambiente da própria Quotex.
-# O motor somente gera sinal quando consegue obter candles válidos para o ticker.
 ATIVOS_BASE = {
     "FOREX_ABERTO": [
-        # Principais e cruzamentos
         "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
-        "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "GBPAUD",
-        "EURCAD", "GBPCAD", "AUDCAD", "CHFJPY", "EURCHF", "GBPCHF",
-        "NZDJPY", "AUDNZD", "EURNZD", "GBPNZD",
-        # Pares adicionais/exóticos listados publicamente
-        "USDSGD", "USDHKD", "USDTRY", "USDMXN", "USDZAR", "USDPLN",
-        "USDNOK", "USDSEK", "USDDKK", "USDINR"
+        "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCAD", "EURCHF"
     ],
     "CRIPTO_ABERTO": [
-        "BTCUSD", "ETHUSD", "LTCUSD", "XRPUSD", "BCHUSD", "EOSUSD", "ADAUSD",
-        "DOTUSD", "LINKUSD", "UNIUSD", "SOLUSD", "AVAXUSD", "MATICUSD",
-        "BNBUSD", "DOGEUSD", "SHIBUSD", "TRXUSD"
+        "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "AVAXUSD",
+        "LINKUSD", "DOGEUSD", "DOTUSD", "LTCUSD", "TRXUSD"
     ],
     "FOREX_OTC": [
-        # OTC dos principais pares/cruzamentos
         "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC", "USDCAD-OTC", "USDCHF-OTC", "NZDUSD-OTC",
-        "EURGBP-OTC", "EURJPY-OTC", "GBPJPY-OTC", "AUDJPY-OTC", "EURAUD-OTC", "GBPAUD-OTC",
-        "EURCAD-OTC", "GBPCAD-OTC", "AUDCAD-OTC", "CHFJPY-OTC", "EURCHF-OTC", "GBPCHF-OTC",
-        "NZDJPY-OTC", "AUDNZD-OTC", "EURNZD-OTC", "GBPNZD-OTC", "NZDCAD-OTC", "CADCHF-OTC", "NZDCHF-OTC",
-        # Exóticos/locais encontrados em listas públicas de OTC da Quotex
-        "USDBDT-OTC", "ARSUSD-OTC", "BRLUSD-OTC", "DZDUSD-OTC", "USDTRY-OTC", "USDMXN-OTC",
-        "USDPKR-OTC", "USDCOP-OTC", "INRUSD-OTC", "EURSGD-OTC"
+        "EURGBP-OTC", "EURJPY-OTC", "GBPJPY-OTC", "AUDJPY-OTC", "EURAUD-OTC", "EURCAD-OTC", "EURCHF-OTC"
     ],
     "CRIPTO_OTC": [
-        "BTCUSD-OTC", "ETHUSD-OTC", "LTCUSD-OTC", "XRPUSD-OTC", "BCHUSD-OTC", "EOSUSD-OTC",
-        "ADAUSD-OTC", "DOTUSD-OTC", "LINKUSD-OTC", "UNIUSD-OTC", "SOLUSD-OTC", "AVAXUSD-OTC",
-        "MATICUSD-OTC", "BNBUSD-OTC", "DOGEUSD-OTC", "SHIBUSD-OTC", "TRXUSD-OTC"
+        "BTCUSD-OTC", "ETHUSD-OTC", "SOLUSD-OTC", "BNBUSD-OTC", "XRPUSD-OTC", "AVAXUSD-OTC",
+        "LINKUSD-OTC", "DOGEUSD-OTC", "DOTUSD-OTC", "LTCUSD-OTC", "TRXUSD-OTC"
     ]
 }
 
 # ================= MAPEAMENTO DE TICKERS =================
-# Para Forex aberto, Yahoo Finance usa o padrão XXXYYY=X.
-# Para cripto, usamos o par XXX-USD quando o Yahoo possui esse instrumento.
 MAPA_TICKERS = {}
-for par in ATIVOS_BASE["FOREX_ABERTO"]:
-    MAPA_TICKERS[par] = par + "=X"
-for par in ATIVOS_BASE["CRIPTO_ABERTO"]:
-    MAPA_TICKERS[par] = par.replace("USD", "-USD")
-for par in ATIVOS_BASE["FOREX_OTC"]:
-    # A fonte pública de candles usada pelo bot não fornece a série OTC da Quotex.
-    # O símbolo é mantido para aparecer na seleção, mas o motor só sinaliza se
-    # encontrar dados válidos para o ticker correspondente.
-    MAPA_TICKERS[par] = par.replace("-OTC", "=X")
-for par in ATIVOS_BASE["CRIPTO_OTC"]:
-    MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
-
-def ativos_por_mercado(mkt):
-    grupos = {
-        "TODOS": ["FOREX_ABERTO", "CRIPTO_ABERTO", "FOREX_OTC", "CRIPTO_OTC"],
-        "ABERTO_TODOS": ["FOREX_ABERTO", "CRIPTO_ABERTO"],
-        "OTC_TODOS": ["FOREX_OTC", "CRIPTO_OTC"],
-        "FOREX_ABERTO": ["FOREX_ABERTO"],
-        "CRIPTO_ABERTO": ["CRIPTO_ABERTO"],
-        "FOREX_OTC": ["FOREX_OTC"],
-        "CRIPTO_OTC": ["CRIPTO_OTC"],
-    }
-    out=[]
-    for grupo in grupos.get(mkt, grupos["TODOS"]):
-        for ativo in ATIVOS_BASE.get(grupo, []):
-            if ativo not in out:
-                out.append(ativo)
-    return out
-
-# ================= TRAVA DE NOTÍCIAS / CALENDÁRIO INVESTING.COM =================
-# O Investing.com classifica o impacto dos eventos com 1, 2 ou 3 estrelas/touros.
-# 1 = baixo, 2 = moderado e 3 = alto. A proteção do Vision Pro usa somente 2 e 3.
-NEWS_MIN_IMPACT = 2
-NEWS_LOCK_BEFORE_MIN = 30
-NEWS_LOCK_AFTER_MIN = 30
-NEWS_CACHE_TTL = 60
-
-# IMPORTANTE: se o Investing.com estiver temporariamente indisponível, o bot NÃO
-# bloqueia todos os ativos. Ele continua a análise normal e tenta consultar a fonte
-# novamente no próximo ciclo. Assim, somente uma notícia realmente identificada
-# pelo calendário pode bloquear um ativo.
-NEWS_FAIL_OPEN = True
-
-INVESTING_CALENDAR_CACHE = {
-    "updated": 0.0,
-    "events": [],
-    "ok": False,
-    "error": "",
-}
-INVESTING_CALENDAR_LOCK = threading.Lock()
-
-# Códigos de países usados pelo calendário do Investing.com para as moedas dos ativos.
-# O código 12 é GMT -3:00 (horário de Brasília) no calendário do Investing.com.
-INVESTING_COUNTRIES = "5,4,72,35,25,6,12,43"
-INVESTING_TIMEZONE = "12"
-
-
-def _limpar_html_investing(valor):
-    if not valor:
-        return ""
-    valor = re.sub(r"<script[^>]*>.*?</script>", " ", str(valor), flags=re.I | re.S)
-    valor = re.sub(r"<style[^>]*>.*?</style>", " ", valor, flags=re.I | re.S)
-    valor = re.sub(r"<[^>]+>", " ", valor)
-    return re.sub(r"\s+", " ", html_lib.unescape(valor)).strip()
-
-
-def _parsear_datetime_investing(valor, origem="local"):
-    """Converte data/hora do Investing.com sem deslocar 3 horas por engano."""
-    if valor is None or valor == "":
-        return None
-
-    bruto = str(valor).strip()
-
-    # event_timestamp pode aparecer como timestamp Unix em algumas respostas.
-    if re.fullmatch(r"\d{10}(?:\.\d+)?", bruto):
-        try:
-            return datetime.fromtimestamp(float(bruto), tz=pytz.utc).astimezone(FUSO_SP)
-        except Exception:
-            return None
-
-    # Algumas versões usam ISO com timezone.
-    try:
-        iso = bruto.replace("Z", "+00:00")
-        dt_iso = datetime.fromisoformat(iso)
-        if dt_iso.tzinfo is not None:
-            return dt_iso.astimezone(FUSO_SP)
-    except Exception:
-        pass
-
-    for fmt in (
-        "%Y/%m/%d %H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y/%m/%d %H:%M",
-        "%Y-%m-%d %H:%M",
-    ):
-        try:
-            dt = datetime.strptime(bruto, fmt)
-            if origem == "utc":
-                return pytz.utc.localize(dt).astimezone(FUSO_SP)
-            # Com timeZone=12, o Investing devolve o horário do calendário em GMT-3.
-            return FUSO_SP.localize(dt)
-        except ValueError:
-            continue
-    return None
-
-
-def _extrair_eventos_investing(html_resposta):
-    """Extrai somente eventos de 2 ou 3 estrelas/touros do calendário."""
-    if not html_resposta:
-        return []
-
-    texto = html_resposta.decode("utf-8", errors="ignore") if isinstance(html_resposta, bytes) else str(html_resposta)
-
-    # O endpoint Service retorna JSON com o HTML dentro de data.
-    try:
-        obj = json.loads(texto)
-        if isinstance(obj, dict) and obj.get("data"):
-            texto = obj["data"]
-    except Exception:
-        pass
-
-    # Aceita tanto js-event-item quanto eventRowId_ (variações do Investing).
-    rows = re.findall(
-        r"<tr\b[^>]*(?:class=[\"'][^\"']*js-event-item[^\"']*|id=[\"']eventRowId_[^\"']+)[^>]*>.*?</tr>",
-        texto,
-        flags=re.I | re.S,
-    )
-
-    # Fallback mais amplo para respostas do widget/espelho.
-    if not rows:
-        rows = re.findall(r"<tr\b[^>]*id=[\"'][^\"']*eventRowId[^\"']*[\"'][^>]*>.*?</tr>", texto, flags=re.I | re.S)
-
-    eventos = []
-    vistos = set()
-
-    for row in rows:
-        # data-event-datetime normalmente representa o horário exibido pelo calendário.
-        m_dt = re.search(r'data-event-datetime=[\"\']([^\"\']+)', row, flags=re.I)
-        if m_dt:
-            dt_evento = _parsear_datetime_investing(m_dt.group(1), origem="local")
-        else:
-            m_ts = re.search(r'event_timestamp=[\"\']([^\"\']+)', row, flags=re.I)
-            dt_evento = _parsear_datetime_investing(m_ts.group(1) if m_ts else "", origem="utc")
-        if not dt_evento:
-            continue
-
-        # Moeda: o Investing usa td.flagCur e, em algumas versões, title/data-attr.
-        m_cur = re.search(
-            r'<td[^>]*class=["\'][^"\']*flagCur[^"\']*["\'][^>]*>(.*?)</td>',
-            row,
-            flags=re.I | re.S,
-        )
-        currency_text = _limpar_html_investing(m_cur.group(1) if m_cur else "")
-        currencies = re.findall(r"\b[A-Z]{3}\b", currency_text.upper())
-        currency = currencies[0] if currencies else ""
-        if not currency and m_cur:
-            m_title = re.search(r'(?:title|data-currency)=["\']([A-Za-z]{3})["\']', m_cur.group(1), flags=re.I)
-            currency = m_title.group(1).upper() if m_title else ""
-
-        # Impacto: 2/3 grayFullBullishIcon = 2/3 touros/estrelas.
-        m_sent = re.search(
-            r'<td[^>]*class=["\'][^"\']*sentiment[^"\']*["\'][^>]*>(.*?)</td>',
-            row,
-            flags=re.I | re.S,
-        )
-        sentiment_html = m_sent.group(1) if m_sent else ""
-        impacto = len(re.findall(r"grayFullBullishIcon", sentiment_html, flags=re.I))
-
-        # Fallbacks para versões que expõem bull1/bull2/bull3 ou quantidade de ícones.
-        if impacto <= 0:
-            m_bull = re.search(r'data-img_key=["\']bull([1-3])["\']', sentiment_html, flags=re.I)
-            impacto = int(m_bull.group(1)) if m_bull else 0
-        if impacto <= 0:
-            bull_classes = re.findall(r"bull(?:ish)?(?:Icon)?(?:[ _-]?(?:1|2|3))?", sentiment_html, flags=re.I)
-            if bull_classes:
-                impacto = min(3, len(bull_classes))
-
-        if not currency or impacto < NEWS_MIN_IMPACT:
-            continue
-
-        m_event = re.search(
-            r'<td[^>]*class=["\'][^"\']*event[^"\']*["\'][^>]*>(.*?)</td>',
-            row,
-            flags=re.I | re.S,
-        )
-        nome_evento = _limpar_html_investing(m_event.group(1) if m_event else "") or "Evento econômico"
-
-        chave = (dt_evento.isoformat(), currency, impacto, nome_evento)
-        if chave in vistos:
-            continue
-        vistos.add(chave)
-        eventos.append({
-            "datetime": dt_evento,
-            "currency": currency,
-            "impact": impacto,
-            "event": nome_evento,
-        })
-
-    eventos.sort(key=lambda x: x["datetime"])
-    return eventos
-
-
-def atualizar_calendario_investing(force=False):
-    """Consulta o Investing.com e mantém apenas eventos reais de 2/3 touros."""
-    agora_ts = time.time()
-    with INVESTING_CALENDAR_LOCK:
-        if not force and (agora_ts - INVESTING_CALENDAR_CACHE.get("updated", 0)) < NEWS_CACHE_TTL:
-            return INVESTING_CALENDAR_CACHE.get("ok", False)
-
-        hoje = agora_brasilia().date()
-        amanha = hoje + timedelta(days=1)
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/140.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-            "X-Requested-With": "XMLHttpRequest",
-            "Origin": "https://www.investing.com",
-            "Referer": "https://www.investing.com/economic-calendar/",
-        }
-
-        eventos = []
-        erro = ""
-        sucesso_fonte = False
-
-        # 1) Endpoint oficial usado pelo calendário.
-        urls_api = [
-            "https://br.investing.com/economic-calendar/Service/getCalendarFilteredData",
-            "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData",
-        ]
-
-        for url in urls_api:
-            try:
-                with requests.Session() as sess:
-                    base = url.split("/Service/")[0] + "/"
-                    sess.headers.update({"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]})
-                    try:
-                        sess.get(base, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=8)
-                    except Exception:
-                        pass
-
-                    payload = {
-                        "country[]": INVESTING_COUNTRIES.split(","),
-                        "dateFrom": hoje.strftime("%Y-%m-%d"),
-                        "dateTo": amanha.strftime("%Y-%m-%d"),
-                        "timeZone": INVESTING_TIMEZONE,
-                        "timeFilter": "timeRemain",
-                        "currentTab": "custom",
-                        "submitFilters": "1",
-                        "limit_from": "0",
-                    }
-                    resp = sess.post(url, data=payload, headers=headers, timeout=12)
-                    if resp.status_code == 200 and resp.text:
-                        sucesso_fonte = True
-                        eventos = _extrair_eventos_investing(resp.text)
-                        # Resposta válida sem eventos de 2/3 touros é normal.
-                        break
-                    erro = f"HTTP {resp.status_code} em {url}"
-            except Exception as exc:
-                erro = str(exc)
-
-        # 2) Página oficial do calendário como fallback.
-        if not sucesso_fonte:
-            for url in ("https://br.investing.com/economic-calendar/", "https://www.investing.com/economic-calendar/"):
-                try:
-                    resp = requests.get(url, headers={**headers, "X-Requested-With": ""}, timeout=12)
-                    if resp.status_code == 200 and resp.text:
-                        sucesso_fonte = True
-                        eventos = _extrair_eventos_investing(resp.text)
-                        break
-                    erro = f"HTTP {resp.status_code} em {url}"
-                except Exception as exc:
-                    erro = str(exc)
-
-        # 3) Widget oficial do Investing.com: alternativa quando o endpoint principal
-        # estiver protegido/indisponível no servidor do Render.
-        if not sucesso_fonte:
-            widget_url = (
-                "https://sslecal2.investing.com/?"
-                "columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous&"
-                "features=datepicker,timezone&"
-                f"countries={INVESTING_COUNTRIES}&"
-                "calType=week&"
-                f"timeZone={INVESTING_TIMEZONE}&"
-                "lang=12"
-            )
-            try:
-                resp = requests.get(widget_url, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=12)
-                if resp.status_code == 200 and resp.text:
-                    sucesso_fonte = True
-                    eventos = _extrair_eventos_investing(resp.text)
-            except Exception as exc:
-                erro = str(exc)
-
-        INVESTING_CALENDAR_CACHE["updated"] = agora_ts
-
-        if sucesso_fonte:
-            INVESTING_CALENDAR_CACHE["events"] = eventos
-            INVESTING_CALENDAR_CACHE["ok"] = True
-            INVESTING_CALENDAR_CACHE["error"] = ""
-        else:
-            # Não limpa eventos antigos aqui para facilitar diagnóstico, mas o motor
-            # não usa cache antigo quando a fonte não confirmou uma atualização.
-            INVESTING_CALENDAR_CACHE["ok"] = False
-            INVESTING_CALENDAR_CACHE["error"] = erro or "Fonte indisponível"
-
-        return sucesso_fonte
-
-
-def moedas_do_ativo(ativo):
-    base = str(ativo or "").upper().replace("-OTC", "")
-    cripto = {x.replace("-OTC", "") for x in (ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["CRIPTO_OTC"])}
-    if base in cripto:
-        # Notícias macro de USD são aplicadas aos ativos de cripto cotados em USD.
-        return ["USD"]
-    if len(base) >= 6:
-        return [base[:3], base[3:6]]
-    return []
-
-
-def evento_bloqueia_ativo(ativo, agora, eventos=None):
-    """Retorna o evento de 2/3 touros que está dentro da janela do ativo."""
-    moedas = set(moedas_do_ativo(ativo))
-    if not moedas:
-        return None
-
-    eventos = eventos if eventos is not None else INVESTING_CALENDAR_CACHE.get("events", [])
-    inicio_janela = timedelta(minutes=NEWS_LOCK_BEFORE_MIN)
-    fim_janela = timedelta(minutes=NEWS_LOCK_AFTER_MIN)
-    melhor = None
-    distancia_melhor = None
-
-    for evento in eventos:
-        if evento.get("currency") not in moedas or int(evento.get("impact", 0)) < NEWS_MIN_IMPACT:
-            continue
-        dt_evento = evento.get("datetime")
-        if not dt_evento:
-            continue
-        if not (dt_evento - inicio_janela <= agora <= dt_evento + fim_janela):
-            continue
-        distancia = abs((agora - dt_evento).total_seconds())
-        if distancia_melhor is None or distancia < distancia_melhor:
-            distancia_melhor = distancia
-            melhor = evento
-
-    return melhor
-
-
-def ativo_bloqueado_por_noticia(ativo, agora=None):
-    """Compatibilidade: verifica um ativo sem bloquear por falha da fonte."""
-    agora = agora or agora_brasilia()
-    calendario_ok = atualizar_calendario_investing()
-    if not calendario_ok and NEWS_FAIL_OPEN:
-        return False, None
-    evento = evento_bloqueia_ativo(ativo, agora)
-    return evento is not None, evento
-
-
-def resumo_trava_noticias(evento):
-    if not evento:
-        return ""
-    dt = evento.get("datetime")
-    horario = dt.strftime("%H:%M") if hasattr(dt, "strftime") else "--:--"
-    impacto = int(evento.get("impact", NEWS_MIN_IMPACT))
-    touros = "🐂" * max(1, min(3, impacto))
-    return f"🔒 {touros} {evento.get('currency', '')} — {evento.get('event', 'Evento')} às {horario} | trava ±30 min"
+for par in ATIVOS_BASE["FOREX_ABERTO"]: MAPA_TICKERS[par] = par + "=X"
+for par in ATIVOS_BASE["CRIPTO_ABERTO"]: MAPA_TICKERS[par] = par.replace("USD", "-USD")
+for par in ATIVOS_BASE["FOREX_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "=X")
+for par in ATIVOS_BASE["CRIPTO_OTC"]: MAPA_TICKERS[par] = par.replace("-OTC", "").replace("USD", "-USD")
 
 # ================= MOTOR DE ANÁLISE REAL DE 30 VELAS =================
-def _normalizar_candles_fechados(ohlc, tf):
-    """Remove candles incompletos e valores inválidos antes da análise."""
-    try:
-        n = len(ohlc.get("close", []))
-        if n < 2:
-            return None
-        mask = np.isfinite(ohlc["open"]) & np.isfinite(ohlc["high"]) & np.isfinite(ohlc["low"]) & np.isfinite(ohlc["close"])
-        for k in ohlc:
-            ohlc[k] = np.asarray(ohlc[k])[mask]
-        if len(ohlc["close"]) < 2:
-            return None
-        # A análise usa apenas candles fechados. O último candle é descartado
-        # quando ainda estiver dentro da janela corrente do timeframe.
-        ultimo_ts = float(ohlc["time"][-1])
-        agora_ts = time.time()
-        if ultimo_ts + (int(tf) * 60) > agora_ts:
-            for k in ohlc:
-                ohlc[k] = ohlc[k][:-1]
-        return ohlc if len(ohlc["close"]) >= 30 else None
-    except Exception:
-        return None
-
 def get_data_v2(ticker, tf, velas_minimas=30):
-    """Obtém candles reais. Nunca cria candles aleatórios quando uma fonte falha."""
     try:
         base_ticker = ticker
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*'
         }
+        
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{base_ticker}?interval={tf}m&range=5d"
         res = requests.get(url, headers=headers, timeout=5.0)
-        if res.status_code == 200:
-            payload = res.json()
-            result = (payload.get('chart') or {}).get('result')
-            if result:
-                result = result[0]
-                timestamps = result.get('timestamp') or []
-                quote = (result.get('indicators') or {}).get('quote', [{}])[0]
-                ohlc = {
-                    "time": np.array(timestamps),
-                    "open": np.array(quote.get('open', []), dtype=float),
-                    "high": np.array(quote.get('high', []), dtype=float),
-                    "low": np.array(quote.get('low', []), dtype=float),
-                    "close": np.array(quote.get('close', []), dtype=float)
-                }
-                fechado = _normalizar_candles_fechados(ohlc, tf)
-                if fechado is not None and len(fechado["close"]) >= velas_minimas:
-                    return fechado
+        
+        if res.status_code == 200 and 'chart' in res.json():
+            data_json = res.json()
+            result = data_json['chart']['result'][0]
+            timestamps = result['timestamp']
+            quote = result['indicators']['quote'][0]
+            
+            ohlc = {
+                "time": np.array(timestamps),
+                "open": np.array(quote['open'], dtype=float),
+                "high": np.array(quote['high'], dtype=float),
+                "low": np.array(quote['low'], dtype=float),
+                "close": np.array(quote['close'], dtype=float)
+            }
+            
+            idx = ~np.isnan(ohlc["close"])
+            for k in ohlc: 
+                ohlc[k] = ohlc[k][idx]
+                
+            if len(ohlc["close"]) >= velas_minimas:
+                return ohlc
 
         if "-USD" in base_ticker or "USD" in ticker:
             crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
-            url_alt = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={crypto_symbol}&tsym=USD&limit=300&aggregate={tf}"
-            r_alt = requests.get(url_alt, timeout=5.0)
-            if r_alt.status_code == 200:
-                payload = r_alt.json()
-                data_list = (payload.get('Data') or {}).get('Data') or []
-                if data_list:
-                    ohlc = {
-                        "time": np.array([x.get('time', 0) for x in data_list]),
-                        "open": np.array([x.get('open', np.nan) for x in data_list], dtype=float),
-                        "high": np.array([x.get('high', np.nan) for x in data_list], dtype=float),
-                        "low": np.array([x.get('low', np.nan) for x in data_list], dtype=float),
-                        "close": np.array([x.get('close', np.nan) for x in data_list], dtype=float)
-                    }
-                    fechado = _normalizar_candles_fechados(ohlc, tf)
-                    if fechado is not None and len(fechado["close"]) >= velas_minimas:
-                        return fechado
-        return None
-    except Exception as e:
-        print(f"⚠️ Falha ao obter dados reais de {ticker}: {e}")
+            url_alt = f"https://min-api.cryptocompare.com/data/v2/histo/minute?fsym={crypto_symbol}&tsym=USD&limit=100&aggregate={tf}"
+            r_alt = requests.get(url_alt, timeout=5.0).json()
+            
+            if r_alt.get('Response') == 'Success' and 'Data' in r_alt.get('Data', {}):
+                data_list = r_alt['Data']['Data']
+                closes = np.array([x['close'] for x in data_list], dtype=float)
+                opens = np.array([x['open'] for x in data_list], dtype=float)
+                highs = np.array([x['high'] for x in data_list], dtype=float)
+                lows = np.array([x['low'] for x in data_list], dtype=float)
+                times = np.array([x['time'] for x in data_list])
+                
+                if len(closes) >= velas_minimas:
+                    return {"time": times, "open": opens, "high": highs, "low": lows, "close": closes}
+        
+        base_val = 1.0850 if "EUR" in ticker else (65000.0 if "BTC" in ticker else 150.0)
+        times = np.array([int(time.time()) - (i * tf * 60) for i in range(velas_minimas, 0, -1)])
+        closes, opens, highs, lows = [], [], [], []
+        c = base_val
+        for _ in range(velas_minimas):
+            o = c + random.uniform(-0.0005, 0.0005)
+            c = o + random.uniform(-0.0008, 0.0008)
+            h = max(o, c) + random.uniform(0.0001, 0.0004)
+            l = min(o, c) - random.uniform(0.0001, 0.0004)
+            opens.append(o)
+            closes.append(c)
+            highs.append(h)
+            lows.append(l)
+
+        return {
+            "time": times,
+            "open": np.array(opens, dtype=float),
+            "high": np.array(highs, dtype=float),
+            "low": np.array(lows, dtype=float),
+            "close": np.array(closes, dtype=float)
+        }
+    except Exception:
         return None
 
 def calcular_ema(dados, periodo):
@@ -1901,469 +1187,104 @@ def calcular_ema(dados, periodo):
     return ema
 
 # ================= MOTOR DE ESTRATÉGIAS COM SCORE DE PROBABILIDADE =================
-def _rsi_atual(c, periodo=14):
-    if len(c) < periodo + 1:
-        return 50.0
-    delta = np.diff(c)
-    ganhos = np.where(delta > 0, delta, 0.0)
-    perdas = np.where(delta < 0, -delta, 0.0)
-    ganho = np.mean(ganhos[-periodo:])
-    perda = np.mean(perdas[-periodo:])
-    if perda <= 1e-12:
-        return 100.0 if ganho > 0 else 50.0
-    rs = ganho / perda
-    return float(100 - (100 / (1 + rs)))
-
-def _macd_atual(c):
-    ema12 = calcular_ema(c, 12)
-    ema26 = calcular_ema(c, 26)
-    linha = ema12 - ema26
-    sinal = calcular_ema(linha, 9)
-    return float(linha[-1]), float(sinal[-1]), float(linha[-1] - sinal[-1])
-
-def _atr_atual(h, l, c, periodo=14):
-    """ATR simples usando somente candles fechados disponíveis."""
-    if len(c) < 2:
-        return 0.0
-    tr = np.maximum(
-        h[1:] - l[1:],
-        np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1]))
-    )
-    janela = tr[-periodo:] if len(tr) >= periodo else tr
-    return float(np.mean(janela)) if len(janela) else 0.0
-
-def _adx_atual(h, l, c, periodo=14):
-    """ADX aproximado e estável para medir força de tendência."""
-    if len(c) < periodo * 2 + 2:
-        return 0.0, 0.0, 0.0
-    up = np.diff(h)
-    down = -np.diff(l)
-    plus_dm = np.where((up > down) & (up > 0), up, 0.0)
-    minus_dm = np.where((down > up) & (down > 0), down, 0.0)
-    tr = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
-    atr = np.convolve(tr, np.ones(periodo) / periodo, mode='valid')
-    p = np.convolve(plus_dm, np.ones(periodo) / periodo, mode='valid')
-    m = np.convolve(minus_dm, np.ones(periodo) / periodo, mode='valid')
-    n = min(len(atr), len(p), len(m))
-    if n < periodo:
-        return 0.0, 0.0, 0.0
-    atr = np.maximum(atr[-n:], 1e-12)
-    pdi = 100 * p[-n:] / atr
-    mdi = 100 * m[-n:] / atr
-    dx = 100 * np.abs(pdi - mdi) / np.maximum(pdi + mdi, 1e-12)
-    adx = float(np.mean(dx[-periodo:])) if len(dx) else 0.0
-    return adx, float(pdi[-1]), float(mdi[-1])
-
-def _estocastico_atual(h, l, c, periodo=14, suavizacao=3):
-    if len(c) < periodo:
-        return 50.0, 50.0
-    lowest = float(np.min(l[-periodo:]))
-    highest = float(np.max(h[-periodo:]))
-    k = 50.0 if highest - lowest <= 1e-12 else 100 * (float(c[-1]) - lowest) / (highest - lowest)
-    # Para manter a leitura robusta com poucos dados, usa uma média curta dos %K.
-    ks = []
-    inicio = max(periodo, len(c) - suavizacao)
-    for i in range(inicio, len(c) + 1):
-        lo = float(np.min(l[i-periodo:i])); hi = float(np.max(h[i-periodo:i]))
-        ks.append(50.0 if hi-lo <= 1e-12 else 100 * (float(c[i-1])-lo)/(hi-lo))
-    d = float(np.mean(ks)) if ks else k
-    return float(k), d
-
-def _indicadores_confluencia(data, direcao=None):
-    """Camada técnica comum às estratégias. Não cria sinal sozinha.
-
-    A função mede tendência, momentum, volatilidade, estrutura e price action.
-    A porcentagem exibida continua sendo uma estimativa heurística; ela não é
-    tratada como probabilidade estatística calibrada.
-    """
-    c = np.asarray(data['close'], dtype=float)
-    o = np.asarray(data['open'], dtype=float)
-    h = np.asarray(data['high'], dtype=float)
-    l = np.asarray(data['low'], dtype=float)
-    if len(c) < 30:
-        return {'confluencia': 0.0, 'confluencias': []}
-
-    ema9 = calcular_ema(c, 9); ema21 = calcular_ema(c, 21); ema50 = calcular_ema(c, 50) if len(c) >= 50 else ema21
-    rsi = _rsi_atual(c, 14)
-    macd, macd_signal, macd_hist = _macd_atual(c)
-    atr = _atr_atual(h, l, c, 14)
-    preco = float(c[-1])
-    atr_pct = (atr / preco * 100) if preco else 0.0
-    atr_series = []
-    if len(c) >= 30:
-        tr_all = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
-        if len(tr_all) >= 14:
-            atr_series = np.convolve(tr_all, np.ones(14) / 14, mode='valid')
-    atr_med = float(np.median(atr_series[-30:])) if len(atr_series) else atr
-    atr_ratio = float(atr / max(atr_med, 1e-12))
-    candle_range = max(float(h[-1] - l[-1]), 1e-12)
-    recent_ranges = np.asarray(h[-21:-1] - l[-21:-1], dtype=float) if len(c) >= 22 else np.asarray([candle_range])
-    median_range = float(np.median(recent_ranges)) if len(recent_ranges) else candle_range
-    candle_range_ratio = float(candle_range / max(median_range, 1e-12))
-    ema_spread_pct = abs(float(ema9[-1] - ema21[-1])) / max(preco, 1e-12) * 100
-    adx, pdi, mdi = _adx_atual(h, l, c, 14)
-    stoch_k, stoch_d = _estocastico_atual(h, l, c, 14, 3)
-
-    ma20 = float(np.mean(c[-20:])); std20 = max(float(np.std(c[-20:])), 1e-12)
-    bb_sup, bb_inf = ma20 + 2*std20, ma20 - 2*std20
-    suporte = float(np.min(l[-20:-1])); resistencia = float(np.max(h[-20:-1]))
-    amplitude = max(float(h[-1]-l[-1]), 1e-12)
-    corpo = abs(float(c[-1]-o[-1]))
-    pavio_sup = float(h[-1]-max(o[-1], c[-1])); pavio_inf = float(min(o[-1], c[-1])-l[-1])
-    bullish = c[-1] > o[-1]; bearish = c[-1] < o[-1]
-    tendencia = 'ALTA' if ema9[-1] > ema21[-1] and ema21[-1] >= ema21[-4] else ('BAIXA' if ema9[-1] < ema21[-1] and ema21[-1] <= ema21[-4] else 'LATERAL')
-    if atr_ratio >= 1.80 or candle_range_ratio >= 2.20:
-        regime = 'VOLATILIDADE_ALTA'
-    elif adx < 16 or ema_spread_pct < max(0.015, atr_pct * 0.18):
-        regime = 'LATERAL'
-    else:
-        regime = 'TENDÊNCIA'
-    impulso = 'CALL' if pdi > mdi and macd_hist > 0 else 'PUT' if mdi > pdi and macd_hist < 0 else 'NEUTRO'
-
-    itens=[]
-    def add(nome, pontos, detalhe, status):
-        itens.append({'nome':nome,'pontos':int(max(0,min(10,pontos))), 'detalhe':detalhe, 'status':status})
-
-    # Cada bloco vale até 10 pontos. Isso evita que um único indicador domine.
-    if direcao == 'CALL':
-        trend_ok = ema9[-1] > ema21[-1] and (len(c)<50 or ema21[-1] >= ema50[-1])
-        trend_partial = ema9[-1] > ema21[-1] or tendencia == 'ALTA'
-    elif direcao == 'PUT':
-        trend_ok = ema9[-1] < ema21[-1] and (len(c)<50 or ema21[-1] <= ema50[-1])
-        trend_partial = ema9[-1] < ema21[-1] or tendencia == 'BAIXA'
-    else:
-        trend_ok = tendencia in ('ALTA','BAIXA'); trend_partial = tendencia != 'LATERAL'
-    add('Tendência', 10 if trend_ok else 6 if trend_partial else 2, f'EMA9/21/50 • {tendencia} • ADX {adx:.1f}', 'ok' if trend_ok else 'warn' if trend_partial else 'bad')
-
-    if direcao == 'CALL':
-        rsi_ok = 45 <= rsi <= 68
-    elif direcao == 'PUT':
-        rsi_ok = 32 <= rsi <= 55
-    else:
-        rsi_ok = 45 <= rsi <= 55
-    add('RSI', 10 if rsi_ok else 5, f'RSI {rsi:.1f}', 'ok' if rsi_ok else 'warn')
-
-    macd_ok = macd_hist > 0 if direcao == 'CALL' else macd_hist < 0 if direcao == 'PUT' else False
-    add('MACD', 10 if macd_ok else 4, f'Histograma {"positivo" if macd_hist>0 else "negativo"}', 'ok' if macd_ok else 'warn')
-
-    if direcao == 'CALL':
-        st_ok = stoch_k > stoch_d and stoch_k < 80
-    elif direcao == 'PUT':
-        st_ok = stoch_k < stoch_d and stoch_k > 20
-    else:
-        st_ok = False
-    add('Estocástico', 10 if st_ok else 4, f'%K {stoch_k:.1f} • %D {stoch_d:.1f}', 'ok' if st_ok else 'warn')
-
-    # ADX é filtro de força, não direção. +DI/-DI dão a direção.
-    if direcao == 'CALL':
-        adx_ok = adx >= 18 and pdi > mdi
-    elif direcao == 'PUT':
-        adx_ok = adx >= 18 and mdi > pdi
-    else:
-        adx_ok = adx >= 18
-    add('ADX', 10 if adx_ok else 3 if adx < 15 else 6, f'ADX {adx:.1f} • +DI {pdi:.1f} • -DI {mdi:.1f}', 'ok' if adx_ok else 'warn')
-
-    # Price Action: corpo/rejeição, mas sem deixar um único candle decidir tudo.
-    if direcao == 'CALL':
-        pa_ok = bullish or pavio_inf/amplitude >= .35
-    elif direcao == 'PUT':
-        pa_ok = bearish or pavio_sup/amplitude >= .35
-    else:
-        pa_ok = False
-    add('Price Action', 10 if pa_ok else 4, f'Corpo {corpo/amplitude*100:.0f}% • pavios {pavio_sup/amplitude*100:.0f}/{pavio_inf/amplitude*100:.0f}%', 'ok' if pa_ok else 'warn')
-
-    # Estrutura: aproximação de suporte/resistência.
-    dist_sup = abs(preco-suporte)/(preco or 1)*100
-    dist_res = abs(resistencia-preco)/(preco or 1)*100
-    lim_sr = max(0.08, atr_pct*1.35)
-    sr_ok = dist_sup <= lim_sr if direcao == 'CALL' else dist_res <= lim_sr if direcao == 'PUT' else False
-    add('Suporte/Resist.', 10 if sr_ok else 4, f'Sup {dist_sup:.3f}% • Res {dist_res:.3f}%', 'ok' if sr_ok else 'warn')
-
-    # Bollinger: usado como contexto, não como gatilho isolado.
-    bb_ok = (preco <= bb_inf + atr*0.30) if direcao == 'CALL' else (preco >= bb_sup - atr*0.30) if direcao == 'PUT' else False
-    add('Bollinger', 10 if bb_ok else 4, f'Preço {"perto da banda inferior" if preco<=bb_inf else "perto da banda superior" if preco>=bb_sup else "dentro das bandas"}', 'ok' if bb_ok else 'warn')
-
-    vol_ok = 0.015 <= atr_pct <= 1.8
-    add('Volatilidade', 10 if vol_ok else 4, f'ATR {atr_pct:.3f}% do preço', 'ok' if vol_ok else 'warn')
-
-    # Padrão simples de candle anterior + atual para reduzir entradas contra impulso.
-    if len(c) >= 2:
-        prev_bull = c[-2] > o[-2]; prev_bear = c[-2] < o[-2]
-        engulf_call = prev_bear and bullish and c[-1] >= o[-2] and o[-1] <= c[-2]
-        engulf_put = prev_bull and bearish and c[-1] <= o[-2] and o[-1] >= c[-2]
-    else:
-        engulf_call = engulf_put = False
-    pattern_ok = engulf_call if direcao == 'CALL' else engulf_put if direcao == 'PUT' else False
-    add('Padrão', 10 if pattern_ok else 4, 'Engolfo confirmado' if pattern_ok else 'Sem padrão forte', 'ok' if pattern_ok else 'warn')
-
-    regime_pontos = 10 if regime == 'TENDÊNCIA' else 5 if regime == 'LATERAL' else 0
-    add('Regime', regime_pontos, f'{regime} • ATR relativo {atr_ratio:.2f}x • faixa {candle_range_ratio:.2f}x', 'ok' if regime=='TENDÊNCIA' else 'warn' if regime=='LATERAL' else 'bad')
-
-    soma = sum(x['pontos'] for x in itens); maximo = len(itens)*10
-    confluencia = round((soma/maximo)*100,1) if maximo else 0.0
-    conflitos = 0
-    if direcao == 'CALL':
-        conflitos = int(macd_hist < 0) + int(mdi > pdi and adx >= 18) + int(rsi > 72)
-    elif direcao == 'PUT':
-        conflitos = int(macd_hist > 0) + int(pdi > mdi and adx >= 18) + int(rsi < 28)
-
-    return {
-        'rsi':rsi,'ema9':float(ema9[-1]),'ema21':float(ema21[-1]),'ema50':float(ema50[-1]),
-        'macd':macd,'macd_signal':macd_signal,'macd_hist':macd_hist,'atr':atr,'atr_pct':atr_pct,
-        'adx':adx,'plus_di':pdi,'minus_di':mdi,'stoch_k':stoch_k,'stoch_d':stoch_d,
-        'tendencia':tendencia,'suporte':suporte,'resistencia':resistencia,
-        'atr_ratio':atr_ratio,'candle_range_ratio':candle_range_ratio,'ema_spread_pct':ema_spread_pct,
-        'regime':regime,'impulso':impulso,
-        'conflitos':conflitos,'confluencia':confluencia,'confluencias':itens
-    }
-
 def analisar_estrategia(data, estrategia, i=-1):
-    """Motor independente das estratégias.
-
-    Cada estratégia precisa produzir o próprio sinal a partir de regras
-    específicas. A opção TODAS não transforma todas as estratégias em
-    Price Action: ela executa cada motor separadamente e o ensemble compara
-    os candidatos gerados por cada um.
-    """
-    c = np.asarray(data["close"], dtype=float)
-    o = np.asarray(data["open"], dtype=float)
-    h = np.asarray(data["high"], dtype=float)
-    l = np.asarray(data["low"], dtype=float)
-    if len(c) < 30:
+    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
+    
+    if len(c) < 30: 
         return None, 0
-
-    idx = i if i >= 0 else len(c) - 1
-    if idx >= len(c):
-        idx = len(c) - 1
-
+        
     sinal = None
     probabilidade = 0
 
-    # -------------------------------------------------------------
-    # 1) LÓGICA DO PREÇO / PRICE ACTION
-    # -------------------------------------------------------------
     if estrategia == "LOGICA_DO_PRECO":
-        tamanho = abs(c[idx] - o[idx])
-        amplitude = max(h[idx] - l[idx], 1e-12)
-        if tamanho > 0:
-            cor = 'G' if c[idx] > o[idx] else 'R'
-            p_sup = h[idx] - max(o[idx], c[idx])
-            p_inf = min(o[idx], c[idx]) - l[idx]
-            wick_inf = p_inf / amplitude
-            wick_sup = p_sup / amplitude
+        tamanho = abs(c[i] - o[i])
+        amplitude = h[i] - l[i]
+        if amplitude > 0 and tamanho > 0:
+            cor = "G" if c[i] > o[i] else "R"
+            p_sup = h[i] - max(o[i], c[i])
+            p_inf = min(o[i], c[i]) - l[i]
+            
+            # Rejeição de Fundo / Suporte
+            if cor == "G" and p_inf >= (amplitude * 0.45) and p_sup <= (amplitude * 0.20):
+                sinal = "CALL"
+                probabilidade = int(82 + (p_inf / amplitude) * 15)
+            # Rejeição de Topo / Resistência
+            elif cor == "R" and p_sup >= (amplitude * 0.45) and p_inf <= (amplitude * 0.20):
+                sinal = "PUT"
+                probabilidade = int(82 + (p_sup / amplitude) * 15)
+            # Exaustão Compradora
+            elif cor == "G" and p_sup >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
+                sinal = "PUT"
+                probabilidade = int(80 + (p_sup / amplitude) * 15)
+            # Exaustão Vendedora
+            elif cor == "R" and p_inf >= (amplitude * 0.50) and tamanho <= (amplitude * 0.35):
+                sinal = "CALL"
+                probabilidade = int(80 + (p_inf / amplitude) * 15)
 
-            if cor == 'G' and wick_inf >= .45 and wick_sup <= .20:
-                sinal = 'CALL'
-                probabilidade = int(82 + min(10, wick_inf * 12))
-            elif cor == 'R' and wick_sup >= .45 and wick_inf <= .20:
-                sinal = 'PUT'
-                probabilidade = int(82 + min(10, wick_sup * 12))
-            elif cor == 'G' and wick_sup >= .50 and tamanho <= amplitude * .35:
-                sinal = 'PUT'
-                probabilidade = int(80 + min(9, wick_sup * 11))
-            elif cor == 'R' and wick_inf >= .50 and tamanho <= amplitude * .35:
-                sinal = 'CALL'
-                probabilidade = int(80 + min(9, wick_inf * 11))
-
-    # -------------------------------------------------------------
-    # 2) RSI + MACD + MÉDIAS
-    # -------------------------------------------------------------
     elif estrategia == "RSI_MACD_MA":
-        rsi = _rsi_atual(c, 14)
-        ema9 = calcular_ema(c, 9)
-        ema21 = calcular_ema(c, 21)
-        macd_line, macd_signal, macd_hist = _macd_atual(c)
-        hist_prev = float(macd_hist)
-        if len(c) >= 3:
-            macd_prev_line = calcular_ema(c, 12)[-2] - calcular_ema(c, 26)[-2]
-            macd_prev_signal = calcular_ema(calcular_ema(c, 12) - calcular_ema(c, 26), 9)[-2]
-            hist_prev = float(macd_prev_line - macd_prev_signal)
+        if len(c) >= 26:
+            diff = np.diff(c[-15:])
+            gains = diff[diff > 0]
+            losses = np.abs(diff[diff < 0])
+            avg_gain = np.mean(gains) if len(gains) > 0 else 1e-7
+            avg_loss = np.mean(losses) if len(losses) > 0 else 1e-7
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
 
-        tendencia_alta = ema9[-1] > ema21[-1]
-        tendencia_baixa = ema9[-1] < ema21[-1]
-        cruzou_alta = hist_prev <= 0 < macd_hist
-        cruzou_baixa = hist_prev >= 0 > macd_hist
+            ema12 = calcular_ema(c, 12)
+            ema26 = calcular_ema(c, 26)
+            macd_line = ema12 - ema26
+            signal_line = calcular_ema(macd_line, 9)
 
-        # Não exige RSI extremo de 30/70. O objetivo é identificar
-        # momentum + tendência + região de RSI de forma independente do PA.
-        call_score = 0
-        put_score = 0
-        if 38 <= rsi <= 55: call_score += 2
-        if 45 <= rsi <= 62: put_score += 2
-        if macd_hist > 0: call_score += 2
-        if macd_hist < 0: put_score += 2
-        if tendencia_alta: call_score += 2
-        if tendencia_baixa: put_score += 2
-        if cruzou_alta: call_score += 2
-        if cruzou_baixa: put_score += 2
+            if rsi <= 35 and macd_line[i] > signal_line[i]:
+                sinal = "CALL"
+                probabilidade = int(83 + (35 - rsi) * 0.5)
+            elif rsi >= 65 and macd_line[i] < signal_line[i]:
+                sinal = "PUT"
+                probabilidade = int(83 + (rsi - 65) * 0.5)
 
-        if call_score >= 5 and call_score > put_score:
-            sinal = 'CALL'
-            probabilidade = 79 + call_score * 2
-            if cruzou_alta: probabilidade += 3
-        elif put_score >= 5 and put_score > call_score:
-            sinal = 'PUT'
-            probabilidade = 79 + put_score * 2
-            if cruzou_baixa: probabilidade += 3
-
-    # -------------------------------------------------------------
-    # 3) MHI 1 + FILTRO DE TENDÊNCIA
-    # -------------------------------------------------------------
     elif estrategia == "MHI1":
-        # Usa as três velas mais recentes já disponíveis e não depende da
-        # lógica de pavio do Price Action.
         cores = []
-        for j in range(max(0, idx - 2), idx + 1):
-            if c[j] > o[j]:
-                cores.append('G')
-            elif c[j] < o[j]:
-                cores.append('R')
-            else:
-                cores.append('D')
-
-        if len(cores) == 3 and 'D' not in cores:
-            qtd_g = cores.count('G')
-            qtd_r = cores.count('R')
+        for j in range(i-2, i+1):
+            if c[j] > o[j]: cores.append("G")
+            elif c[j] < o[j]: cores.append("R")
+            else: cores.append("D") 
+            
+        if "D" not in cores:
+            qtd_g = cores.count("G")
+            qtd_r = cores.count("R")
+            
             ema20 = np.mean(c[-20:])
-            tendencia = 'ALTA' if c[-1] >= ema20 else 'BAIXA'
-
-            # MHI contraria a maioria das três velas; o filtro de tendência
-            # evita aceitar qualquer sequência isolada.
-            if qtd_g == 3:
-                sinal = 'PUT'
-                probabilidade = 84 if tendencia == 'BAIXA' else 80
+            if qtd_g == 2 and qtd_r == 1 and c[i] <= ema20:
+                sinal = "PUT"
+                probabilidade = 84
+            elif qtd_r == 2 and qtd_g == 1 and c[i] >= ema20:
+                sinal = "CALL"
+                probabilidade = 84
+            elif qtd_g == 3:
+                sinal = "PUT"
+                probabilidade = 88
             elif qtd_r == 3:
-                sinal = 'CALL'
-                probabilidade = 84 if tendencia == 'ALTA' else 80
-            elif qtd_g == 2 and qtd_r == 1 and c[idx] <= ema20:
-                sinal = 'PUT'
-                probabilidade = 82
-            elif qtd_r == 2 and qtd_g == 1 and c[idx] >= ema20:
-                sinal = 'CALL'
-                probabilidade = 82
+                sinal = "CALL"
+                probabilidade = 88
 
-    # -------------------------------------------------------------
-    # 4) REVERSÃO DE BANDAS
-    # -------------------------------------------------------------
-    elif estrategia in ('REVERSAO', 'RETRACAO'):
-        ma20 = np.mean(c[-20:])
-        std = max(float(np.std(c[-20:])), 1e-12)
-        banda_sup = ma20 + 2 * std
-        banda_inf = ma20 - 2 * std
-        rsi = _rsi_atual(c, 14)
-        atr = float(np.mean(np.maximum(
-            h[-20:] - l[-20:],
-            np.maximum(np.abs(h[-20:] - c[-21:-1]), np.abs(l[-20:] - c[-21:-1]))
-        ))) if len(c) >= 21 else float(np.mean(h[-20:] - l[-20:]))
-        atr = max(atr, 1e-12)
-        preco = float(c[idx])
-        distancia_inf = abs(preco - banda_inf)
-        distancia_sup = abs(preco - banda_sup)
-        perto_inf = preco <= banda_inf + atr * 0.35
-        perto_sup = preco >= banda_sup - atr * 0.35
+    elif estrategia in ["REVERSAO", "RETRACAO"]:
+        std = np.std(c[-20:])
+        ma = np.mean(c[-20:])
+        banda_superior = ma + (2.0 * std)
+        banda_inferior = ma - (2.0 * std)
 
-        if perto_inf and rsi <= 45:
-            sinal = 'CALL'
-            probabilidade = 82 + (3 if rsi <= 35 else 0) + (2 if preco <= banda_inf else 0)
-        elif perto_sup and rsi >= 55:
-            sinal = 'PUT'
-            probabilidade = 82 + (3 if rsi >= 65 else 0) + (2 if preco >= banda_sup else 0)
+        if c[i] <= banda_inferior and c[i] < o[i]: 
+            sinal = "CALL"
+            dist = (banda_inferior - c[i]) / (std if std > 0 else 1)
+            probabilidade = int(81 + min(15, dist * 10))
+        elif c[i] >= banda_superior and c[i] > o[i]: 
+            sinal = "PUT"
+            dist = (c[i] - banda_superior) / (std if std > 0 else 1)
+            probabilidade = int(81 + min(15, dist * 10))
 
-    probabilidade = int(min(96, max(75, probabilidade))) if sinal else 0
+    probabilidade = min(98, max(75, probabilidade)) if sinal else 0
     return sinal, probabilidade
-
-def analisar_estrategia_detalhada(data, estrategia):
-    """Valida um sinal em camadas, com filtros de regime e direção.
-
-    O objetivo aqui não é aumentar artificialmente a porcentagem. O motor fica
-    mais seletivo: evita lateralização, picos anormais de volatilidade e sinais
-    em que a direção escolhida não possui vantagem clara sobre a direção oposta.
-    """
-    sinal, base_prob = analisar_estrategia(data, estrategia)
-    if not sinal:
-        return None, 0, _indicadores_confluencia(data, None)
-
-    indicadores = _indicadores_confluencia(data, sinal)
-    conf = float(indicadores.get('confluencia', 0))
-    conflitos = int(indicadores.get('conflitos', 0))
-    adx = float(indicadores.get('adx', 0))
-    rsi = float(indicadores.get('rsi', 50))
-    atr_pct = float(indicadores.get('atr_pct', 0))
-
-    # Leitura neutra para saber se a direção do sinal realmente se destaca.
-    neutro = _indicadores_confluencia(data, None)
-    call_conf = float(_indicadores_confluencia(data, 'CALL').get('confluencia', 0))
-    put_conf = float(_indicadores_confluencia(data, 'PUT').get('confluencia', 0))
-    vantagem = (call_conf - put_conf) if sinal == 'CALL' else (put_conf - call_conf)
-
-    regime = str(indicadores.get('regime', 'LATERAL'))
-    impulso = str(indicadores.get('impulso', 'NEUTRO'))
-    candle_ratio = float(indicadores.get('candle_range_ratio', 1.0))
-
-    # Filtros duros: são os principais responsáveis por tirar sinais ruins.
-    # Pico de volatilidade: candle atual muito acima da faixa média recente.
-    if regime == 'VOLATILIDADE_ALTA' or candle_ratio >= 2.20:
-        return None, 0, indicadores
-
-    # Em lateralização, só aceitamos REVERSAO/RETRACAO quando existe vantagem
-    # direcional e contexto de extremo. As demais estratégias são descartadas.
-    if regime == 'LATERAL' and estrategia not in ('REVERSAO', 'RETRACAO'):
-        return None, 0, indicadores
-
-    # A direção precisa vencer a direção oposta por uma margem mínima.
-    margem_minima = 7.0 if estrategia in ('REVERSAO', 'RETRACAO') else 10.0
-    if vantagem < margem_minima:
-        return None, 0, indicadores
-
-    # ADX baixo significa ausência de tendência. Não permitimos sinais de
-    # continuação nesse cenário; reversão precisa de extremo + vantagem.
-    if adx < 15 and estrategia not in ('REVERSAO', 'RETRACAO'):
-        return None, 0, indicadores
-
-    if conflitos >= 2:
-        return None, 0, indicadores
-
-    # Cálculo conservador da estimativa. Continua sendo heurístico, não uma
-    # probabilidade estatística calibrada.
-    ajuste = (conf - 65.0) * 0.22
-    bonus = 0.0
-    if conf >= 78: bonus += 4
-    elif conf >= 72: bonus += 2
-    if adx >= 25: bonus += 3
-    elif adx >= 20: bonus += 1
-    if vantagem >= 18: bonus += 3
-    elif vantagem >= 13: bonus += 2
-    if impulso == sinal: bonus += 2
-    if conflitos: bonus -= conflitos * 5
-
-    c = np.asarray(data['close'], dtype=float)
-    o = np.asarray(data['open'], dtype=float)
-    if estrategia == 'RSI_MACD_MA':
-        ema9 = calcular_ema(c,9)[-1]; ema21 = calcular_ema(c,21)[-1]
-        if sinal == 'CALL' and indicadores.get('macd_hist',0) > 0 and ema9 > ema21 and 45 <= rsi <= 65: bonus += 3
-        if sinal == 'PUT' and indicadores.get('macd_hist',0) < 0 and ema9 < ema21 and 35 <= rsi <= 55: bonus += 3
-    elif estrategia == 'MHI1':
-        if len(c) >= 3:
-            cores=['G' if c[j]>o[j] else 'R' if c[j]<o[j] else 'D' for j in range(len(c)-3,len(c))]
-            if len(cores)==3 and 'D' not in cores:
-                if sinal=='CALL' and cores.count('R')>=2: bonus += 2
-                if sinal=='PUT' and cores.count('G')>=2: bonus += 2
-    elif estrategia in ('REVERSAO','RETRACAO'):
-        ma20=float(np.mean(c[-20:])); std20=max(float(np.std(c[-20:])),1e-12)
-        if sinal=='CALL' and c[-1] <= ma20-1.5*std20: bonus += 4
-        if sinal=='PUT' and c[-1] >= ma20+1.5*std20: bonus += 4
-
-    prob = int(max(76, min(96, round(base_prob + ajuste + bonus))))
-    indicadores['confluencia_call'] = round(call_conf, 1)
-    indicadores['confluencia_put'] = round(put_conf, 1)
-    indicadores['vantagem_direcional'] = round(vantagem, 1)
-    indicadores['estrategia_base_probabilidade'] = int(base_prob)
-    indicadores['estrategia_bonus'] = int(round(bonus))
-    indicadores['estrategia'] = estrategia
-    indicadores['direcao'] = sinal
-    indicadores['qualidade_minima'] = 70.0
-    indicadores['regime'] = regime
-    return sinal, prob, indicadores
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
 @app.route('/sw.js')
@@ -2560,8 +1481,6 @@ def status():
     u_info = usuarios.get(user, {"wins": 0, "reds": 0, "winrate": 0.0})
     historico = buscar_historico_bd(user)
     
-    # O painel deve distinguir claramente três estados: pré-alerta, confirmado e varredura.
-    # O sinal confirmado é persistente e não pode ser substituído pela análise de outro ativo.
     display_texto = st["sinal_permanente"] if (st["aguardando_confirmacao"] and st["sinal_permanente"]) else st["ultimo_sinal"]
 
     response = jsonify({
@@ -2571,292 +1490,21 @@ def status():
         "reds": u_info.get("reds", 0), 
         "winrate": u_info.get("winrate", 0.0), 
         "historico": historico,
-        "historico_resumo": resumir_historico(historico),
         "ativo_atual": st["ativo_atual"],
-        "news_guard_status": st.get("news_guard_status", "AGUARDANDO CALENDÁRIO"),
-        "news_guard_event": st.get("news_guard_event"),
-        "news_blocked_assets": st.get("news_blocked_assets", []),
-        "analise_atual": st.get("analise_atual"),
-        "scan_status": st.get("scan_status", "AGUARDANDO VARREDURA"),
-        "scan_total": st.get("scan_total", 0),
-        "scan_analisados": st.get("scan_analisados", 0),
-        "scan_calls": st.get("scan_calls", 0),
-        "scan_puts": st.get("scan_puts", 0),
-        "scan_sem_sinal": st.get("scan_sem_sinal", 0),
-        "scan_melhor": st.get("scan_melhor"),
-        "scan_atual": st.get("scan_atual", "AGUARDANDO"),
-        "scan_atual_analise": st.get("scan_atual_analise"),
-        "scan_atualizado": st.get("scan_atualizado", 0),
-        "alerta": st.get("alerta_ativo"),
-        "sinal_confirmado": st.get("sinal_confirmado"),
-        "sinais_sessao_total": st.get("sinais_sessao_total", 0),
-        "g1_sessao": sum(1 for r in st.get("sessao_resultados", []) if r == "g1"),
         "mercado": st["tipo_mercado"],
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
         "notificacao": st["notificacao"],
         "timeframe": st["timeframe"],
-        "selected_assets": st.get("selected_assets", []),
-        "assets_catalog": ATIVOS_BASE,
-        "startup_lock_remaining": max(0.0, st.get("startup_lock_until", 0.0) - time.time()),
         "server_now": time.time(),
-        "candle_start_ts": math.floor(time.time() / (st["timeframe"] * 60)) * (st["timeframe"] * 60),
         "candle_end_ts": (math.floor(time.time() / (st["timeframe"] * 60)) + 1) * (st["timeframe"] * 60),
-        "candle_total": st["timeframe"] * 60,
-        "candle_elapsed": time.time() - (math.floor(time.time() / (st["timeframe"] * 60)) * (st["timeframe"] * 60)),
         "candle_remaining": max(0.0, ((math.floor(time.time() / (st["timeframe"] * 60)) + 1) * (st["timeframe"] * 60)) - time.time()),
-        "warmup_concluido": bool(st.get("warmup_concluido")),
-        "warmup_status": st.get("warmup_status", "AGUARDANDO 30 VELAS"),
-        "warmup_ativos_analisados": len(st.get("warmup_ativos_analisados", set())),
-        "entry_end_ts": (((st.get("alerta_ativo") or {}).get("prox_minuto_entrada").timestamp()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("prox_minuto_entrada")) else None),
-        "entry_remaining": max(0.0, (st.get("alerta_ativo") or {}).get("prox_minuto_entrada").timestamp() - time.time()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("prox_minuto_entrada")) else 0,
-        "confirmation_ts": (((st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else None),
-        "confirmation_remaining": max(0.0, (st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp() - time.time()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else 0,
-        "entry_time": (
-            (st.get("sinal_confirmado") or {}).get("str_entrada")
-            or (st.get("alerta_ativo") or {}).get("str_entrada")
-            or (re.search(r"ENTRADA:</b> ([0-9:]+)", st.get("sinal_permanente") or "") or [None, None])[1]
-        )
+        "entry_end_ts": (((st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else None),
+        "entry_remaining": max(0.0, (st.get("alerta_ativo") or {}).get("momento_confirmacao").timestamp() - time.time()) if (st.get("alerta_ativo") and (st.get("alerta_ativo") or {}).get("momento_confirmacao")) else 0,
+        "entry_time": ((st.get("alerta_ativo") or {}).get("str_entrada") if st.get("alerta_ativo") else (re.search(r"ENTRADA:</b> ([0-9:]+)", st.get("sinal_permanente") or "") or [None, None])[1])
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     return response
-
-@app.route('/set_assets', methods=['POST'])
-def set_assets():
-    user = session.get('user')
-    if not user:
-        return jsonify({"ok": False, "error": "Não autenticado"}), 401
-    st = get_user_state(user)
-    payload = request.get_json(silent=True) or {}
-    assets = payload.get("assets") or []
-    validos = set(sum(ATIVOS_BASE.values(), []))
-    selecionados = []
-    for ativo in assets:
-        if ativo in validos and ativo not in selecionados:
-            selecionados.append(ativo)
-    st["selected_assets"] = selecionados
-    st["warmup_concluido"] = False
-    st["warmup_ativos_analisados"] = set()
-    st["warmup_analysis"] = {}
-    st["warmup_inicio"] = time.time()
-    if st.get("bot_iniciado"):
-        st["startup_lock_until"] = time.time() + 300
-        st["warmup_status"] = "NOVA SELEÇÃO • ANALISANDO 30 VELAS + 5 MINUTOS"
-    return jsonify({"ok": True, "assets": selecionados})
-
-@app.route('/backtest', methods=['POST'])
-def backtest():
-    user = session.get('user')
-    if not user:
-        return jsonify({"ok": False, "error": "Não autenticado"}), 401
-    try:
-        payload = request.get_json(silent=True) or {}
-        tf = int(payload.get("timeframe", 5))
-        if tf not in (1,5,15): tf = 5
-        market = str(payload.get("market", "TODOS"))
-        mercado_assets=set(ativos_por_mercado(market))
-        assets = [a for a in (payload.get("assets") or []) if a in mercado_assets]
-        if not assets:
-            return jsonify({"ok": False, "error": "Selecione pelo menos um ativo."}), 400
-        est_req = str(payload.get("estrategia", "TODAS"))
-        estrategias = LISTA_ESTRATEGIAS.copy() if est_req == "TODAS" else ([est_req] if est_req in LISTA_ESTRATEGIAS else LISTA_ESTRATEGIAS.copy())
-        use_g1 = bool(payload.get("g1", True))
-        limit = max(100, min(int(payload.get("limit", 300)), 600))
-        rows=[]; asset_acc={}; est_acc={}; total_entries=total_wins=total_g1=total_losses=0
-        for ativo in assets:
-            ticker = MAPA_TICKERS.get(ativo, ativo)
-            data = get_data_v2(ticker, tf, velas_minimas=60)
-            if not data or len(data.get("close", [])) < 40:
-                continue
-            n=min(len(data["close"]), limit+32)
-            base={k: np.asarray(v)[-n:] for k,v in data.items() if k in ("time","open","high","low","close")}
-            for est in estrategias:
-                entradas=wins=g1s=losses=0
-                c=base["close"]
-                for i in range(30, len(c)-1):
-                    janela={k: v[:i+1] for k,v in base.items()}
-                    sinal, prob, ana = analisar_estrategia_detalhada(janela, est)
-                    if not sinal or prob < 80:
-                        continue
-                    entradas += 1
-                    prox_open=float(c[i+1] if i+1 < len(c) else np.nan)
-                    prox_close=float(base["close"][i+1])
-                    direto=(prox_close>prox_open) if sinal=="CALL" else (prox_close<prox_open)
-                    if direto:
-                        wins += 1
-                    elif use_g1 and i+2 < len(c):
-                        g_open=float(base["open"][i+2]); g_close=float(base["close"][i+2])
-                        g_ok=(g_close>g_open) if sinal=="CALL" else (g_close<g_open)
-                        if g_ok: g1s += 1
-                        else: losses += 1
-                    else:
-                        losses += 1
-                if entradas:
-                    concl=wins+g1s+losses
-                    acc=((wins+g1s)/concl*100) if concl else 0
-                    row={"ativo":ativo,"estrategia":NOME_ESTRATEGIAS_DISPLAY.get(est,est),"entradas":entradas,"wins":wins,"g1":g1s,"losses":losses,"assertividade":round(acc,1)}
-                    rows.append(row)
-                    ar=asset_acc.setdefault(ativo,{"entradas":0,"wins":0,"g1":0,"losses":0})
-                    er=est_acc.setdefault(est,{"nome":NOME_ESTRATEGIAS_DISPLAY.get(est,est),"entradas":0,"wins":0,"g1":0,"losses":0})
-                    for reg in (ar,er):
-                        reg["entradas"]+=entradas; reg["wins"]+=wins; reg["g1"]+=g1s; reg["losses"]+=losses
-                    total_entries+=entradas; total_wins+=wins; total_g1+=g1s; total_losses+=losses
-        rows.sort(key=lambda x:(-x["assertividade"],-x["entradas"],-x["wins"]))
-        def finalize_map(m, keyname):
-            out=[]
-            for key,v in m.items():
-                concl=v["wins"]+v["g1"]+v["losses"]
-                out.append({keyname:key,"nome":v.get("nome",key),"entradas":v["entradas"],"wins":v["wins"],"g1":v["g1"],"losses":v["losses"],"assertividade":round(((v["wins"]+v["g1"])/concl*100),1) if concl else 0})
-            return sorted(out,key=lambda x:(-x["assertividade"],-x["entradas"]))[:10]
-        concl=total_wins+total_g1+total_losses
-        summary={"entradas":total_entries,"wins":total_wins,"g1":total_g1,"losses":total_losses,"assertividade":round(((total_wins+total_g1)/concl*100),1) if concl else 0}
-        source="Yahoo Finance/CryptoCompare (candles históricos públicos)"
-        note="Com G1, a primeira falha é testada novamente no candle seguinte. Para OTC, o ticker público equivalente pode representar um proxy e não o feed OTC proprietário."
-        return jsonify({"ok":True,"summary":summary,"rows":rows[:50],"top_assets":finalize_map(asset_acc,"ativo"),"top_strategies":finalize_map(est_acc,"estrategia"),"meta":f"M{tf} • {len(assets)} ativo(s) • {'com G1' if use_g1 else 'sem G1'} • até {limit} candles/ativo","source":source,"note":note})
-    except Exception as e:
-        print(f"⚠️ Backtest: {e}")
-        return jsonify({"ok":False,"error":"Não foi possível concluir o backtest com os dados disponíveis agora."}), 500
-
-@app.route('/calculadora', methods=['POST'])
-def calculadora_gestao():
-    """Calculadora matemática de gestão de banca.
-
-    Não usa histórico do bot nem promete resultados. Todos os parâmetros de
-    payout e taxa de acerto são explícitos para evitar transformar uma hipótese
-    em uma suposta garantia. O Soros é calculado por valor esperado por ciclo,
-    com reinício no valor-base após um loss.
-    """
-    try:
-        payload = request.get_json(silent=True) or {}
-        banca = float(payload.get('bankroll', 0))
-        meta = float(payload.get('target_profit', 0))
-        dias = int(payload.get('days', 0))
-        payout = float(payload.get('payout', 0))
-        winrate = float(payload.get('winrate', 0))
-
-        # Compatibilidade: a interface trabalha com porcentagens (80 = 80%),
-        # enquanto o motor matemático usa frações (0.80). Aceitamos os dois
-        # formatos para evitar erro caso o navegador esteja com uma versão
-        # anterior do JavaScript em cache.
-        if payout > 1:
-            payout /= 100.0
-        if winrate > 1:
-            winrate /= 100.0
-
-        perfil = str(payload.get('profile', 'conservador')).lower()
-        modo = str(payload.get('mode', 'fixa')).lower()
-        niveis = int(payload.get('soros_levels', 1))
-
-        if banca <= 0 or meta <= 0:
-            return jsonify({'ok': False, 'error': 'Banca inicial e lucro desejado precisam ser maiores que zero.'}), 400
-        if not 1 <= dias <= 365:
-            return jsonify({'ok': False, 'error': 'O prazo deve estar entre 1 e 365 dias.'}), 400
-        if not 0 < payout < 1:
-            return jsonify({'ok': False, 'error': 'O payout deve ficar entre 1% e 99,99%.'}), 400
-        if not 0.5 <= winrate <= 0.9999:
-            return jsonify({'ok': False, 'error': 'A taxa de acerto estimada deve ficar entre 50% e 99,99%.'}), 400
-        if perfil not in ('conservador', 'moderado', 'agressivo'):
-            perfil = 'conservador'
-        if modo not in ('fixa', 'soros'):
-            modo = 'fixa'
-        niveis = max(1, min(niveis, 4))
-
-        risco = {'conservador': 0.02, 'moderado': 0.05, 'agressivo': 0.09}[perfil]
-        entrada_base = round(banca * risco, 2)
-        if entrada_base < 0.01:
-            entrada_base = 0.01
-
-        # Valor esperado líquido de uma entrada com mão fixa.
-        ev_unit = entrada_base * (winrate * payout - (1.0 - winrate))
-        lucro_win_base = entrada_base * payout
-        wins_sem_loss = math.ceil(meta / lucro_win_base) if lucro_win_base > 0 else None
-
-        if modo == 'fixa':
-            ev_per_entry = ev_unit
-            entradas = math.ceil(meta / ev_per_entry) if ev_per_entry > 0 else None
-            exposicao_max = entrada_base
-            lucro_esperado = ev_per_entry
-            max_level = 1
-        else:
-            # Soros: stake do nível l = base * (1+payout)^l.
-            # Um ciclo termina no primeiro loss ou ao concluir todos os níveis.
-            # O EV do ciclo é calculado exatamente pelas probabilidades fornecidas,
-            # sem escolher uma sequência aleatória de wins/losses.
-            ev_cycle = 0.0
-            expected_entries_cycle = 0.0
-            max_level = niveis
-            stake = entrada_base
-            exposicao_max = entrada_base
-            for level in range(1, niveis + 1):
-                prob_reach = winrate ** (level - 1)
-                expected_entries_cycle += prob_reach
-                ev_cycle += prob_reach * stake * (winrate * payout - (1.0 - winrate))
-                exposicao_max = max(exposicao_max, stake)
-                stake *= (1.0 + payout)
-            ev_per_entry = ev_cycle / expected_entries_cycle if expected_entries_cycle else 0.0
-            entradas = math.ceil(meta / ev_per_entry) if ev_per_entry > 0 else None
-            lucro_esperado = ev_per_entry
-
-        entradas_dia = math.ceil(entradas / dias) if entradas else None
-        # Plano diário é apenas uma distribuição matemática das entradas; não força
-        # o usuário a operar nem trata a meta como garantia.
-        plan = []
-        if entradas:
-            restante = entradas
-            for dia in range(1, dias + 1):
-                dias_restantes = dias - dia + 1
-                hoje = math.ceil(restante / dias_restantes)
-                plan.append({
-                    'dia': dia,
-                    'entradas': hoje,
-                    'entrada_base': round(entrada_base, 2),
-                    'nivel_maximo': round(exposicao_max, 2) if modo == 'soros' else None
-                })
-                restante -= hoje
-        else:
-            plan = [{'dia': i, 'entradas': 0, 'entrada_base': round(entrada_base, 2), 'nivel_maximo': round(exposicao_max, 2) if modo == 'soros' else None} for i in range(1, min(dias, 30)+1)]
-
-        viavel = bool(ev_per_entry > 0 and entradas is not None)
-        if not viavel:
-            mensagem = 'Com os parâmetros informados, o valor esperado por entrada não é positivo. A meta não pode ser projetada matematicamente sem alterar os parâmetros.'
-        elif entradas_dia > 50:
-            mensagem = f'Plano matematicamente positivo, mas exige cerca de {entradas_dia} entradas por dia; isso é um volume elevado para o prazo escolhido.'
-        elif modo == 'soros' and exposicao_max > banca * 0.15:
-            mensagem = 'O Soros escolhido pode concentrar mais de 15% da banca em uma única entrada nos níveis altos. A exposição máxima está destacada para você avaliar antes de usar.'
-        else:
-            mensagem = 'Plano matematicamente positivo sob as hipóteses informadas. A taxa de acerto e o payout são estimativas e não garantem o resultado real.'
-
-        note = (
-            f'Perfil {perfil}: risco-base de {risco*100:.0f}% da banca ({moeda := "R$"} {entrada_base:,.2f}). '
-            f'Payout informado: {payout*100:.1f}%. Taxa de acerto usada na projeção: {winrate*100:.1f}%. '
-            f'Para mão fixa, o valor por entrada permanece em {entrada_base:.2f}. '
-            + (f'No Soros, o valor cresce apenas após WIN e reinicia no valor-base após LOSS; nível máximo calculado: {niveis}.' if modo == 'soros' else 'Sem progressão: cada entrada usa o mesmo valor-base.')
-        ).replace(',', 'X').replace('.', ',').replace('X', '.')
-
-        def br(v):
-            return round(float(v), 2)
-
-        summary = {
-            'entrada_base': br(entrada_base),
-            'entradas_estimadas': entradas,
-            'entradas_por_dia': entradas_dia,
-            'lucro_esperado_por_entrada': br(lucro_esperado),
-            'valor_esperado_entrada': br(ev_per_entry),
-            'exposicao_maxima': br(exposicao_max),
-            'wins_sem_loss': wins_sem_loss,
-            'viavel': viavel
-        }
-        return jsonify({
-            'ok': True,
-            'parameters': {'bankroll': br(banca), 'target_profit': br(meta), 'days': dias, 'payout': payout, 'winrate': winrate, 'profile': perfil, 'mode': modo, 'soros_levels': niveis},
-            'summary': summary,
-            'plan': plan,
-            'message': mensagem,
-            'note': note
-        })
-    except Exception as e:
-        print(f'⚠️ Calculadora de banca: {e}')
-        return jsonify({'ok': False, 'error': 'Não foi possível concluir o cálculo com os parâmetros informados.'}), 400
 
 @app.route('/command/<cmd>')
 def command(cmd):
@@ -2877,9 +1525,9 @@ def command(cmd):
         if user != ADMIN_EMAIL:
             return jsonify({"ok": False, "error": "Somente o ADM pode testar o Telegram."}), 403
         msg_teste = (
-            f"🧪 <b>TESTE DE COMUNICAÇÃO - VISION PRO V4</b>\n\n"
+            f"🧪 <b>TESTE DE COMUNICAÇÃO - VISION PRO V3</b>\n\n"
             f"✅ Conexão estabelecida com sucesso com o Telegram!\n"
-            f"👤 Usuário: Vision Pro\n"
+            f"👤 Usuário: {user}\n"
             f"⏰ Horário: {agora_brasilia().strftime('%H:%M:%S')}"
         )
         msg_id = enviar_telegram(msg_teste, user_solicitante=user)
@@ -2892,19 +1540,8 @@ def command(cmd):
     elif cmd == "start_bot":
         st["bot_iniciado"] = True
         st["bot_pausado"] = False
-        # Guarda o ativo da última operação e a vela em que ela foi encerrada.
-        # Isso impede que o mesmo ativo seja escolhido repetidamente na mesma vela
-        # quando houver outro candidato válido. Não cria sinais artificiais.
-        # Recupera somente estados pertencentes ao usuário atual.
-        # `alerta_atual` não é uma variável local definida neste endpoint;
-        # referenciá-la aqui causava NameError e retornava HTTP 500 no START.
-        ultimo_confirmado = st.get("sinal_confirmado") or st.get("alerta_ativo") or {}
-        st["ultimo_sinal_ativo"] = ultimo_confirmado.get("ativo")
-        st["ultimo_sinal_candle_ts"] = math.floor(time.time() / (max(1, int(st.get("timeframe", 5))) * 60)) * (max(1, int(st.get("timeframe", 5))) * 60)
-
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
-        st["sinal_confirmado"] = None
         if st.get("timer_confirmacao"):
             try:
                 st["timer_confirmacao"].cancel()
@@ -2916,57 +1553,23 @@ def command(cmd):
         st["ultima_confirmacao_msg_id"] = None
         st["ultima_confirmacao_alert_id"] = None
         st["sessao_resultados"] = []
-        st["news_guard_status"] = "CONSULTANDO INVESTING.COM"
-        st["news_guard_event"] = None
-        st["news_blocked_assets"] = []
-        st["news_guard_updated"] = 0.0
-        st["analise_atual"] = None
-        st["sinais_sessao_total"] = 0
-        st["warmup_concluido"] = False
-        st["warmup_ativos_analisados"] = set()
-        st["warmup_ativos_indisponiveis"] = set()
-        st["warmup_analysis"] = {}
-        st["warmup_inicio"] = time.time()
-        st["startup_lock_until"] = time.time() + 300
-        st["startup_lock_seconds"] = 300
-        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS • AGUARDANDO 5 MINUTOS"
-        st["inicio_varredura"] = time.time() + 0.5 
+        st["inicio_varredura"] = time.time() + 2 
         st["sinais_enviados"].clear() 
         
         st["ativo_atual"] = "INICIANDO VARREDURA..."
         st["ultimo_sinal"] = f"<div class='system-console'>⚡ <b>INICIANDO MOTOR DE ANÁLISE DINÂMICA</b><br><span style='color:#00f2fe;'>[VARRENDO TODOS OS ATIVOS...]</span></div><div class='tech-scanner'></div>"
         
         msg_inicio_telegram = (
-            f"🚀 <b>SISTEMA VISION PRO V4 INICIADO</b>\n\n"
+            f"🚀 <b>SISTEMA VISION PRO V3 INICIADO</b>\n\n"
             f"🟢 <b>Status:</b> Análise de 30 velas ativada\n"
-            f"👤 <b>Usuário:</b> Vision Pro\n"
+            f"👤 <b>Usuário:</b> {user}\n"
             f"📊 <b>Timeframe:</b> M{st['timeframe']}\n"
             f"🌐 <b>Mercado:</b> {st['tipo_mercado']}\n"
             f"⚙️ <b>Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(st['estrategia'], st['estrategia'])}\n\n"
             f"<i>Varrendo gráficos em tempo real...</i>"
         )
-        # NÃO bloqueia a resposta HTTP do botão START esperando a API do Telegram.
-        # Em hospedagens como Render, uma chamada síncrona ao Telegram pode demorar
-        # e fazer o navegador exibir "Falha de comunicação com o servidor", mesmo
-        # com o bot já iniciado. O envio é desacoplado do comando.
-        def _enviar_inicio_telegram_background(_msg=msg_inicio_telegram, _user=user):
-            try:
-                msg_id = enviar_telegram(_msg, user_solicitante=_user)
-                if msg_id:
-                    print(f"✅ Telegram: mensagem de START enviada (ID {msg_id}).")
-                else:
-                    print("⚠️ Telegram: START foi iniciado, mas a mensagem não pôde ser enviada.")
-            except Exception as e:
-                print(f"⚠️ Erro ao enviar mensagem de START ao Telegram: {e}")
-
-        threading.Thread(
-            target=_enviar_inicio_telegram_background,
-            daemon=True,
-            name="telegram-start"
-        ).start()
-
-        # Responde imediatamente ao painel. O motor já está iniciado acima.
-        return jsonify({"ok": True, "telegram_enviado_em_background": True})
+        enviar_telegram(msg_inicio_telegram, user_solicitante=user)
+        return jsonify({"ok": True})
 
     elif cmd == "pause_bot":
         st["bot_pausado"] = not st["bot_pausado"]
@@ -2981,7 +1584,6 @@ def command(cmd):
         st["bot_pausado"] = True
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
-        st["sinal_confirmado"] = None
         if st.get("timer_confirmacao"):
             try:
                 st["timer_confirmacao"].cancel()
@@ -2994,41 +1596,17 @@ def command(cmd):
         enviar_telegram(mensagem_encerramento_sessao(st), user_solicitante=user)
 
         st["ativo_atual"] = "DESCONECTADO"
-        st["news_guard_status"] = "DESATIVADA"
-        st["news_guard_event"] = None
-        st["news_blocked_assets"] = []
-        st["warmup_concluido"] = False
-        st["warmup_ativos_analisados"] = set()
-        st["warmup_analysis"] = {}
-        st["startup_lock_until"] = 0.0
-        st["warmup_status"] = "AGUARDANDO 30 VELAS"
         st["ultimo_sinal"] = "Aguardando Comando..."
         
         # Mantém o comportamento anterior de zerar o placar geral no encerramento.
         zerar_estatisticas_usuario(user)
         st["sessao_resultados"] = []
-        st["analise_atual"] = None
-        st["sinais_sessao_total"] = 0
         return jsonify({"ok": True})
 
     elif cmd.startswith("tf_"): 
         st["timeframe"] = int(cmd.split('_')[1])
-        st["warmup_concluido"] = False
-        st["warmup_ativos_analisados"] = set()
-        st["warmup_analysis"] = {}
-        st["warmup_inicio"] = time.time()
-        st["startup_lock_until"] = time.time() + 300
-        st["startup_lock_seconds"] = 300
-        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS • AGUARDANDO 5 MINUTOS"
     elif cmd.startswith("mkt_"): 
         st["tipo_mercado"] = cmd.split('_', 1)[1] 
-        st["warmup_concluido"] = False
-        st["warmup_ativos_analisados"] = set()
-        st["warmup_analysis"] = {}
-        st["warmup_inicio"] = time.time()
-        st["startup_lock_until"] = time.time() + 300
-        st["startup_lock_seconds"] = 300
-        st["warmup_status"] = "ANALISANDO AS ÚLTIMAS 30 VELAS • AGUARDANDO 5 MINUTOS"
     elif cmd.startswith("set_est_"): 
         st["estrategia"] = cmd.replace("set_est_", "")
     
@@ -3061,68 +1639,30 @@ def formatar_resultados_sessao(st):
     return "\n".join(linhas)
 
 def mensagem_resultado_telegram(st, resultado):
-    """Monta o fechamento do sinal confirmado sem apagar a confirmação anterior.
-
-    A mensagem de confirmação continua no Telegram. Esta é uma nova mensagem
-    apenas para registrar o resultado da operação e o placar da sessão.
-    """
     wins, reds, _ = placar_sessao(st)
     placar = f"{wins} / {reds}"
-    sinal = st.get("sinal_confirmado") or {}
-    ativo = sinal.get("ativo") or "ATIVO"
-    direcao = sinal.get("sinal") or sinal.get("direcao") or "--"
-    prob = sinal.get("probabilidade")
-    tf = sinal.get("tf")
-    entrada = sinal.get("str_entrada") or sinal.get("entrada") or "--:--:--"
-    expiracao = sinal.get("str_saida") or sinal.get("expiracao") or "--:--"
-    estrategia = sinal.get("estrategia_fmt") or sinal.get("estrategia") or "Análise Vision Pro"
-
-    prob_txt = f"{prob}%" if prob is not None else "--%"
-    tf_txt = f"M{tf}" if tf else "--"
-
-    cabecalho = (
-        "Vision Trade FREE 📈\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"💱 <b>Paridade:</b> {ativo}\n"
-        f"↕️ <b>Direção:</b> {direcao}\n"
-        f"⏱ <b>Timeframe:</b> {tf_txt}\n"
-        f"🧠 <b>Estratégia:</b> {estrategia}\n"
-        f"🔥 <b>Probabilidade Estimada:</b> {prob_txt}\n"
-        f"🕐 <b>Entrada:</b> {entrada}\n"
-        f"⌛ <b>Expiração:</b> {expiracao}\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-    )
-
     if resultado == "win":
         return (
-            cabecalho +
-            "💎 <b>WIN DIRETO — OPERAÇÃO ENCERRADA</b> 💎\n"
-            "📊 Resultado registrado com sucesso no Vision Pro.\n"
-            "🚀 O sinal foi encerrado no primeiro nível de operação.\n\n"
-            f"📊 <b>Placar Geral:</b> {placar}\n"
-            "⚠️ Gerencie seu capital com responsabilidade.\n"
-            "⚠️ Resultados passados não garantem resultados futuros."
+            "Vision Trade FREE 📈:\n"
+            "💎 <b>TA NA CONTA! WIN DIRETO!</b> 💎\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🔥 A IA do Vision Pro não falha. Operação encerrada com precisão cirúrgica!\n"
+            "🚀 Mais um lucro garantido para o bolso!\n\n"
+            f"📊 Placar Geral: {placar}"
         )
-
     if resultado == "g1":
         return (
-            cabecalho +
-            "🔄 <b>WIN NO G1 — OPERAÇÃO ENCERRADA</b> 🔄\n"
-            "📊 Resultado registrado como Gale 1 no Vision Pro.\n"
-            "🧠 O resultado foi obtido no segundo nível da operação.\n\n"
-            f"📊 <b>Placar Geral:</b> {placar}\n"
-            "⚠️ Gerencie seu capital com responsabilidade.\n"
-            "⚠️ Resultados passados não garantem resultados futuros."
+            "🔄 <b>VITÓRIA CONFIRMADA NO GALE 1!</b> 🔄\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ Recuperação e lucro! Nossa estratégia de proteção funcionou perfeitamente.\n"
+            "💪 O mercado tentou, mas a nossa análise venceu!\n\n"
+            f"Placar Geral: {placar}"
         )
-
     return (
-        cabecalho +
-        "🛑 <b>RED — OPERAÇÃO ENCERRADA</b>\n"
-        "📉 Resultado negativo registrado no Vision Pro.\n"
-        "🔎 O resultado será considerado nas estatísticas da sessão.\n\n"
-        f"📊 <b>Placar Geral:</b> {placar}\n"
-        "⚠️ Gerencie seu capital com responsabilidade.\n"
-        "⚠️ Resultados passados não garantem resultados futuros."
+        "🛑 <b>ANÁLISE ENCERRADA - STOP LOSS</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ O mercado apresentou volatilidade atípica.\n\n"
+        f"📊 Placar Geral: {placar}"
     )
 
 def mensagem_encerramento_sessao(st):
@@ -3147,32 +1687,30 @@ def resultado(res):
         confirmacao_msg_id = st.get("ultima_confirmacao_msg_id")
 
         if res in ("win", "g1", "red", "pular"):
-            # Somente o PRÉ-ALERTA deve ser removido do Telegram.
-            # A mensagem "SINAL CONFIRMADO" permanece no histórico do canal.
+            # Qualquer resultado encerra o ciclo do alerta atual.
             cancelar_alerta_telegram(st, alerta_atual)
 
         if res == 'win':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "Win")
             registrar_resultado_sessao(st, "win")
-            st["sinais_sessao_total"] = st.get("sinais_sessao_total", 0) + 1
             enviar_telegram(mensagem_resultado_telegram(st, "win"), user_solicitante=user)
         elif res == 'g1':
             atualizar_estatisticas_usuario(user, True)
             atualizar_ultimo_sinal_bd(user, "WinG1")
             registrar_resultado_sessao(st, "g1")
-            st["sinais_sessao_total"] = st.get("sinais_sessao_total", 0) + 1
             enviar_telegram(mensagem_resultado_telegram(st, "g1"), user_solicitante=user)
         elif res == 'red':
             atualizar_estatisticas_usuario(user, False)
             atualizar_ultimo_sinal_bd(user, "Red")
             registrar_resultado_sessao(st, "red")
-            st["sinais_sessao_total"] = st.get("sinais_sessao_total", 0) + 1
             enviar_telegram(mensagem_resultado_telegram(st, "red"), user_solicitante=user)
         elif res == 'pular':
-            # PULAR não apaga a confirmação já publicada. A confirmação
-            # continua no Telegram como registro da entrada; somente o
-            # pré-alerta ativo é removido pelo cancelar_alerta_telegram().
+            # Se o sinal já foi confirmado, apagar a confirmação anterior.
+            if confirmacao_msg_id:
+                deletar_mensagem_telegram(confirmacao_msg_id)
+                st["ultima_confirmacao_msg_id"] = None
+                st["ultima_confirmacao_alert_id"] = None
 
             # O aviso de PULADO permanece somente por 5 segundos.
             enviar_telegram(
@@ -3183,7 +1721,6 @@ def resultado(res):
 
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
-        st["sinal_confirmado"] = None
         if st.get("timer_confirmacao"):
             try:
                 st["timer_confirmacao"].cancel()
@@ -3191,7 +1728,6 @@ def resultado(res):
                 pass
         st["timer_confirmacao"] = None
         st["alerta_ativo"] = None
-        st["analise_atual"] = None
         
         st["ultimo_sinal"] = f"<div class='system-console'>🔍 ANALISANDO VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[RETOMANDO VARREDURA COMPLETA]</span></div><div class='tech-scanner'></div>"
     
@@ -3271,7 +1807,6 @@ def confirmar_alerta_agendado(user_email, alert_id):
         str_saida = alerta["str_saida"]
         prob = alerta["probabilidade"]
         tf = alerta["tf"]
-        analise_info = alerta.get("analise", {})
         str_entrada = alerta["str_entrada"]
         alerta_msg_id = alerta.get("msg_id")
         alerta_id_atual = alerta.get("alert_id")
@@ -3287,33 +1822,15 @@ def confirmar_alerta_agendado(user_email, alert_id):
 
         # Atualiza a tela ANTES de qualquer operação de rede/banco.
         st["sinal_permanente"] = (
-            f"<div style='text-align:center;padding:8px;'>"
-            f"<div style='color:#67e8f9;font-size:11px;font-weight:900;letter-spacing:1px;'>🎯 SINAL CONFIRMADO</div>"
-            f"<div style='font-size:24px;font-weight:900;color:{cor_direcao};margin:6px 0;'>{ativo} • {sinal}</div>"
-            f"<div style='font-size:11px;color:#cbd5e1;'>Probabilidade estimada: <b style='color:#4ade80'>{prob}%</b> • M{tf}</div>"
-            f"<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>{est_fmt} • Entrada {str_entrada} • Expiração {str_saida}</div>"
+            f"<div class='status-box' style='border-color:#00f2fe; background:rgba(0,242,254,0.1);'>"
+            f"<h3 style='color:#00f2fe; margin-bottom:8px;'>🎯 SINAL CONFIRMADO!</h3>"
+            f"<b>ATIVO:</b> {ativo}<br>"
+            f"<b>DIREÇÃO DE ENTRADA:</b> <span style='color:{cor_direcao}; font-size:18px;'>{sinal}</span><br>"
+            f"<b>ESTRATÉGIA:</b> <span style='color:#38ef7d;'>{est_fmt} ({prob}%)</span><br>"
+            f"<b>TIMEFRAME:</b> M{tf} | <b>ENTRADA:</b> {str_entrada} | <b>EXPIRAÇÃO:</b> {str_saida}"
             f"</div>"
         )
-        # Congela o sinal confirmado. O bot pode continuar varrendo outros ativos,
-        # mas a interface continuará mostrando este ativo até WIN/G1/RED/PULAR.
-        st["sinal_confirmado"] = {
-            "ativo": ativo,
-            "sinal": sinal,
-            "direcao": sinal,
-            "estrategia": alerta.get("estrategia"),
-            "estrategia_fmt": est_fmt,
-            "probabilidade": prob,
-            "tf": tf,
-            "str_entrada": str_entrada,
-            "str_saida": str_saida,
-            "entrada": str_entrada,
-            "expiracao": str_saida,
-            "confluencia": analise_info.get("confluencia", 0),
-            "analise": analise_info,
-            "confirmado_em": agora_brasilia().isoformat(),
-        }
         st["aguardando_confirmacao"] = True
-        # O pré-alerta é apagado; o estado confirmado acima passa a ser a referência da UI.
         st["alerta_ativo"] = None
         st["timer_confirmacao"] = None
 
@@ -3365,58 +1882,6 @@ def confirmar_alerta_agendado(user_email, alert_id):
 
 
 # ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT =================
-
-def _precarregar_dados_paralelo(ativos, tf, ohlc_cache, velas_minimas=30, st=None, etapa="VARREDURA"):
-    """Busca candles dos ativos em paralelo para evitar que um ativo lento bloqueie a varredura inteira.
-
-    O processamento técnico continua no thread principal; somente a obtenção dos dados
-    de mercado é paralelizada. Isso reduz drasticamente o tempo de uma rodada quando
-    há muitos ativos selecionados ou quando algum endpoint demora a responder.
-    """
-    agora = time.time()
-    resultados = {}
-    pendentes = []
-
-    # Primeiro reaproveita tudo que ainda está no cache.
-    for ativo in ativos:
-        ticker = MAPA_TICKERS.get(ativo, ativo)
-        cache_key = f"{ticker}_{tf}"
-        item = ohlc_cache.get(cache_key)
-        if item and agora - item.get("time", 0) < 5 and item.get("data") is not None:
-            resultados[ativo] = item["data"]
-        else:
-            pendentes.append((ativo, ticker, cache_key))
-
-    if not pendentes:
-        if st is not None:
-            st["scan_fetch_status"] = f"CACHE • {len(resultados)}/{len(ativos)} ativos"
-        return resultados
-
-    max_workers = min(8, max(1, len(pendentes)))
-    concluidos = len(resultados)
-
-    def _buscar(item):
-        ativo, ticker, cache_key = item
-        try:
-            data = get_data_v2(ticker, tf, velas_minimas=velas_minimas)
-            return ativo, cache_key, data, None
-        except Exception as exc:
-            return ativo, cache_key, None, str(exc)
-
-    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="vp-data") as executor:
-        futures = {executor.submit(_buscar, item): item[0] for item in pendentes}
-        for future in as_completed(futures):
-            ativo, cache_key, data, erro = future.result()
-            concluidos += 1
-            if data is not None:
-                resultados[ativo] = data
-                ohlc_cache[cache_key] = {"data": data, "time": time.time()}
-            if st is not None:
-                st["scan_fetch_status"] = f"{etapa} • DADOS {concluidos}/{len(ativos)}"
-
-    return resultados
-
-
 def bot_loop():
     ohlc_cache = {}
 
@@ -3472,213 +1937,46 @@ def bot_loop():
                     # -------------------------------------------------------------
                     # 2. VARREDURA DINÂMICA DE TODOS OS ATIVOS DO MERCADO
                     # -------------------------------------------------------------
-                    ativos_mercado = ativos_por_mercado(mkt)
-                    selecionados_usuario = [a for a in st.get("selected_assets", []) if a in ativos_mercado]
-                    ativos = selecionados_usuario if selecionados_usuario else ativos_mercado
-
-                    # Trava de segurança: os candles são carregados e analisados
-                    # DURANTE os 5 minutos iniciais. Um ativo sem fonte pública válida
-                    # não pode bloquear o motor inteiro: ele é marcado como indisponível
-                    # e os demais continuam normalmente.
-                    if not st.get("warmup_concluido"):
-                        warmup_set = st.setdefault("warmup_ativos_analisados", set())
-                        indisponiveis = st.setdefault("warmup_ativos_indisponiveis", set())
-                        pendentes = [a for a in ativos if a not in warmup_set and a not in indisponiveis]
-                        st["warmup_status"] = (
-                            f"ANALISANDO 30 VELAS • {len(warmup_set) + len(indisponiveis)}/{len(ativos)} ATIVOS"
-                        )
-
-                        if pendentes:
-                            dados_warmup = _precarregar_dados_paralelo(
-                                pendentes, tf, ohlc_cache, velas_minimas=30,
-                                st=st, etapa="AQUECIMENTO"
-                            )
-                            for ativo_w, data_w in dados_warmup.items():
-                                closes_w = data_w.get("close", []) if data_w else []
-                                if len(closes_w) >= 30:
-                                    try:
-                                        # A leitura técnica completa já acontece durante
-                                        # o aquecimento; não esperamos 5 minutos para
-                                        # começar a procurar uma oportunidade.
-                                        diag_w = _indicadores_confluencia(data_w, None)
-                                        st.setdefault("warmup_analysis", {})[ativo_w] = {
-                                            "confluencia": float(diag_w.get("confluencia", 0)),
-                                            "tendencia": diag_w.get("tendencia"),
-                                            "regime": diag_w.get("regime", "--"),
-                                            "adx": float(diag_w.get("adx", 0)),
-                                            "rsi": float(diag_w.get("rsi", 50)),
-                                            "grafico": [float(x) for x in data_w["close"][-30:]],
-                                            "timestamp": time.time()
-                                        }
-                                        warmup_set.add(ativo_w)
-                                    except Exception as exc_w:
-                                        # Se os candles existem, o ativo já foi validado;
-                                        # um erro de diagnóstico não deve travar o aquecimento.
-                                        warmup_set.add(ativo_w)
-                                        st.setdefault("warmup_analysis", {})[ativo_w] = {
-                                            "confluencia": 0, "tendencia": "INDEFINIDA",
-                                            "regime": "SEM LEITURA", "adx": 0, "rsi": 50,
-                                            "grafico": [float(x) for x in closes_w[-30:]],
-                                            "timestamp": time.time(), "erro": str(exc_w)
-                                        }
-                                else:
-                                    # Sem 30 candles válidos (comum em alguns OTC):
-                                    # registra indisponível e não bloqueia os outros ativos.
-                                    indisponiveis.add(ativo_w)
-
-                        processados_warmup = len(warmup_set) + len(indisponiveis)
-                        if processados_warmup >= len(ativos):
-                            st["warmup_concluido"] = True
-                            st["warmup_status"] = (
-                                f"30 VELAS PROCESSADAS • {len(warmup_set)} VÁLIDOS • "
-                                f"{len(indisponiveis)} SEM DADOS PÚBLICOS"
-                            )
-                        else:
-                            st["ativo_atual"] = "AQUECENDO MOTOR — 30 VELAS"
-                            st["ultimo_sinal"] = (
-                                f"<div class='system-console' style='color:#f59e0b;'>🛡️ <b>TRAVA DE SEGURANÇA ATIVA</b><br>"
-                                f"Analisando as últimas <b>30 velas</b> enquanto o temporizador inicial corre.<br>"
-                                f"<span style='color:#00f2fe;'>{processados_warmup}/{len(ativos)} ativos processados.</span></div>"
-                            )
-                            # Não esperamos uma rodada posterior para começar a análise;
-                            # os dados válidos já entram no ciclo de confluência abaixo.
-                            # Se ainda existem pendentes, o próximo ciclo continua daqui.
-                            if not warmup_set:
-                                continue
-
-                    # Durante os 5 minutos, os dados válidos já estão no cache e o
-                    # bloco de varredura abaixo continua normalmente. Quando a trava
-                    # terminar, a mesma varredura já terá um candidato pronto.
-                    dados_warmup_validos = st.get("warmup_ativos_analisados", set())
-                    # Segurança adicional: mesmo com 30 velas disponíveis, o sistema
-                    # aguarda obrigatoriamente 5 minutos após o START. Durante essa janela
-                    # ele continua analisando os ativos, mas NÃO cria alerta nem sinal.
-                    startup_remaining = max(0.0, st.get("startup_lock_until", 0.0) - time.time())
-                    if startup_remaining > 0:
-                        st["warmup_status"] = f"ANALISANDO 30 VELAS • AGUARDANDO {int(math.ceil(startup_remaining))}s PARA LIBERAR SINAIS"
-                        st["ultimo_sinal"] = (
-                            f"<div class='system-console' style='color:#f59e0b;'>🛡️ <b>TRAVA DE SEGURANÇA ATIVA</b><br>"
-                            f"30 velas validadas. O motor continuará procurando a melhor confluência por mais <b>{int(math.ceil(startup_remaining))}s</b>.<br>"
-                            f"<span style='color:#00f2fe;'>Nenhum alerta ou sinal será enviado antes do fim dos 5 minutos.</span></div>"
-                        )
-                        # Mantém a análise de mercado abaixo, mas bloqueia a emissão de alertas.
-
-                    # 🛡️ CONSULTA DO CALENDÁRIO ANTES DA VARREDURA
-                    # A consulta é feita uma vez por ciclo, e não uma vez por ativo.
-                    # Assim, os ativos realmente bloqueados são retirados da lista de
-                    # análise, enquanto todos os demais continuam normalmente.
-                    calendario_ok = atualizar_calendario_investing()
-                    eventos_calendario = INVESTING_CALENDAR_CACHE.get("events", []) if calendario_ok else []
-
-                    ativos_bloqueados = set()
-                    eventos_bloqueados = {}
-                    detalhes_bloqueados = []
-
-                    if calendario_ok:
-                        for ativo_candidato in ativos:
-                            evento_candidato = evento_bloqueia_ativo(ativo_candidato, agora_scan, eventos_calendario)
-                            if evento_candidato:
-                                ativos_bloqueados.add(ativo_candidato)
-                                eventos_bloqueados[ativo_candidato] = evento_candidato
-                                dt_evento = evento_candidato.get("datetime")
-                                dt_liberacao = (dt_evento + timedelta(minutes=NEWS_LOCK_AFTER_MIN)) if dt_evento else None
-                                detalhes_bloqueados.append({
-                                    "ativo": ativo_candidato,
-                                    "currency": evento_candidato.get("currency", ""),
-                                    "impact": int(evento_candidato.get("impact", NEWS_MIN_IMPACT)),
-                                    "event": evento_candidato.get("event", "Evento econômico"),
-                                    "horario": dt_evento.strftime("%H:%M") if hasattr(dt_evento, "strftime") else "--:--",
-                                    "liberacao": dt_liberacao.strftime("%H:%M") if hasattr(dt_liberacao, "strftime") else "--:--",
-                                })
-
-                        if ativos_bloqueados:
-                            st["news_guard_status"] = f"{len(ativos_bloqueados)} ATIVO(S) BLOQUEADO(S) POR NOTÍCIA"
-                            st["news_guard_event"] = {
-                                "blocked_assets": sorted(ativos_bloqueados),
-                                "count": len(ativos_bloqueados),
-                            }
-                        else:
-                            st["news_guard_status"] = "ATIVA — SEM BLOQUEIO"
-                            st["news_guard_event"] = None
+                    if mkt == "TODOS":
+                        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"] + ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
+                    elif mkt == "ABERTO_TODOS":
+                        ativos = ATIVOS_BASE["FOREX_ABERTO"] + ATIVOS_BASE["CRIPTO_ABERTO"]
+                    elif mkt == "OTC_TODOS":
+                        ativos = ATIVOS_BASE["FOREX_OTC"] + ATIVOS_BASE["CRIPTO_OTC"]
                     else:
-                        # FAIL-OPEN: se o Investing não responder, não inventamos
-                        # uma notícia e não bloqueamos o mercado inteiro.
-                        ativos_bloqueados = set()
-                        st["news_guard_status"] = "INVESTING INDISPONÍVEL — ANÁLISE LIBERADA"
-                        st["news_guard_event"] = None
-                        st["news_guard_updated"] = time.time()
+                        ativos = ATIVOS_BASE.get(mkt, ATIVOS_BASE["FOREX_ABERTO"])
 
-                    detalhes_bloqueados.sort(key=lambda x: (x.get("liberacao", "99:99"), x.get("ativo", "")))
-                    st["news_blocked_assets"] = detalhes_bloqueados
-
-                    # Somente ativos sem notícia de 2/3 touros entram na lista de análise.
-                    ativos_scan = [a for a in ativos if a not in ativos_bloqueados]
-
-                    if not ativos_scan:
-                        st["ativo_atual"] = "TODOS OS ATIVOS BLOQUEADOS POR NOTÍCIA"
-                        st["ultimo_sinal"] = (
-                            "<div class='system-console' style='color:#ef4444;'>"
-                            "🛡️ <b>VARREDURA TEMPORARIAMENTE PAUSADA</b><br>"
-                            "Todos os ativos selecionados estão dentro de uma janela de proteção de notícia 2/3 touros.<br>"
-                            "<span style='color:#94a3b8;'>A varredura será retomada automaticamente quando cada janela de 30 minutos terminar.</span>"
-                            "</div>"
-                        )
-                        continue
-
-                    # 2. VARREDURA GLOBAL: primeiro analisa TODOS os ativos selecionados,
-                    # depois escolhe apenas o candidato mais forte. Isso impede a cascata
-                    # de alertas aleatórios observada quando o loop encontrava vários sinais.
-                    candidatos_globais = []
-                    diagnostico_melhor = None
-                    melhor_diag_chave = (-1, -1, -1)
-                    scan_calls = 0
-                    scan_puts = 0
-                    scan_sem_sinal = 0
-                    st["scan_total"] = len(ativos_scan)
-                    st["scan_analisados"] = 0
-                    st["scan_calls"] = 0
-                    st["scan_puts"] = 0
-                    st["scan_sem_sinal"] = 0
-                    st["scan_dados_validos"] = 0
-                    st["scan_fetch_status"] = "INICIANDO CONSULTAS PARALELAS"
-                    st["scan_status"] = f"CARREGANDO DADOS DE {len(ativos_scan)} ATIVOS EM PARALELO"
-                    st["scan_atualizado"] = time.time()
-
-                    # Busca os candles de todos os ativos simultaneamente. A análise
-                    # técnica permanece sequencial para preservar o estado e a lógica
-                    # do ensemble, mas nenhuma consulta lenta bloqueia as demais.
-                    dados_scan = _precarregar_dados_paralelo(
-                        ativos_scan, tf, ohlc_cache, velas_minimas=30,
-                        st=st, etapa="VARREDURA"
-                    )
+                    ativos_scan = ativos.copy()
+                    random.shuffle(ativos_scan)
 
                     for ativo in ativos_scan:
                         if not st.get("bot_iniciado") or st.get("bot_pausado"):
                             break
+
                         st["ativo_atual"] = ativo
-                        data = dados_scan.get(ativo)
+                        ticker = MAPA_TICKERS.get(ativo, ativo)
+
+                        if not alerta and not st.get("aguardando_confirmacao"):
+                            st["ultimo_sinal"] = f"<div class='system-console'>🔍 VARRENDO 30 VELAS EM: <b style='color:#00f2fe; font-size:16px;'>{ativo}</b> (M{tf})<br><span style='color:#00f2fe;'>[BUSCANDO CONFLUÊNCIA]</span></div><div class='tech-scanner'></div>"
+
+                        cache_key = f"{ticker}_{tf}"
+                        if cache_key in ohlc_cache:
+                            data = ohlc_cache[cache_key]["data"]
+                        else:
+                            data = get_data_v2(ticker, tf, velas_minimas=30)
+                            if data:
+                                ohlc_cache[cache_key] = {"data": data, "time": time.time()}
+
                         if not data:
-                            st["scan_analisados"] = int(st.get("scan_analisados",0)) + 1
                             continue
 
-                        st["scan_analisados"] = int(st.get("scan_analisados",0)) + 1
-                        st["scan_dados_validos"] = int(st.get("scan_dados_validos",0)) + 1
-                        st["scan_atual"] = ativo
-                        st["scan_status"] = f"ANALISANDO {ativo} • {st['scan_analisados']}/{len(ativos_scan)}"
-                        try:
-                            scan_diag = _indicadores_confluencia(data, None)
-                            scan_diag.update({
-                                "ativo": ativo, "direcao": None, "probabilidade": 0,
-                                "estrategia": None, "estrategia_fmt": "Leitura em andamento",
-                                "grafico": [float(x) for x in data["close"][-30:]],
-                                "motivos": scan_diag.get("confluencias", [])
-                            })
-                            st["scan_atual_analise"] = scan_diag
-                        except Exception:
-                            pass
+                        sinal_encontrado = None
+                        est_nome_encontrada = None
+                        maior_prob = 0
 
                         if user_est == "TODAS":
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+                            random.shuffle(estrategias_para_analisar)
                         elif "," in str(user_est):
                             estrategias_para_analisar = [e.strip() for e in user_est.split(",") if e.strip() in LISTA_ESTRATEGIAS]
                         elif user_est in LISTA_ESTRATEGIAS:
@@ -3686,202 +1984,178 @@ def bot_loop():
                         else:
                             estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
 
-                        candidatos = []
                         for est_nome in estrategias_para_analisar:
-                            sinal_test, prob_test, analise_test = analisar_estrategia_detalhada(data, est_nome)
-                            if sinal_test:
-                                candidatos.append({"sinal": sinal_test, "prob": int(prob_test), "estrategia": est_nome, "analise": analise_test})
+                            sinal_test, prob_test = analisar_estrategia(data, est_nome)
+                            if sinal_test and prob_test > maior_prob:
+                                sinal_encontrado = sinal_test
+                                est_nome_encontrada = est_nome
+                                maior_prob = prob_test
 
-                        # Ensemble: consenso entre estratégias + qualidade técnica.
-                        # Um sinal isolado com probabilidade alta não vence automaticamente
-                        # um conjunto com múltiplas evidências concordantes.
-                        candidatos_filtrados = []
-                        for cand in candidatos:
-                            conf = float(cand["analise"].get("confluencia", 0))
-                            conflitos = int(cand["analise"].get("conflitos", 0))
-                            concordantes = sum(1 for x in candidatos if x["sinal"] == cand["sinal"] and x["estrategia"] != cand["estrategia"])
-                            discordantes = sum(1 for x in candidatos if x["sinal"] != cand["sinal"] and x["estrategia"] != cand["estrategia"])
-                            cand["concordantes"] = concordantes
-                            cand["discordantes"] = discordantes
-                            regime_cand = str(cand["analise"].get("regime", "LATERAL"))
-                            vantagem_cand = float(cand["analise"].get("vantagem_direcional", 0))
-                            # Em TODAS, uma única estratégia não é suficiente para gerar entrada.
-                            # O objetivo é reduzir G1 por exigir confirmação independente.
-                            if conf < 70 or conflitos >= 2:
+                        if sinal_encontrado and not bloquear_novos_alertas:
+                            agora = agora_brasilia()
+                            
+                            min_pass = agora.minute % tf
+                            seg_pass = min_pass * 60 + agora.second
+                            total_seg = tf * 60
+                            seg_restantes = total_seg - seg_pass
+
+                            # A janela de decisão fecha 5 segundos antes da virada.
+                            if seg_restantes <= 5:
                                 continue
-                            if regime_cand == 'VOLATILIDADE_ALTA':
-                                continue
-                            if regime_cand == 'LATERAL' and cand["estrategia"] not in ('REVERSAO','RETRACAO'):
-                                continue
-                            if vantagem_cand < (7 if cand["estrategia"] in ('REVERSAO','RETRACAO') else 10):
-                                continue
-                            if user_est == "TODAS" and concordantes < 1:
-                                continue
-                            consenso_bonus = min(10, concordantes * 4)
-                            conflito_penal = min(8, discordantes * 2)
-                            # Em mercado muito lateral, exigimos mais confluência.
-                            adx = float(cand["analise"].get("adx", 0))
-                            if adx < 16 and cand["estrategia"] not in ('REVERSAO','RETRACAO'):
-                                conflito_penal += 4
-                            cand["prob_final"] = max(76, min(96, int(cand["prob"]) + consenso_bonus - conflito_penal))
-                            cand["qualidade_ensemble"] = round(conf + consenso_bonus - conflito_penal + min(6, vantagem_cand * 0.25), 1)
-                            candidatos_filtrados.append(cand)
-                        candidatos = candidatos_filtrados
-                        if candidatos:
-                            scan_calls += sum(1 for x in candidatos if x["sinal"] == "CALL")
-                            scan_puts += sum(1 for x in candidatos if x["sinal"] == "PUT")
-                        else:
-                            scan_sem_sinal += 1
-                        st["scan_calls"] = scan_calls
-                        st["scan_puts"] = scan_puts
-                        st["scan_sem_sinal"] = scan_sem_sinal
 
-                        if candidatos:
-                            melhor_local = max(candidatos, key=lambda x:(x["qualidade_ensemble"], x["prob_final"], x["concordantes"]))
-                            ana = dict(melhor_local["analise"])
-                            ana.update({
-                                "ativo": ativo, "direcao": melhor_local["sinal"], "probabilidade": melhor_local["prob_final"],
-                                "estrategia": melhor_local["estrategia"],
-                                "estrategia_fmt": NOME_ESTRATEGIAS_DISPLAY.get(melhor_local["estrategia"], melhor_local["estrategia"]),
-                                "grafico": [float(x) for x in data["close"][-30:]],
-                                "motivos": ana.get("confluencias", []),
-                                "estrategias_concordantes": [NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"]) for x in candidatos if x["sinal"] == melhor_local["sinal"]]
-                            })
-                            candidatos_globais.append({"ativo":ativo,"sinal":melhor_local["sinal"],"probabilidade":int(melhor_local["prob_final"]),"confluencia":float(ana.get("confluencia",0)),"qualidade_ensemble":float(melhor_local.get("qualidade_ensemble", ana.get("confluencia",0))),"concordantes":int(melhor_local["concordantes"]),"estrategia":melhor_local["estrategia"],"estrategia_fmt":ana["estrategia_fmt"],"analise":ana,"data":data})
-                            chave_diag=(float(melhor_local.get("qualidade_ensemble",0)),int(melhor_local["prob_final"]),int(melhor_local["concordantes"]))
-                            if chave_diag>melhor_diag_chave:
-                                melhor_diag_chave=chave_diag; diagnostico_melhor=ana
-                        else:
-                            diag=_indicadores_confluencia(data,None)
-                            diag.update({"ativo":ativo,"direcao":None,"probabilidade":0,"estrategia":None,"estrategia_fmt":"Sem sinal validado","grafico":[float(x) for x in data["close"][-30:]],"motivos":diag.get("confluencias",[])})
-                            if diagnostico_melhor is None:
-                                diagnostico_melhor=diag
+                            prox_minuto_entrada = agora + timedelta(seconds=seg_restantes)
+                            momento_confirmacao = prox_minuto_entrada - timedelta(seconds=5)
+                            horario_saida = prox_minuto_entrada + timedelta(minutes=tf)
 
-                    if diagnostico_melhor is not None:
-                        st["analise_atual"] = diagnostico_melhor
-                        st["scan_melhor"] = {
-                            "ativo": diagnostico_melhor.get("ativo"),
-                            "direcao": diagnostico_melhor.get("direcao"),
-                            "probabilidade": diagnostico_melhor.get("probabilidade", 0),
-                            "confluencia": diagnostico_melhor.get("confluencia", 0),
-                            "regime": diagnostico_melhor.get("regime", "--"),
-                            "vantagem_direcional": diagnostico_melhor.get("vantagem_direcional", 0)
-                        }
-                    st["scan_status"] = f"VARREDURA CONCLUÍDA • {len(ativos_scan)} ativos • CALL {scan_calls} • PUT {scan_puts}"
-                    st["scan_atualizado"] = time.time()
+                            # Horário em que o painel/Telegram confirmam a entrada.
+                            str_entrada = momento_confirmacao.strftime("%H:%M:%S")
+                            str_saida = horario_saida.strftime("%H:%M")
 
-                    # Enquanto há alerta confirmado/pendente, a varredura continua,
-                    # porém só pode substituir o alerta se a oportunidade nova for
-                    # realmente melhor: probabilidade maior; em empate, confluência maior;
-                    # em novo empate, mais estratégias concordando. Nunca por troca aleatória de ativo.
-                    if candidatos_globais and not st.get("aguardando_confirmacao"):
-                        # Ordena todas as oportunidades pela mesma regra usada pelo Vision Pro.
-                        candidatos_ordenados = sorted(
-                            candidatos_globais,
-                            key=lambda x: (x.get("qualidade_ensemble", x["confluencia"]), x["probabilidade"], x["concordantes"]),
-                            reverse=True
-                        )
+                            nome_est_formatado = NOME_ESTRATEGIAS_DISPLAY.get(est_nome_encontrada, est_nome_encontrada)
 
-                        melhor_candidato = candidatos_ordenados[0]
+                            # Substituição se houver um sinal com probabilidade superior no mesmo ciclo
+                            if alerta:
+                                if maior_prob > alerta.get("probabilidade", 0):
+                                    msg_antigo_id = alerta.get("msg_id")
+                                    novo_alert_id = str(time.time_ns())
 
-                        # Proteção contra repetição do mesmo ativo dentro da mesma vela.
-                        # Se existir outra oportunidade forte, ela pode assumir a próxima
-                        # entrada. Se não existir, o ativo anterior continua elegível no
-                        # próximo candle — nunca fabricamos um sinal só para alternar ativos.
-                        tf_seg = max(1, int(tf)) * 60
-                        candle_atual_ts = math.floor(time.time() / tf_seg) * tf_seg
-                        ultimo_ativo = st.get("ultimo_sinal_ativo")
-                        ultimo_candle = float(st.get("ultimo_sinal_candle_ts") or 0.0)
-                        if ultimo_ativo and ultimo_candle == candle_atual_ts and melhor_candidato.get("ativo") == ultimo_ativo:
-                            alternativas = [
-                                c for c in candidatos_ordenados
-                                if c.get("ativo") != ultimo_ativo and int(c.get("probabilidade", 0)) >= 80
-                            ]
-                            if alternativas:
-                                melhor_candidato = alternativas[0]
+                                    msg_pre_alerta = (
+                                        f"⚡ <b>ALERTA ATUALIZADO: MAIOR PROBABILIDADE DETECTADA!</b> ⚡\n\n"
+                                        f"<b>Ativo:</b> {ativo} ({maior_prob}% de Assertividade)\n"
+                                        f"<b>Timeframe:</b> M{tf}\n"
+                                        f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
+                                        f"<b>Estratégia:</b> {nome_est_formatado}\n"
+                                        f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
+                                        f"👉 <i>Alerta anterior cancelado. Abra o ativo {ativo} na corretora!</i>"
+                                    )
+
+                                    # Troca o alerta no painel imediatamente.
+                                    st["ultima_confirmacao_msg_id"] = None
+                                    st["ultima_confirmacao_alert_id"] = None
+                                    st["alerta_ativo"] = {
+                                        "ativo": ativo,
+                                        "sinal": sinal_encontrado,
+                                        "estrategia": est_nome_encontrada,
+                                        "estrategia_fmt": nome_est_formatado,
+                                        "probabilidade": maior_prob,
+                                        "msg_id": None,
+                                        "str_entrada": str_entrada,
+                                        "str_saida": str_saida,
+                                        "prox_minuto_entrada": prox_minuto_entrada,
+                                        "momento_confirmacao": momento_confirmacao,
+                                        "alert_id": novo_alert_id,
+                                        "tf": tf
+                                    }
+
+                                    # Reagenda a confirmação para o novo alerta.
+                                    if st.get("timer_confirmacao"):
+                                        try:
+                                            st["timer_confirmacao"].cancel()
+                                        except Exception:
+                                            pass
+                                    agora_timer = agora_brasilia()
+                                    atraso_confirmacao = max(
+                                        0.0, (momento_confirmacao - agora_timer).total_seconds()
+                                    )
+                                    timer_confirmacao = threading.Timer(
+                                        atraso_confirmacao,
+                                        confirmar_alerta_agendado,
+                                        args=(user_email, novo_alert_id)
+                                    )
+                                    timer_confirmacao.daemon = True
+                                    st["timer_confirmacao"] = timer_confirmacao
+                                    timer_confirmacao.start()
+
+                                    enviar_telegram_em_background(
+                                        msg_pre_alerta,
+                                        user_email,
+                                        alert_id=novo_alert_id,
+                                        deletar_msg_id=msg_antigo_id,
+                                        st=st
+                                    )
+
+                                    st["ultimo_sinal"] = (
+                                        f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
+                                        f"⚡ <b>ALERTA SUBSTITUÍDO (MAIOR PROBABILIDADE: {maior_prob}%)</b> ⚡<br>"
+                                        f"<b>NOVO ATIVO: {ativo}</b> | <b>DIREÇÃO: <span style='color:{'#10b981' if sinal_encontrado=='CALL' else '#ef4444'}'>{sinal_encontrado}</span></b> | Entrada às <b>{str_entrada}</b> (M{tf})<br>"
+                                        f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span>"
+                                        f"</div>"
+                                    )
+                                    alerta = st["alerta_ativo"]
+
                             else:
-                                # Nenhuma alternativa forte nesta vela: aguarda o próximo
-                                # candle em vez de gerar novamente o mesmo sinal.
-                                melhor_candidato = None
-                    else:
-                        melhor_candidato = None
+                                if st["sinais_enviados"].get(ativo) == str_entrada:
+                                    continue
 
-                    # Nenhum alerta/sinal pode ser emitido durante os 5 minutos obrigatórios.
-                    if startup_remaining > 0:
-                        continue
+                                st["sinais_enviados"][ativo] = str_entrada
 
-                    if melhor_candidato and melhor_candidato["probabilidade"] >= 80 and not st.get("aguardando_confirmacao"):
-                        agora = agora_brasilia()
-                        total_seg = tf * 60
-                        seg_pass = (agora.minute % tf) * 60 + agora.second
-                        seg_restantes = total_seg - seg_pass
-                        if seg_restantes <= 5:
-                            continue
+                                msg_pre_alerta = (
+                                    f"⚠️ <b>ATENÇÃO: ANALISANDO OPORTUNIDADE DE OPERAÇÃO</b> ⚠️\n\n"
+                                    f"<b>Ativo:</b> {ativo}\n"
+                                    f"<b>Timeframe:</b> M{tf}\n"
+                                    f"<b>DIREÇÃO DE ENTRADA:</b> {sinal_encontrado}\n"
+                                    f"<b>Estratégia Identificada:</b> {nome_est_formatado}\n"
+                                    f"<b>Assertividade Estimada:</b> {maior_prob}%\n"
+                                    f"<b>Horário da Entrada:</b> {str_entrada}\n\n"
+                                    f"👉 <i>Abra o ativo na corretora e prepare-se!</i>"
+                                )
+                                
+                                novo_alert_id = str(time.time_ns())
 
-                        prox_minuto_entrada = agora + timedelta(seconds=seg_restantes)
-                        momento_confirmacao = prox_minuto_entrada - timedelta(seconds=5)
-                        horario_saida = prox_minuto_entrada + timedelta(minutes=tf)
-                        # Entrada é a virada exata do candle; a confirmação é disparada 5s antes.
-                        str_entrada = prox_minuto_entrada.strftime("%H:%M:%S")
-                        str_saida = horario_saida.strftime("%H:%M:%S")
-                        ativo = melhor_candidato["ativo"]
-                        sinal_encontrado = melhor_candidato["sinal"]
-                        maior_prob = melhor_candidato["probabilidade"]
-                        nome_est_formatado = melhor_candidato["estrategia_fmt"]
-                        melhor_analise = melhor_candidato["analise"]
+                                st["ultima_confirmacao_msg_id"] = None
+                                st["ultima_confirmacao_alert_id"] = None
+                                st["alerta_ativo"] = {
+                                    "ativo": ativo,
+                                    "sinal": sinal_encontrado,
+                                    "estrategia": est_nome_encontrada,
+                                    "estrategia_fmt": nome_est_formatado,
+                                    "probabilidade": maior_prob,
+                                    "msg_id": None,
+                                    "str_entrada": str_entrada,
+                                    "str_saida": str_saida,
+                                    "prox_minuto_entrada": prox_minuto_entrada,
+                                    "momento_confirmacao": momento_confirmacao,
+                                    "alert_id": novo_alert_id,
+                                    "tf": tf
+                                }
 
-                        alerta_atual = st.get("alerta_ativo")
-                        novo_chave = (int(maior_prob), float(melhor_analise.get("confluencia",0)), int(melhor_candidato.get("concordantes",0)))
-                        alerta_chave = None
-                        if alerta_atual:
-                            alerta_chave=(int(alerta_atual.get("probabilidade",0)),float(alerta_atual.get("analise",{}).get("confluencia",0)),int(alerta_atual.get("concordantes",0)))
+                                # Agenda a confirmação independente da varredura.
+                                agora_timer = agora_brasilia()
+                                atraso_confirmacao = max(
+                                    0.0, (momento_confirmacao - agora_timer).total_seconds()
+                                )
+                                timer_confirmacao = threading.Timer(
+                                    atraso_confirmacao,
+                                    confirmar_alerta_agendado,
+                                    args=(user_email, novo_alert_id)
+                                )
+                                timer_confirmacao.daemon = True
+                                st["timer_confirmacao"] = timer_confirmacao
+                                timer_confirmacao.start()
 
-                        # Só substitui se a nova oportunidade for estritamente melhor.
-                        if alerta_atual is None:
-                            pode_substituir = True
-                        else:
-                            antigo_prob, antigo_conf, antigo_conc = alerta_chave
-                            # Regra pedida: só troca quando houver melhora real de
-                            # probabilidade OU melhora real de confluência. Empates
-                            # completos só mudam com mais estratégias concordando.
-                            pode_substituir = (
-                                novo_chave[0] > antigo_prob
-                                or novo_chave[1] > antigo_conf
-                                or (novo_chave[0] == antigo_prob and novo_chave[1] == antigo_conf and novo_chave[2] > antigo_conc)
-                            )
-                        if pode_substituir:
-                            msg_antigo_id = alerta_atual.get("msg_id") if alerta_atual else None
-                            if alerta_atual:
-                                cancelar_alerta_telegram(st, alerta_atual)
-                            novo_alert_id = str(time.time_ns())
-                            msg_pre_alerta = (
-                                f"⚠️ <b>VISION PRO — PRÉ-ALERTA</b>\n"
-                                f"━━━━━━━━━━━━━━━━━━━━\n"
-                                f"💱 <b>{ativo}</b> • M{tf}\n"
-                                f"↕️ <b>DIREÇÃO:</b> {sinal_encontrado}\n"
-                                f"🔥 <b>PROBABILIDADE ESTIMADA:</b> {maior_prob}%\n"
-                                f"🧠 <b>Estratégia:</b> {nome_est_formatado}\n"
-                                f"📊 <b>Confluência:</b> {melhor_analise.get('confluencia',0):.0f}/100\n"
-                                f"🤝 <b>Concordância:</b> {len(melhor_analise.get('estrategias_concordantes',[]))} estratégia(s)\n"
-                                f"🕐 <b>Entrada prevista:</b> {str_entrada}\n"
-                                f"⏳ <b>Confirmação:</b> 5s antes da entrada\n"
-                                f"━━━━━━━━━━━━━━━━━━━━\n"
-                                f"🛡️ <i>A oportunidade só será substituída por outra leitura realmente superior.</i>"
-                            )
-                            st["alerta_ativo"]={"ativo":ativo,"sinal":sinal_encontrado,"estrategia":melhor_candidato["estrategia"],"estrategia_fmt":nome_est_formatado,"probabilidade":maior_prob,"analise":melhor_analise,"msg_id":None,"str_entrada":str_entrada,"str_saida":str_saida,"prox_minuto_entrada":prox_minuto_entrada,"momento_confirmacao":momento_confirmacao,"alert_id":novo_alert_id,"tf":tf,"concordantes":melhor_candidato.get("concordantes",0)}
-                            if st.get("timer_confirmacao"):
-                                try: st["timer_confirmacao"].cancel()
-                                except Exception: pass
-                            atraso=max(0.0,(momento_confirmacao-agora_brasilia()).total_seconds())
-                            timer_confirmacao=threading.Timer(atraso,confirmar_alerta_agendado,args=(user_email,novo_alert_id)); timer_confirmacao.daemon=True; st["timer_confirmacao"]=timer_confirmacao; timer_confirmacao.start()
-                            enviar_telegram_em_background(msg_pre_alerta,user_email,alert_id=novo_alert_id,deletar_msg_id=msg_antigo_id,st=st)
-                            st["sinais_enviados"][ativo]=str_entrada
-                            st["notificacao"]={"id":str(time.time_ns()),"titulo":f"⚠️ NOVO ALERTA: {ativo} — {sinal_encontrado}","corpo":f"{ativo} | {sinal_encontrado} | Entrada {str_entrada} | {maior_prob}% | Confluência {melhor_analise.get('confluencia',0):.0f}/100"}
-                            cor="#10b981" if sinal_encontrado=="CALL" else "#ef4444"
-                            st["ultimo_sinal"]=f"<div style='text-align:center;line-height:1.6;color:#f59e0b'>⚠️ <b>PRÉ-ALERTA</b><br><b style='font-size:18px;color:{cor}'>{ativo} • {sinal_encontrado}</b><br><span>{maior_prob}% • M{tf} • Entrada {str_entrada}</span><br><span style='color:#00d9ff'>{nome_est_formatado}</span></div>"
+                                enviar_telegram_em_background(
+                                    msg_pre_alerta,
+                                    user_email,
+                                    alert_id=novo_alert_id,
+                                    st=st
+                                )
+
+                                st["ultimo_sinal"] = (
+                                    f"<div style='text-align:center; color:#f59e0b; font-family: sans-serif;'>"
+                                    f"⚠️ <b>PREPARE O ATIVO: {ativo} ({maior_prob}%)</b> ⚠️<br>"
+                                    f"<span style='color:#fff;'>DIREÇÃO: <b style='color:{'#10b981' if sinal_encontrado=='CALL' else '#ef4444'}'>{sinal_encontrado}</b> | Entrada às <b>{str_entrada}</b> (M{tf})</span><br>"
+                                    f"<span style='font-size:12px; color:#00f2fe;'>Estratégia: <b>{nome_est_formatado}</b></span>"
+                                    f"</div>"
+                                )
+
+                                st["notificacao"] = {
+                                    "id": str(time.time()),
+                                    "titulo": f"⚠️ PREPARE-SE: {ativo}",
+                                    "corpo": f"Direção: {sinal_encontrado} | Entrada às {str_entrada} (M{tf}) via {nome_est_formatado} ({maior_prob}%)."
+                                }
+                                alerta = st["alerta_ativo"]
 
                 except Exception as e_usr:
-
                     print(f"Erro no loop do usuario {user_email}: {e_usr}")
 
             time.sleep(0.5)
