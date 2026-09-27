@@ -2792,6 +2792,180 @@ def confirmar_alerta_agendado(user_email, alert_id):
         print(f"⚠️ Erro na confirmação agendada ({user_email}): {e}")
 
 
+
+# ================= VARREDURA DE ATIVOS ISOLADA/SEGURA =================
+def _processar_ativo_scan(ativo, tf, user_est, data_inicial=None):
+    """Analisa um ativo de forma isolada.
+
+    Nenhum erro de um ativo pode interromper a varredura dos demais.
+    A função também pode buscar os candles em paralelo quando o cache não
+    possui dados recentes.
+    """
+    ticker = MAPA_TICKERS.get(ativo, ativo)
+    cache_key = f"{ticker}_{tf}"
+    data = data_inicial
+    try:
+        if data is None:
+            data = get_data_v2(ticker, tf, velas_minimas=30)
+        if data is None or len(data.get("close", [])) < 30:
+            return {"ativo": ativo, "data": None, "candidatos": [], "diagnostico": None, "erro": None}
+
+        if user_est == "TODAS":
+            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+        elif "," in str(user_est):
+            estrategias_para_analisar = [
+                e.strip() for e in user_est.split(",")
+                if e.strip() in LISTA_ESTRATEGIAS
+            ]
+        elif user_est in LISTA_ESTRATEGIAS:
+            estrategias_para_analisar = [user_est]
+        else:
+            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+
+        candidatos = []
+        for est_nome in estrategias_para_analisar:
+            try:
+                sinal_test, prob_test, analise_test = analisar_estrategia_detalhada(data, est_nome)
+                if sinal_test:
+                    candidatos.append({
+                        "sinal": sinal_test,
+                        "prob": int(prob_test),
+                        "estrategia": est_nome,
+                        "analise": analise_test
+                    })
+            except Exception as exc_est:
+                # Uma estratégia quebrada não pode derrubar as outras estratégias
+                # nem interromper a varredura dos demais ativos.
+                print(f"⚠️ Estratégia {est_nome} falhou em {ativo}: {exc_est}")
+
+        multi_estrategia = len(estrategias_para_analisar) > 1
+        grupos = {"CALL": [], "PUT": []}
+        for cand in candidatos:
+            grupos.setdefault(cand["sinal"], []).append(cand)
+
+        candidatos_consensuais = []
+        for direcao, grupo in grupos.items():
+            if not grupo:
+                continue
+            consenso = len(grupo)
+            if multi_estrategia and consenso < 2:
+                continue
+
+            grupo = sorted(
+                grupo,
+                key=lambda x: (
+                    float(x["analise"].get("confluencia", 0)),
+                    int(x["analise"].get("confirmacoes", 0)),
+                    int(x["prob"])
+                ),
+                reverse=True
+            )
+            principal = dict(grupo[0])
+            ana = dict(principal["analise"])
+            conf = float(ana.get("confluencia", 0))
+            confirms = int(ana.get("confirmacoes", 0))
+            conflicts = int(ana.get("conflitos", 99))
+            tendencia = ana.get("tendencia")
+
+            if tendencia != direcao:
+                continue
+            if conf < 72 or confirms < 6 or conflicts >= 2:
+                continue
+
+            bonus_consenso = min(9, max(0, consenso - 1) * 3)
+            prob_final = min(96, int(principal["prob"]) + bonus_consenso)
+            if prob_final < 82:
+                continue
+
+            nomes_concordantes = [
+                NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"])
+                for x in grupo
+            ]
+            principal["concordantes"] = consenso - 1
+            principal["consenso"] = consenso
+            principal["prob_final"] = prob_final
+            principal["analise"] = ana
+            principal["analise"]["consenso_estrategias"] = consenso
+            principal["analise"]["estrategias_concordantes"] = nomes_concordantes
+            principal["analise"]["motivos"] = ana.get("confluencias", [])
+            candidatos_consensuais.append(principal)
+
+        candidatos_globais = []
+        diagnostico = None
+        if candidatos_consensuais:
+            melhor_local = max(
+                candidatos_consensuais,
+                key=lambda x: (
+                    int(x["consenso"]),
+                    float(x["analise"].get("confluencia", 0)),
+                    int(x["analise"].get("confirmacoes", 0)),
+                    int(x["prob_final"])
+                )
+            )
+            ana = dict(melhor_local["analise"])
+            ana.update({
+                "ativo": ativo,
+                "direcao": melhor_local["sinal"],
+                "probabilidade": melhor_local["prob_final"],
+                "estrategia": melhor_local["estrategia"],
+                "estrategia_fmt": (
+                    f"{NOME_ESTRATEGIAS_DISPLAY.get(melhor_local['estrategia'], melhor_local['estrategia'])} • "
+                    f"{melhor_local['consenso']} estratégias em acordo"
+                ),
+                "grafico": [float(x) for x in data["close"][-30:]],
+                "motivos": ana.get("confluencias", []),
+                "estrategias_concordantes": ana.get("estrategias_concordantes", [])
+            })
+            candidatos_globais.append({
+                "ativo": ativo,
+                "sinal": melhor_local["sinal"],
+                "probabilidade": int(melhor_local["prob_final"]),
+                "confluencia": float(ana.get("confluencia", 0)),
+                "concordantes": int(melhor_local.get("concordantes", 0)),
+                "consenso": int(melhor_local.get("consenso", 1)),
+                "estrategia": melhor_local["estrategia"],
+                "estrategia_fmt": ana["estrategia_fmt"],
+                "analise": ana,
+                "data": data
+            })
+            diagnostico = ana
+        else:
+            try:
+                diag = _indicadores_confluencia(data, None)
+                diag.update({
+                    "ativo": ativo,
+                    "direcao": None,
+                    "probabilidade": 0,
+                    "estrategia": None,
+                    "estrategia_fmt": "Sem sinal validado",
+                    "grafico": [float(x) for x in data["close"][-30:]],
+                    "motivos": diag.get("confluencias", [])
+                })
+                diagnostico = diag
+            except Exception as exc_diag:
+                print(f"⚠️ Diagnóstico falhou em {ativo}: {exc_diag}")
+
+        return {
+            "ativo": ativo,
+            "data": data,
+            "cache_key": cache_key,
+            "candidatos": candidatos_globais,
+            "diagnostico": diagnostico,
+            "erro": None
+        }
+    except Exception as exc:
+        # Isolamento crítico: um ativo problemático nunca encerra o ciclo inteiro.
+        print(f"⚠️ Falha isolada na análise de {ativo}: {exc}")
+        return {
+            "ativo": ativo,
+            "data": None,
+            "cache_key": cache_key,
+            "candidatos": [],
+            "diagnostico": None,
+            "erro": str(exc)
+        }
+
+
 # ================= LOOP PRINCIPAL MULTI-USUÁRIO DO BOT =================
 def bot_loop():
     ohlc_cache = {}
@@ -2808,7 +2982,7 @@ def bot_loop():
             now_ts = time.time()
 
             # Limpeza do cache de dados OHLC a cada 5 segundos
-            ohlc_cache = {k: v for k, v in ohlc_cache.items() if now_ts - v["time"] < 5}
+            ohlc_cache = {k: v for k, v in ohlc_cache.items() if now_ts - v["time"] < 15}
 
             for user_email, st in usuarios_ativos:
                 try:
@@ -2994,160 +3168,106 @@ def bot_loop():
                         )
                         continue
 
-                    # 2. VARREDURA GLOBAL: primeiro analisa TODOS os ativos selecionados,
-                    # depois escolhe apenas o candidato mais forte. Isso impede a cascata
-                    # de alertas aleatórios observada quando o loop encontrava vários sinais.
+                    # 2. VARREDURA GLOBAL PARALELA
+                    # Cada ativo é isolado em uma tarefa própria. Se EURUSD-OTC,
+                    # qualquer outro OTC ou qualquer estratégia apresentar erro,
+                    # somente aquela tarefa é descartada; o restante continua.
                     candidatos_globais = []
                     diagnostico_melhor = None
                     melhor_diag_chave = (-1, -1, -1, -1)
 
-                    for ativo in ativos_scan:
-                        if not st.get("bot_iniciado") or st.get("bot_pausado"):
-                            break
-                        st["ativo_atual"] = ativo
-                        ticker = MAPA_TICKERS.get(ativo, ativo)
-                        cache_key = f"{ticker}_{tf}"
-                        data = ohlc_cache.get(cache_key, {}).get("data") if cache_key in ohlc_cache else None
-                        if data is None:
-                            data = get_data_v2(ticker, tf, velas_minimas=30)
-                            if data:
-                                ohlc_cache[cache_key] = {"data": data, "time": time.time()}
-                        if not data:
-                            continue
+                    if user_est == "TODAS":
+                        estrategias_global = LISTA_ESTRATEGIAS.copy()
+                    elif "," in str(user_est):
+                        estrategias_global = [
+                            e.strip() for e in user_est.split(",")
+                            if e.strip() in LISTA_ESTRATEGIAS
+                        ]
+                    elif user_est in LISTA_ESTRATEGIAS:
+                        estrategias_global = [user_est]
+                    else:
+                        estrategias_global = LISTA_ESTRATEGIAS.copy()
 
-                        if user_est == "TODAS":
-                            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
-                        elif "," in str(user_est):
-                            estrategias_para_analisar = [e.strip() for e in user_est.split(",") if e.strip() in LISTA_ESTRATEGIAS]
-                        elif user_est in LISTA_ESTRATEGIAS:
-                            estrategias_para_analisar = [user_est]
-                        else:
-                            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+                    total_ativos_scan = len(ativos_scan)
+                    dados_para_scan = {}
+                    for ativo_scan in ativos_scan:
+                        ticker_scan = MAPA_TICKERS.get(ativo_scan, ativo_scan)
+                        cache_key_scan = f"{ticker_scan}_{tf}"
+                        cached_scan = ohlc_cache.get(cache_key_scan)
+                        if cached_scan and cached_scan.get("data") is not None:
+                            dados_para_scan[ativo_scan] = cached_scan.get("data")
 
-                        candidatos = []
-                        for est_nome in estrategias_para_analisar:
-                            sinal_test, prob_test, analise_test = analisar_estrategia_detalhada(data, est_nome)
-                            if sinal_test:
-                                candidatos.append({
-                                    "sinal": sinal_test,
-                                    "prob": int(prob_test),
-                                    "estrategia": est_nome,
-                                    "analise": analise_test
-                                })
+                    workers_scan = max(1, min(12, total_ativos_scan))
+                    resultados_scan = []
+                    st["ativo_atual"] = f"VARREDURA PARALELA • 0/{total_ativos_scan} ATIVOS"
+                    st["ultimo_sinal"] = (
+                        "<div class='system-console'>⚡ <b>MOTOR DE ANÁLISE DINÂMICA</b><br>"
+                        f"[ANALISANDO {total_ativos_scan} ATIVOS EM PARALELO...]<br>"
+                        "<span style='color:#00d9ff;'>Nenhum ativo pode travar os demais.</span></div>"
+                    )
 
-                        # =========================================================
-                        # COMPARAÇÃO REAL ENTRE ESTRATÉGIAS
-                        # =========================================================
-                        # TODAS não significa escolher a estratégia que pontuou mais.
-                        # Todas são executadas separadamente e agrupadas por direção.
-                        # Um sinal só existe quando pelo menos duas estratégias
-                        # independentes concordam na mesma direção.
-                        multi_estrategia = len(estrategias_para_analisar) > 1
-                        grupos = {"CALL": [], "PUT": []}
-                        for cand in candidatos:
-                            grupos.setdefault(cand["sinal"], []).append(cand)
-
-                        candidatos_consensuais = []
-                        for direcao, grupo in grupos.items():
-                            if not grupo:
-                                continue
-                            consenso = len(grupo)
-                            if multi_estrategia and consenso < 2:
-                                continue
-
-                            grupo = sorted(
-                                grupo,
-                                key=lambda x: (
-                                    float(x["analise"].get("confluencia", 0)),
-                                    int(x["analise"].get("confirmacoes", 0)),
-                                    int(x["prob"])
-                                ),
-                                reverse=True
+                    with ThreadPoolExecutor(max_workers=workers_scan, thread_name_prefix="scan") as pool_scan:
+                        futuros_scan = {
+                            pool_scan.submit(
+                                _processar_ativo_scan,
+                                ativo_scan,
+                                tf,
+                                user_est,
+                                dados_para_scan.get(ativo_scan)
+                            ): ativo_scan
+                            for ativo_scan in ativos_scan
+                        }
+                        concluidos_scan = 0
+                        for futuro_scan in as_completed(futuros_scan):
+                            ativo_result = futuros_scan[futuro_scan]
+                            concluidos_scan += 1
+                            try:
+                                resultado_scan = futuro_scan.result()
+                            except Exception as exc_scan:
+                                print(f"⚠️ Worker de {ativo_result} falhou: {exc_scan}")
+                                resultado_scan = {
+                                    "ativo": ativo_result,
+                                    "data": None,
+                                    "candidatos": [],
+                                    "diagnostico": None,
+                                    "erro": str(exc_scan)
+                                }
+                            resultados_scan.append(resultado_scan)
+                            st["ativo_atual"] = (
+                                f"VARREDURA PARALELA • {concluidos_scan}/{total_ativos_scan} ATIVOS"
                             )
-                            principal = dict(grupo[0])
-                            ana = dict(principal["analise"])
-                            conf = float(ana.get("confluencia", 0))
-                            confirms = int(ana.get("confirmacoes", 0))
-                            conflicts = int(ana.get("conflitos", 99))
-                            tendencia = ana.get("tendencia")
 
-                            # Dupla trava: consenso entre estratégias + consenso
-                            # entre indicadores. A tendência também precisa bater.
-                            if tendencia != direcao:
-                                continue
-                            if conf < 72 or confirms < 6 or conflicts >= 2:
-                                continue
+                    # Atualiza o cache somente no thread principal para evitar
+                    # concorrência desnecessária no dicionário compartilhado.
+                    for resultado_scan in resultados_scan:
+                        data_result = resultado_scan.get("data")
+                        cache_key_result = resultado_scan.get("cache_key")
+                        if data_result is not None and cache_key_result:
+                            ohlc_cache[cache_key_result] = {
+                                "data": data_result,
+                                "time": time.time()
+                            }
 
-                            bonus_consenso = min(9, max(0, consenso - 1) * 3)
-                            prob_final = min(96, int(principal["prob"]) + bonus_consenso)
-                            if prob_final < 82:
-                                continue
-
-                            nomes_concordantes = [
-                                NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"])
-                                for x in grupo
-                            ]
-                            principal["concordantes"] = consenso - 1
-                            principal["consenso"] = consenso
-                            principal["prob_final"] = prob_final
-                            principal["analise"] = ana
-                            principal["analise"]["consenso_estrategias"] = consenso
-                            principal["analise"]["estrategias_concordantes"] = nomes_concordantes
-                            principal["analise"]["motivos"] = ana.get("confluencias", [])
-                            candidatos_consensuais.append(principal)
-
-                        if candidatos_consensuais:
-                            melhor_local = max(
-                                candidatos_consensuais,
-                                key=lambda x: (
-                                    int(x["consenso"]),
-                                    float(x["analise"].get("confluencia", 0)),
-                                    int(x["analise"].get("confirmacoes", 0)),
-                                    int(x["prob_final"])
-                                )
-                            )
-                            ana = dict(melhor_local["analise"])
-                            ana.update({
-                                "ativo": ativo,
-                                "direcao": melhor_local["sinal"],
-                                "probabilidade": melhor_local["prob_final"],
-                                "estrategia": melhor_local["estrategia"],
-                                "estrategia_fmt": (
-                                    f"{NOME_ESTRATEGIAS_DISPLAY.get(melhor_local['estrategia'], melhor_local['estrategia'])} • "
-                                    f"{melhor_local['consenso']} estratégias em acordo"
-                                ),
-                                "grafico": [float(x) for x in data["close"][-30:]],
-                                "motivos": ana.get("confluencias", []),
-                                "estrategias_concordantes": ana.get("estrategias_concordantes", [])
-                            })
-                            candidatos_globais.append({
-                                "ativo": ativo,
-                                "sinal": melhor_local["sinal"],
-                                "probabilidade": int(melhor_local["prob_final"]),
-                                "confluencia": float(ana.get("confluencia", 0)),
-                                "concordantes": int(melhor_local.get("concordantes", 0)),
-                                "consenso": int(melhor_local.get("consenso", 1)),
-                                "estrategia": melhor_local["estrategia"],
-                                "estrategia_fmt": ana["estrategia_fmt"],
-                                "analise": ana,
-                                "data": data
-                            })
+                        candidatos_globais.extend(resultado_scan.get("candidatos") or [])
+                        diag_result = resultado_scan.get("diagnostico")
+                        if diag_result is not None:
                             chave_diag = (
-                                int(melhor_local["consenso"]),
-                                float(ana.get("confluencia", 0)),
-                                int(ana.get("confirmacoes", 0)),
-                                int(melhor_local["prob_final"])
+                                int(diag_result.get("consenso_estrategias", 0) or 0),
+                                float(diag_result.get("confluencia", 0)),
+                                int(diag_result.get("confirmacoes", 0)),
+                                int(diag_result.get("probabilidade", 0))
                             )
-                            if chave_diag > melhor_diag_chave:
+                            if diagnostico_melhor is None or chave_diag > melhor_diag_chave:
                                 melhor_diag_chave = chave_diag
-                                diagnostico_melhor = ana
-                        else:
-                            diag=_indicadores_confluencia(data,None)
-                            diag.update({"ativo":ativo,"direcao":None,"probabilidade":0,"estrategia":None,"estrategia_fmt":"Sem sinal validado","grafico":[float(x) for x in data["close"][-30:]],"motivos":diag.get("confluencias",[])})
-                            if diagnostico_melhor is None:
-                                diagnostico_melhor=diag
+                                diagnostico_melhor = diag_result
 
-                    if diagnostico_melhor is not None and (not st.get("aguardando_confirmacao") or st.get("analise_atual") is None):
+                    st["ativo_atual"] = (
+                        f"VARREDURA CONCLUÍDA • {total_ativos_scan} ATIVOS"
+                    )
+
+                    if diagnostico_melhor is not None and (
+                        not st.get("aguardando_confirmacao") or st.get("analise_atual") is None
+                    ):
                         st["analise_atual"] = diagnostico_melhor
 
                     # Enquanto há alerta confirmado/pendente, a varredura continua,
@@ -3186,11 +3306,11 @@ def bot_loop():
                     else:
                         melhor_candidato = None
 
-                    # Nenhum alerta/sinal pode ser emitido durante os 5 minutos obrigatórios.
-                    if startup_remaining > 0:
-                        continue
-
-                    if melhor_candidato and melhor_candidato["probabilidade"] >= 82 and int(melhor_candidato.get("consenso", 1)) >= (2 if len(estrategias_para_analisar) > 1 else 1) and float(melhor_candidato.get("confluencia", 0)) >= 72 and not st.get("aguardando_confirmacao"):
+                    # Não existe mais trava temporal de 5 minutos. O único bloqueio
+                    # para um alerta é a própria qualidade da leitura: confluência,
+                    # tendência, consenso entre estratégias e janela de entrada.
+                    minimo_consenso = 2 if len(estrategias_global) > 1 else 1
+                    if melhor_candidato and melhor_candidato["probabilidade"] >= 82 and int(melhor_candidato.get("consenso", 1)) >= minimo_consenso and float(melhor_candidato.get("confluencia", 0)) >= 72 and not st.get("aguardando_confirmacao"):
                         agora = agora_brasilia()
                         total_seg = tf * 60
                         seg_pass = (agora.minute % tf) * 60 + agora.second
