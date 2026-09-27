@@ -2868,7 +2868,10 @@ def command(cmd):
         # Guarda o ativo da última operação e a vela em que ela foi encerrada.
         # Isso impede que o mesmo ativo seja escolhido repetidamente na mesma vela
         # quando houver outro candidato válido. Não cria sinais artificiais.
-        ultimo_confirmado = st.get("sinal_confirmado") or alerta_atual or {}
+        # Recupera somente estados pertencentes ao usuário atual.
+        # `alerta_atual` não é uma variável local definida neste endpoint;
+        # referenciá-la aqui causava NameError e retornava HTTP 500 no START.
+        ultimo_confirmado = st.get("sinal_confirmado") or st.get("alerta_ativo") or {}
         st["ultimo_sinal_ativo"] = ultimo_confirmado.get("ativo")
         st["ultimo_sinal_candle_ts"] = math.floor(time.time() / (max(1, int(st.get("timeframe", 5))) * 60)) * (max(1, int(st.get("timeframe", 5))) * 60)
 
