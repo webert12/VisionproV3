@@ -83,6 +83,8 @@ def get_user_state(email):
             "news_blocked_assets": [],
             "news_guard_updated": 0.0,
             "analise_atual": None,
+            "dados_grafico_atual": None,
+            "analise_ativo_atual": None,
             "sessao_resultados": [],
             "sinais_sessao_total": 0,
             "warmup_concluido": True,
@@ -656,6 +658,11 @@ function renderSignal(d){
     const est=fonte.estrategia_fmt||a.estrategia_fmt||'Motor aguardando análise';
     const conf=fonte.confluencia!=null?fonte.confluencia:a.confluencia;
     const analise=fonte.analise||a;
+    // Fallback do gráfico: o backend também envia grafico_atual diretamente.
+    // Isso mantém o gráfico vivo mesmo quando ainda não existe sinal validado.
+    if((!Array.isArray(analise.grafico)||analise.grafico.length<2) && Array.isArray(d.grafico_atual) && d.grafico_atual.length>=2){
+        analise.grafico=d.grafico_atual;
+    }
 
     const panel=document.getElementById('panel-text');
     if(panel){
@@ -726,7 +733,7 @@ function formatarTempo(seg){seg=Math.max(0,Math.floor(Number(seg)||0));const h=M
 function formatarHora(ts){if(!ts)return'--:--:--';return new Date(Number(ts)*1000).toLocaleTimeString('pt-BR',{hour12:false})}
 function atualizarTimerMercado(d){const end=Number(d.candle_end_ts||0),start=Number(d.candle_start_ts||0),server=Number(d.server_now||Date.now()/1000),now=server+((Date.now()/1000)-server);const remaining=Math.max(0,end-now);const elapsed=Math.max(0,Math.min(end-start,now-start));const total=Math.max(1,Number(d.candle_total||((d.timeframe||5)*60)));const pct=Math.max(0,Math.min(100,(elapsed/total)*100));setText('candle-countdown',formatarTempo(remaining));const fill=document.getElementById('candle-fill');if(fill)fill.style.width=pct+'%';setText('candle-window',formatarHora(start)+' → '+formatarHora(end));const entryTs=Number(d.entry_end_ts||0);const entryRemaining=entryTs?Math.max(0,entryTs-now):0;const confirmTs=Number(d.confirmation_ts||0);const confirmRemaining=confirmTs?Math.max(0,confirmTs-now):0;const entrada=d.entry_time||'--:--:--';setText('entry-countdown',entryTs?(entrada+' • '+formatarTempo(entryRemaining)):(entrada==='--:--:--'?'--:--:--':entrada));const note=document.getElementById('timer-note');if(note){if(d.sinal_confirmado){note.innerText='🎯 Entrada confirmada • expiração: '+((d.sinal_confirmado||{}).str_saida||'--:--:--');note.className='timer-note timer-confirm'}else if(d.alerta){note.innerText=confirmRemaining<=5&&confirmRemaining>0?'⚡ CONFIRMAÇÃO EM '+Math.ceil(confirmRemaining)+'s':'⚠️ Confirmação programada 5s antes da virada • entrada '+entrada;note.className='timer-note '+(confirmRemaining<=5&&confirmRemaining>0?'timer-alert':'')}else{note.innerText='Aguardando uma confluência válida para programar a entrada.';note.className='timer-note'}}}
 async function atualizarPainel(){try{const r=await fetch('/status',{cache:'no-store'});const d=await r.json();if(d.redirect){location.href=d.redirect;return}latestData=d;atualizarAssetPickers(d);renderSignal(d);atualizarSessao(d);atualizarTimerMercado(d);atualizarAtivosBloqueados(d.news_blocked_assets||[]);const ng=d.news_guard_status||'AGUARDANDO CALENDÁRIO';setText('news-guard-status',ng);setText('guard-detail-status',ng);const blocked=(d.news_blocked_assets||[]).length;const color=blocked?'#fb7185':ng.includes('INDISPONÍVEL')?'#fbbf24':'#86efac';['news-guard-status','guard-detail-status'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.color=color});const b=document.getElementById('guard-badge');if(b)b.innerText=blocked?'● PROTEGENDO':'● ATIVO';const b2=document.getElementById('guard-badge-2');if(b2)b2.innerText=blocked?'● PROTEGENDO':'● ATIVO';const result=document.getElementById('result-area');if(result)result.style.display=d.aguardando?'grid':'none';renderHistory(d.historico||[]);renderResumoHistorico(d.historico_resumo||{});if(d.notificacao&&d.notificacao.id!==lastNotifId){lastNotifId=d.notificacao.id;dispararNotificacaoNativa(d.notificacao.titulo,d.notificacao.corpo,d.notificacao.id)}}catch(e){setText('top-status','REDE');}finally{setTimeout(atualizarPainel,1000)}}
-window.addEventListener('resize',()=>{if(latestData){const f=latestData.sinal_confirmado||latestData.alerta||latestData.analise_atual||{};drawChart((f.analise||f).grafico||[],'market-chart');drawChart((f.analise||f).grafico||[],'market-chart-2')}});
+window.addEventListener('resize',()=>{if(latestData){const f=latestData.sinal_confirmado||latestData.alerta||latestData.analise_atual||{};const fa=f.analise||f;drawChart((fa.grafico&&fa.grafico.length?fa.grafico:(latestData.grafico_atual||[])),'market-chart');drawChart((fa.grafico&&fa.grafico.length?fa.grafico:(latestData.grafico_atual||[])),'market-chart-2')}});
 document.getElementById('bt-market')?.addEventListener('change',e=>renderAssetPicker('bt-assets',e.target.value,[]));
 const opPicker=document.getElementById('operating-assets'); if(opPicker) opPicker.addEventListener('change',()=>saveOperatingAssets());
 atualizarPainel();
@@ -1604,7 +1611,10 @@ def get_data_v2(ticker, tf, velas_minimas=30):
                 if fechado is not None and len(fechado["close"]) >= velas_minimas:
                     return fechado
 
-        if "-USD" in base_ticker or "USD" in ticker:
+        # CryptoCompare é usado somente para tickers de cripto no formato XXX-USD.
+        # Antes, a condição também capturava Forex como AUDUSD/AUDUSD=X e fazia
+        # uma segunda consulta desnecessária que podia consumir um worker por vários segundos.
+        if base_ticker.endswith("-USD"):
             crypto_symbol = ticker.replace("USD", "").replace("-OTC", "").replace("-", "")
             url_alt = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={crypto_symbol}&tsym=USD&limit=300&aggregate={tf}"
             r_alt = requests.get(url_alt, timeout=5.0)
@@ -1985,6 +1995,8 @@ def status():
         "news_guard_event": st.get("news_guard_event"),
         "news_blocked_assets": st.get("news_blocked_assets", []),
         "analise_atual": st.get("analise_atual"),
+        "grafico_atual": st.get("dados_grafico_atual") or [],
+        "analise_ativo_atual": st.get("analise_ativo_atual"),
         "alerta": st.get("alerta_ativo"),
         "sinal_confirmado": st.get("sinal_confirmado"),
         "sinais_sessao_total": st.get("sinais_sessao_total", 0),
@@ -2174,6 +2186,8 @@ def command(cmd):
         st["news_blocked_assets"] = []
         st["news_guard_updated"] = 0.0
         st["analise_atual"] = None
+        st["dados_grafico_atual"] = None
+        st["analise_ativo_atual"] = None
         st["sinais_sessao_total"] = 0
         st["warmup_concluido"] = True
         st["warmup_ativos_analisados"] = set()
@@ -2241,6 +2255,8 @@ def command(cmd):
         zerar_estatisticas_usuario(user)
         st["sessao_resultados"] = []
         st["analise_atual"] = None
+        st["dados_grafico_atual"] = None
+        st["analise_ativo_atual"] = None
         st["sinais_sessao_total"] = 0
         return jsonify({"ok": True})
 
@@ -2425,6 +2441,8 @@ def resultado(res):
         st["timer_confirmacao"] = None
         st["alerta_ativo"] = None
         st["analise_atual"] = None
+        st["dados_grafico_atual"] = None
+        st["analise_ativo_atual"] = None
         
         st["ultimo_sinal"] = f"<div class='system-console'>🔍 ANALISANDO VELAS: <b>{st['ativo_atual']}</b> (M{st['timeframe']})<br><span style='color:#00f2fe;'>[RETOMANDO VARREDURA COMPLETA]</span></div><div class='tech-scanner'></div>"
     
@@ -2740,68 +2758,115 @@ def bot_loop():
                     melhor_diag_chave = (-1, -1, -1)
 
                     for ativo in ativos_scan:
-                        if not st.get("bot_iniciado") or st.get("bot_pausado"):
-                            break
-                        st["ativo_atual"] = ativo
-                        ticker = MAPA_TICKERS.get(ativo, ativo)
-                        # Agenda a coleta sem bloquear a varredura. O ativo só é analisado
-                        # quando houver um snapshot real no cache.
-                        data = solicitar_dados_async(ticker, tf)
-                        if data is None:
-                            st["ultimo_sinal"] = (f"<div class='system-console'>🔄 COLETANDO DADOS: <b>{ativo}</b> • M{tf}<br>"
-                                                   f"<span style='color:#00d9ff'>Os demais ativos continuam sendo processados em paralelo.</span></div>")
+                        # Cada ativo é uma unidade isolada de processamento.
+                        # Qualquer erro de dados, indicador ou estratégia em um ativo
+                        # é registrado e o motor imediatamente passa ao próximo, sem
+                        # derrubar a varredura inteira.
+                        try:
+                            if not st.get("bot_iniciado") or st.get("bot_pausado"):
+                                break
+                            st["ativo_atual"] = ativo
+                            ticker = MAPA_TICKERS.get(ativo, ativo)
+                            # Agenda a coleta sem bloquear a varredura. O ativo só é analisado
+                            # quando houver um snapshot real no cache.
+                            data = solicitar_dados_async(ticker, tf)
+                            if data is None:
+                                st["ultimo_sinal"] = (f"<div class='system-console'>🔄 COLETANDO DADOS: <b>{ativo}</b> • M{tf}<br>"
+                                                       f"<span style='color:#00d9ff'>Os demais ativos continuam sendo processados em paralelo.</span></div>")
+                                continue
+
+                            # IMPORTANTE: o Raio-X e o gráfico não dependem mais da existência
+                            # de um sinal. Assim que um snapshot real chega ao cache, o painel
+                            # recebe imediatamente os candles e os indicadores do ativo atual.
+                            try:
+                                closes_validos = [float(x) for x in np.asarray(data.get("close", []), dtype=float) if np.isfinite(x)]
+                            except Exception:
+                                closes_validos = []
+                            diag_atual = _indicadores_confluencia(data, None)
+                            diag_atual.update({
+                                "ativo": ativo,
+                                "direcao": None,
+                                "probabilidade": 0,
+                                "estrategia": None,
+                                "estrategia_fmt": "Leitura técnica em tempo real",
+                                "grafico": closes_validos[-60:],
+                                "motivos": diag_atual.get("confluencias", []),
+                                "dados_reais": bool(closes_validos)
+                            })
+                            st["dados_grafico_atual"] = closes_validos[-60:]
+                            st["analise_ativo_atual"] = diag_atual
+                            # Mantém o diagnóstico visual sincronizado com o ativo que está
+                            # sendo processado, mesmo quando nenhuma estratégia gera sinal.
+                            st["analise_atual"] = diag_atual
+
+                            if user_est == "TODAS":
+                                estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+                            elif "," in str(user_est):
+                                estrategias_para_analisar = [e.strip() for e in user_est.split(",") if e.strip() in LISTA_ESTRATEGIAS]
+                            elif user_est in LISTA_ESTRATEGIAS:
+                                estrategias_para_analisar = [user_est]
+                            else:
+                                estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
+
+                            candidatos = []
+                            for est_nome in estrategias_para_analisar:
+                                # Uma estratégia com erro não pode derrubar o ativo nem
+                                # interromper as demais estratégias/ativos da varredura.
+                                try:
+                                    sinal_test, prob_test, analise_test = analisar_estrategia_detalhada(data, est_nome)
+                                    if sinal_test:
+                                        candidatos.append({"sinal": sinal_test, "prob": int(prob_test), "estrategia": est_nome, "analise": analise_test})
+                                except Exception as exc_est:
+                                    print(f"⚠️ Estratégia ignorada em {ativo} ({est_nome}): {exc_est}")
+                                    continue
+
+                            # Quando TODAS está selecionado, uma única estratégia isolada não libera sinal.
+                            # Exigimos concordância real de pelo menos 2 estratégias para reduzir ruído.
+                            if user_est == "TODAS":
+                                direcoes_validas = {d for d in ("CALL", "PUT") if sum(1 for x in candidatos if x["sinal"] == d) >= 2}
+                                candidatos = [x for x in candidatos if x["sinal"] in direcoes_validas]
+
+                            # Bônus somente quando há concordância real entre estratégias.
+                            for cand in candidatos:
+                                concordantes = sum(1 for x in candidatos if x["sinal"] == cand["sinal"] and x["estrategia"] != cand["estrategia"])
+                                cand["concordantes"] = concordantes
+                                cand["prob_final"] = min(98, int(cand["prob"]) + min(5, concordantes * 2))
+
+                            if candidatos:
+                                melhor_local = max(candidatos, key=lambda x:(x["prob_final"], x["analise"].get("confluencia",0), x["concordantes"]))
+                                ana = dict(melhor_local["analise"])
+                                ana.update({
+                                    "ativo": ativo, "direcao": melhor_local["sinal"], "probabilidade": melhor_local["prob_final"],
+                                    "estrategia": melhor_local["estrategia"],
+                                    "estrategia_fmt": NOME_ESTRATEGIAS_DISPLAY.get(melhor_local["estrategia"], melhor_local["estrategia"]),
+                                    "grafico": [float(x) for x in np.asarray(data.get("close", []), dtype=float)[-60:] if np.isfinite(x)],
+                                    "motivos": ana.get("confluencias", []),
+                                    "estrategias_concordantes": [NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"]) for x in candidatos if x["sinal"] == melhor_local["sinal"]]
+                                })
+                                candidatos_globais.append({"ativo":ativo,"sinal":melhor_local["sinal"],"probabilidade":int(melhor_local["prob_final"]),"confluencia":float(ana.get("confluencia",0)),"concordantes":int(melhor_local["concordantes"]),"estrategia":melhor_local["estrategia"],"estrategia_fmt":ana["estrategia_fmt"],"analise":ana,"data":data})
+                                chave_diag=(int(melhor_local["prob_final"]),float(ana.get("confluencia",0)),int(melhor_local["concordantes"]))
+                                if chave_diag>melhor_diag_chave:
+                                    melhor_diag_chave=chave_diag; diagnostico_melhor=ana
+                            else:
+                                diag=_indicadores_confluencia(data,None)
+                                diag.update({"ativo":ativo,"direcao":None,"probabilidade":0,"estrategia":None,"estrategia_fmt":"Sem sinal validado","grafico":[float(x) for x in np.asarray(data.get("close", []), dtype=float)[-60:] if np.isfinite(x)],"motivos":diag.get("confluencias",[])})
+                                if diagnostico_melhor is None:
+                                    diagnostico_melhor=diag
+
+                        except Exception as exc_ativo:
+                            print(f"⚠️ Ativo ignorado sem interromper a varredura ({ativo} / {ticker if 'ticker' in locals() else '?'}): {exc_ativo}")
+                            st["ultimo_sinal"] = (
+                                f"<div class='system-console'>⚠️ DADOS INDISPONÍVEIS: <b>{ativo}</b><br>"
+                                f"<span style='color:#94a3b8'>Erro isolado neste ativo. O Vision Pro continuará analisando os próximos.</span></div>"
+                            )
                             continue
 
-                        if user_est == "TODAS":
-                            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
-                        elif "," in str(user_est):
-                            estrategias_para_analisar = [e.strip() for e in user_est.split(",") if e.strip() in LISTA_ESTRATEGIAS]
-                        elif user_est in LISTA_ESTRATEGIAS:
-                            estrategias_para_analisar = [user_est]
-                        else:
-                            estrategias_para_analisar = LISTA_ESTRATEGIAS.copy()
-
-                        candidatos = []
-                        for est_nome in estrategias_para_analisar:
-                            sinal_test, prob_test, analise_test = analisar_estrategia_detalhada(data, est_nome)
-                            if sinal_test:
-                                candidatos.append({"sinal": sinal_test, "prob": int(prob_test), "estrategia": est_nome, "analise": analise_test})
-
-                        # Quando TODAS está selecionado, uma única estratégia isolada não libera sinal.
-                        # Exigimos concordância real de pelo menos 2 estratégias para reduzir ruído.
-                        if user_est == "TODAS":
-                            direcoes_validas = {d for d in ("CALL", "PUT") if sum(1 for x in candidatos if x["sinal"] == d) >= 2}
-                            candidatos = [x for x in candidatos if x["sinal"] in direcoes_validas]
-
-                        # Bônus somente quando há concordância real entre estratégias.
-                        for cand in candidatos:
-                            concordantes = sum(1 for x in candidatos if x["sinal"] == cand["sinal"] and x["estrategia"] != cand["estrategia"])
-                            cand["concordantes"] = concordantes
-                            cand["prob_final"] = min(98, int(cand["prob"]) + min(5, concordantes * 2))
-
-                        if candidatos:
-                            melhor_local = max(candidatos, key=lambda x:(x["prob_final"], x["analise"].get("confluencia",0), x["concordantes"]))
-                            ana = dict(melhor_local["analise"])
-                            ana.update({
-                                "ativo": ativo, "direcao": melhor_local["sinal"], "probabilidade": melhor_local["prob_final"],
-                                "estrategia": melhor_local["estrategia"],
-                                "estrategia_fmt": NOME_ESTRATEGIAS_DISPLAY.get(melhor_local["estrategia"], melhor_local["estrategia"]),
-                                "grafico": [float(x) for x in data["close"][-30:]],
-                                "motivos": ana.get("confluencias", []),
-                                "estrategias_concordantes": [NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"]) for x in candidatos if x["sinal"] == melhor_local["sinal"]]
-                            })
-                            candidatos_globais.append({"ativo":ativo,"sinal":melhor_local["sinal"],"probabilidade":int(melhor_local["prob_final"]),"confluencia":float(ana.get("confluencia",0)),"concordantes":int(melhor_local["concordantes"]),"estrategia":melhor_local["estrategia"],"estrategia_fmt":ana["estrategia_fmt"],"analise":ana,"data":data})
-                            chave_diag=(int(melhor_local["prob_final"]),float(ana.get("confluencia",0)),int(melhor_local["concordantes"]))
-                            if chave_diag>melhor_diag_chave:
-                                melhor_diag_chave=chave_diag; diagnostico_melhor=ana
-                        else:
-                            diag=_indicadores_confluencia(data,None)
-                            diag.update({"ativo":ativo,"direcao":None,"probabilidade":0,"estrategia":None,"estrategia_fmt":"Sem sinal validado","grafico":[float(x) for x in data["close"][-30:]],"motivos":diag.get("confluencias",[])})
-                            if diagnostico_melhor is None:
-                                diagnostico_melhor=diag
-
-                    if diagnostico_melhor is not None and (not st.get("aguardando_confirmacao") or st.get("analise_atual") is None):
-                        st["analise_atual"] = diagnostico_melhor
+                    # O Raio-X permanece apontando para o último ativo com dados reais
+                    # recebido nesta varredura. O melhor candidato continua separado e é
+                    # usado exclusivamente para decidir se haverá alerta. Isso evita que
+                    # o painel fique sem gráfico quando não existe sinal validado.
+                    if st.get("analise_ativo_atual") is not None:
+                        st["analise_atual"] = st["analise_ativo_atual"]
 
                     # Enquanto há alerta confirmado/pendente, a varredura continua,
                     # porém só pode substituir o alerta se a oportunidade nova for
