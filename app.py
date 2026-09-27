@@ -2914,8 +2914,28 @@ def command(cmd):
             f"⚙️ <b>Estratégia:</b> {NOME_ESTRATEGIAS_DISPLAY.get(st['estrategia'], st['estrategia'])}\n\n"
             f"<i>Varrendo gráficos em tempo real...</i>"
         )
-        enviar_telegram(msg_inicio_telegram, user_solicitante=user)
-        return jsonify({"ok": True})
+        # NÃO bloqueia a resposta HTTP do botão START esperando a API do Telegram.
+        # Em hospedagens como Render, uma chamada síncrona ao Telegram pode demorar
+        # e fazer o navegador exibir "Falha de comunicação com o servidor", mesmo
+        # com o bot já iniciado. O envio é desacoplado do comando.
+        def _enviar_inicio_telegram_background(_msg=msg_inicio_telegram, _user=user):
+            try:
+                msg_id = enviar_telegram(_msg, user_solicitante=_user)
+                if msg_id:
+                    print(f"✅ Telegram: mensagem de START enviada (ID {msg_id}).")
+                else:
+                    print("⚠️ Telegram: START foi iniciado, mas a mensagem não pôde ser enviada.")
+            except Exception as e:
+                print(f"⚠️ Erro ao enviar mensagem de START ao Telegram: {e}")
+
+        threading.Thread(
+            target=_enviar_inicio_telegram_background,
+            daemon=True,
+            name="telegram-start"
+        ).start()
+
+        # Responde imediatamente ao painel. O motor já está iniciado acima.
+        return jsonify({"ok": True, "telegram_enviado_em_background": True})
 
     elif cmd == "pause_bot":
         st["bot_pausado"] = not st["bot_pausado"]
