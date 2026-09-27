@@ -1881,125 +1881,381 @@ def _macd_atual(c):
     sinal = calcular_ema(linha, 9)
     return float(linha[-1]), float(sinal[-1]), float(linha[-1] - sinal[-1])
 
+def _atr_atual(h, l, c, periodo=14):
+    """ATR simples usando somente candles fechados disponíveis."""
+    if len(c) < 2:
+        return 0.0
+    tr = np.maximum(
+        h[1:] - l[1:],
+        np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1]))
+    )
+    janela = tr[-periodo:] if len(tr) >= periodo else tr
+    return float(np.mean(janela)) if len(janela) else 0.0
+
+def _adx_atual(h, l, c, periodo=14):
+    """ADX aproximado e estável para medir força de tendência."""
+    if len(c) < periodo * 2 + 2:
+        return 0.0, 0.0, 0.0
+    up = np.diff(h)
+    down = -np.diff(l)
+    plus_dm = np.where((up > down) & (up > 0), up, 0.0)
+    minus_dm = np.where((down > up) & (down > 0), down, 0.0)
+    tr = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
+    atr = np.convolve(tr, np.ones(periodo) / periodo, mode='valid')
+    p = np.convolve(plus_dm, np.ones(periodo) / periodo, mode='valid')
+    m = np.convolve(minus_dm, np.ones(periodo) / periodo, mode='valid')
+    n = min(len(atr), len(p), len(m))
+    if n < periodo:
+        return 0.0, 0.0, 0.0
+    atr = np.maximum(atr[-n:], 1e-12)
+    pdi = 100 * p[-n:] / atr
+    mdi = 100 * m[-n:] / atr
+    dx = 100 * np.abs(pdi - mdi) / np.maximum(pdi + mdi, 1e-12)
+    adx = float(np.mean(dx[-periodo:])) if len(dx) else 0.0
+    return adx, float(pdi[-1]), float(mdi[-1])
+
+def _estocastico_atual(h, l, c, periodo=14, suavizacao=3):
+    if len(c) < periodo:
+        return 50.0, 50.0
+    lowest = float(np.min(l[-periodo:]))
+    highest = float(np.max(h[-periodo:]))
+    k = 50.0 if highest - lowest <= 1e-12 else 100 * (float(c[-1]) - lowest) / (highest - lowest)
+    # Para manter a leitura robusta com poucos dados, usa uma média curta dos %K.
+    ks = []
+    inicio = max(periodo, len(c) - suavizacao)
+    for i in range(inicio, len(c) + 1):
+        lo = float(np.min(l[i-periodo:i])); hi = float(np.max(h[i-periodo:i]))
+        ks.append(50.0 if hi-lo <= 1e-12 else 100 * (float(c[i-1])-lo)/(hi-lo))
+    d = float(np.mean(ks)) if ks else k
+    return float(k), d
+
 def _indicadores_confluencia(data, direcao=None):
-    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
-    ema9 = calcular_ema(c, 9)
-    ema21 = calcular_ema(c, 21)
+    """Camada técnica comum às estratégias. Não cria sinal sozinha.
+
+    A função mede tendência, momentum, volatilidade, estrutura e price action.
+    A porcentagem exibida continua sendo uma estimativa heurística; ela não é
+    tratada como probabilidade estatística calibrada.
+    """
+    c = np.asarray(data['close'], dtype=float)
+    o = np.asarray(data['open'], dtype=float)
+    h = np.asarray(data['high'], dtype=float)
+    l = np.asarray(data['low'], dtype=float)
+    if len(c) < 30:
+        return {'confluencia': 0.0, 'confluencias': []}
+
+    ema9 = calcular_ema(c, 9); ema21 = calcular_ema(c, 21); ema50 = calcular_ema(c, 50) if len(c) >= 50 else ema21
     rsi = _rsi_atual(c, 14)
     macd, macd_signal, macd_hist = _macd_atual(c)
-    ma20 = np.mean(c[-20:])
-    std20 = np.std(c[-20:])
-    bb_sup, bb_inf = ma20 + 2 * std20, ma20 - 2 * std20
-    tr = np.maximum(h[-20:] - l[-20:], np.maximum(np.abs(h[-20:] - c[-21:-1]), np.abs(l[-20:] - c[-21:-1]))) if len(c) >= 21 else h[-20:] - l[-20:]
-    atr = float(np.mean(tr)) if len(tr) else 0.0
+    atr = _atr_atual(h, l, c, 14)
     preco = float(c[-1])
     atr_pct = (atr / preco * 100) if preco else 0.0
-    corpo = abs(c[-1] - o[-1])
-    amplitude = max(h[-1] - l[-1], 1e-12)
-    pavio_sup = h[-1] - max(o[-1], c[-1])
-    pavio_inf = min(o[-1], c[-1]) - l[-1]
-    suporte = float(np.min(l[-20:-1]))
-    resistencia = float(np.max(h[-20:-1]))
+    adx, pdi, mdi = _adx_atual(h, l, c, 14)
+    stoch_k, stoch_d = _estocastico_atual(h, l, c, 14, 3)
+
+    ma20 = float(np.mean(c[-20:])); std20 = max(float(np.std(c[-20:])), 1e-12)
+    bb_sup, bb_inf = ma20 + 2*std20, ma20 - 2*std20
+    suporte = float(np.min(l[-20:-1])); resistencia = float(np.max(h[-20:-1]))
+    amplitude = max(float(h[-1]-l[-1]), 1e-12)
+    corpo = abs(float(c[-1]-o[-1]))
+    pavio_sup = float(h[-1]-max(o[-1], c[-1])); pavio_inf = float(min(o[-1], c[-1])-l[-1])
+    bullish = c[-1] > o[-1]; bearish = c[-1] < o[-1]
     tendencia = 'ALTA' if ema9[-1] > ema21[-1] and ema21[-1] >= ema21[-4] else ('BAIXA' if ema9[-1] < ema21[-1] and ema21[-1] <= ema21[-4] else 'LATERAL')
 
     itens=[]
-    def add(nome,pontos,detalhe,status): itens.append({"nome":nome,"pontos":int(max(0,min(20,pontos))),"detalhe":detalhe,"status":status})
+    def add(nome, pontos, detalhe, status):
+        itens.append({'nome':nome,'pontos':int(max(0,min(10,pontos))), 'detalhe':detalhe, 'status':status})
 
-    # Tendência
+    # Cada bloco vale até 10 pontos. Isso evita que um único indicador domine.
     if direcao == 'CALL':
-        ok=tendencia=='ALTA'; pts=20 if ok else (10 if tendencia=='LATERAL' else 3)
-        add('Tendência',pts,f"EMA9 {('acima' if ema9[-1]>ema21[-1] else 'abaixo')} da EMA21 • {tendencia}",'ok' if ok else 'warn' if tendencia=='LATERAL' else 'bad')
+        trend_ok = ema9[-1] > ema21[-1] and (len(c)<50 or ema21[-1] >= ema50[-1])
+        trend_partial = ema9[-1] > ema21[-1] or tendencia == 'ALTA'
     elif direcao == 'PUT':
-        ok=tendencia=='BAIXA'; pts=20 if ok else (10 if tendencia=='LATERAL' else 3)
-        add('Tendência',pts,f"EMA9 {('abaixo' if ema9[-1]<ema21[-1] else 'acima')} da EMA21 • {tendencia}",'ok' if ok else 'warn' if tendencia=='LATERAL' else 'bad')
+        trend_ok = ema9[-1] < ema21[-1] and (len(c)<50 or ema21[-1] <= ema50[-1])
+        trend_partial = ema9[-1] < ema21[-1] or tendencia == 'BAIXA'
     else:
-        add('Tendência',20 if tendencia!='LATERAL' else 10,f"Mercado em {tendencia}",'ok' if tendencia!='LATERAL' else 'warn')
+        trend_ok = tendencia in ('ALTA','BAIXA'); trend_partial = tendencia != 'LATERAL'
+    add('Tendência', 10 if trend_ok else 6 if trend_partial else 2, f'EMA9/21/50 • {tendencia} • ADX {adx:.1f}', 'ok' if trend_ok else 'warn' if trend_partial else 'bad')
 
-    # RSI
-    if direcao=='CALL':
-        ok=45 <= rsi <= 68; pts=18 if ok else (11 if 35<=rsi<45 or 68<rsi<=75 else 5)
-    elif direcao=='PUT':
-        ok=32 <= rsi <= 55; pts=18 if ok else (11 if 25<=rsi<32 or 55<rsi<=65 else 5)
-    else: ok=False; pts=10
-    add('RSI',pts,f"RSI {rsi:.1f}",'ok' if ok else 'warn')
+    if direcao == 'CALL':
+        rsi_ok = 45 <= rsi <= 68
+    elif direcao == 'PUT':
+        rsi_ok = 32 <= rsi <= 55
+    else:
+        rsi_ok = 45 <= rsi <= 55
+    add('RSI', 10 if rsi_ok else 5, f'RSI {rsi:.1f}', 'ok' if rsi_ok else 'warn')
 
-    # MACD
-    macd_ok=(macd_hist>0) if direcao=='CALL' else ((macd_hist<0) if direcao=='PUT' else False)
-    add('MACD',18 if macd_ok else 7,f"Histograma {'positivo' if macd_hist>0 else 'negativo'}",'ok' if macd_ok else 'warn')
+    macd_ok = macd_hist > 0 if direcao == 'CALL' else macd_hist < 0 if direcao == 'PUT' else False
+    add('MACD', 10 if macd_ok else 4, f'Histograma {"positivo" if macd_hist>0 else "negativo"}', 'ok' if macd_ok else 'warn')
 
-    # Price action
-    bullish = c[-1] > o[-1]
-    bearish = c[-1] < o[-1]
-    rejection = (pavio_inf/amplitude >= .35) if direcao=='CALL' else ((pavio_sup/amplitude >= .35) if direcao=='PUT' else False)
-    pa_ok = (bullish if direcao=='CALL' else bearish if direcao=='PUT' else False) or rejection
-    pa_pts=18 if pa_ok else 7
-    add('Price Action',pa_pts,f"Corpo {corpo/amplitude*100:.0f}% • {'rejeição detectada' if rejection else 'candle direcional'}",'ok' if pa_ok else 'warn')
+    if direcao == 'CALL':
+        st_ok = stoch_k > stoch_d and stoch_k < 80
+    elif direcao == 'PUT':
+        st_ok = stoch_k < stoch_d and stoch_k > 20
+    else:
+        st_ok = False
+    add('Estocástico', 10 if st_ok else 4, f'%K {stoch_k:.1f} • %D {stoch_d:.1f}', 'ok' if st_ok else 'warn')
 
-    # Suporte / resistência
-    dist_sup=abs(preco-suporte)/(preco or 1)*100
-    dist_res=abs(resistencia-preco)/(preco or 1)*100
-    sr_ok=(dist_sup <= max(0.15, atr_pct*1.4)) if direcao=='CALL' else ((dist_res <= max(0.15, atr_pct*1.4)) if direcao=='PUT' else False)
-    add('Suporte/Resist.',15 if sr_ok else 7,f"Sup {dist_sup:.2f}% • Res {dist_res:.2f}%",'ok' if sr_ok else 'warn')
+    # ADX é filtro de força, não direção. +DI/-DI dão a direção.
+    if direcao == 'CALL':
+        adx_ok = adx >= 18 and pdi > mdi
+    elif direcao == 'PUT':
+        adx_ok = adx >= 18 and mdi > pdi
+    else:
+        adx_ok = adx >= 18
+    add('ADX', 10 if adx_ok else 3 if adx < 15 else 6, f'ADX {adx:.1f} • +DI {pdi:.1f} • -DI {mdi:.1f}', 'ok' if adx_ok else 'warn')
 
-    # Volatilidade
-    vol_ok = 0.02 <= atr_pct <= 1.8
-    add('Volatilidade',11 if vol_ok else 5,f"ATR {atr_pct:.3f}% do preço",'ok' if vol_ok else 'warn')
+    # Price Action: corpo/rejeição, mas sem deixar um único candle decidir tudo.
+    if direcao == 'CALL':
+        pa_ok = bullish or pavio_inf/amplitude >= .35
+    elif direcao == 'PUT':
+        pa_ok = bearish or pavio_sup/amplitude >= .35
+    else:
+        pa_ok = False
+    add('Price Action', 10 if pa_ok else 4, f'Corpo {corpo/amplitude*100:.0f}% • pavios {pavio_sup/amplitude*100:.0f}/{pavio_inf/amplitude*100:.0f}%', 'ok' if pa_ok else 'warn')
 
-    # Banda de Bollinger
-    bb_ok=(preco<=bb_inf*1.003) if direcao=='CALL' else ((preco>=bb_sup*.997) if direcao=='PUT' else False)
-    add('Bollinger',12 if bb_ok else 7,f"Preço {'próximo da banda inferior' if preco<=bb_inf else 'próximo da banda superior' if preco>=bb_sup else 'dentro das bandas'}",'ok' if bb_ok else 'warn')
+    # Estrutura: aproximação de suporte/resistência.
+    dist_sup = abs(preco-suporte)/(preco or 1)*100
+    dist_res = abs(resistencia-preco)/(preco or 1)*100
+    lim_sr = max(0.08, atr_pct*1.35)
+    sr_ok = dist_sup <= lim_sr if direcao == 'CALL' else dist_res <= lim_sr if direcao == 'PUT' else False
+    add('Suporte/Resist.', 10 if sr_ok else 4, f'Sup {dist_sup:.3f}% • Res {dist_res:.3f}%', 'ok' if sr_ok else 'warn')
 
-    # Probabilidade heuristicamente calibrada sobre a estratégia existente.
-    soma=sum(x['pontos'] for x in itens); maximo=len(itens)*20
-    confluencia=round((soma/maximo)*100,1) if maximo else 0.0
+    # Bollinger: usado como contexto, não como gatilho isolado.
+    bb_ok = (preco <= bb_inf + atr*0.30) if direcao == 'CALL' else (preco >= bb_sup - atr*0.30) if direcao == 'PUT' else False
+    add('Bollinger', 10 if bb_ok else 4, f'Preço {"perto da banda inferior" if preco<=bb_inf else "perto da banda superior" if preco>=bb_sup else "dentro das bandas"}', 'ok' if bb_ok else 'warn')
+
+    vol_ok = 0.015 <= atr_pct <= 1.8
+    add('Volatilidade', 10 if vol_ok else 4, f'ATR {atr_pct:.3f}% do preço', 'ok' if vol_ok else 'warn')
+
+    # Padrão simples de candle anterior + atual para reduzir entradas contra impulso.
+    if len(c) >= 2:
+        prev_bull = c[-2] > o[-2]; prev_bear = c[-2] < o[-2]
+        engulf_call = prev_bear and bullish and c[-1] >= o[-2] and o[-1] <= c[-2]
+        engulf_put = prev_bull and bearish and c[-1] <= o[-2] and o[-1] >= c[-2]
+    else:
+        engulf_call = engulf_put = False
+    pattern_ok = engulf_call if direcao == 'CALL' else engulf_put if direcao == 'PUT' else False
+    add('Padrão', 10 if pattern_ok else 4, 'Engolfo confirmado' if pattern_ok else 'Sem padrão forte', 'ok' if pattern_ok else 'warn')
+
+    soma = sum(x['pontos'] for x in itens); maximo = len(itens)*10
+    confluencia = round((soma/maximo)*100,1) if maximo else 0.0
+    conflitos = 0
+    if direcao == 'CALL':
+        conflitos = int(macd_hist < 0) + int(mdi > pdi and adx >= 18) + int(rsi > 72)
+    elif direcao == 'PUT':
+        conflitos = int(macd_hist > 0) + int(pdi > mdi and adx >= 18) + int(rsi < 28)
+
     return {
-        'rsi':rsi,'ema9':float(ema9[-1]),'ema21':float(ema21[-1]),'macd':macd,'macd_signal':macd_signal,'macd_hist':macd_hist,
-        'atr_pct':atr_pct,'tendencia':tendencia,'suporte':suporte,'resistencia':resistencia,
-        'confluencia':confluencia,'confluencias':itens
+        'rsi':rsi,'ema9':float(ema9[-1]),'ema21':float(ema21[-1]),'ema50':float(ema50[-1]),
+        'macd':macd,'macd_signal':macd_signal,'macd_hist':macd_hist,'atr':atr,'atr_pct':atr_pct,
+        'adx':adx,'plus_di':pdi,'minus_di':mdi,'stoch_k':stoch_k,'stoch_d':stoch_d,
+        'tendencia':tendencia,'suporte':suporte,'resistencia':resistencia,
+        'conflitos':conflitos,'confluencia':confluencia,'confluencias':itens
     }
 
 def analisar_estrategia(data, estrategia, i=-1):
-    """Motor legado preservado para compatibilidade; retorna sinal e probabilidade em %."""
-    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
+    """Motor independente das estratégias.
+
+    Cada estratégia precisa produzir o próprio sinal a partir de regras
+    específicas. A opção TODAS não transforma todas as estratégias em
+    Price Action: ela executa cada motor separadamente e o ensemble compara
+    os candidatos gerados por cada um.
+    """
+    c = np.asarray(data["close"], dtype=float)
+    o = np.asarray(data["open"], dtype=float)
+    h = np.asarray(data["high"], dtype=float)
+    l = np.asarray(data["low"], dtype=float)
     if len(c) < 30:
         return None, 0
-    sinal=None; probabilidade=0
+
+    idx = i if i >= 0 else len(c) - 1
+    if idx >= len(c):
+        idx = len(c) - 1
+
+    sinal = None
+    probabilidade = 0
+
+    # -------------------------------------------------------------
+    # 1) LÓGICA DO PREÇO / PRICE ACTION
+    # -------------------------------------------------------------
     if estrategia == "LOGICA_DO_PRECO":
-        tamanho=abs(c[i]-o[i]); amplitude=h[i]-l[i]
-        if amplitude>0 and tamanho>0:
-            cor='G' if c[i]>o[i] else 'R'; p_sup=h[i]-max(o[i],c[i]); p_inf=min(o[i],c[i])-l[i]
-            if cor=='G' and p_inf>=amplitude*.45 and p_sup<=amplitude*.20: sinal='CALL'; probabilidade=int(82+(p_inf/amplitude)*15)
-            elif cor=='R' and p_sup>=amplitude*.45 and p_inf<=amplitude*.20: sinal='PUT'; probabilidade=int(82+(p_sup/amplitude)*15)
-            elif cor=='G' and p_sup>=amplitude*.50 and tamanho<=amplitude*.35: sinal='PUT'; probabilidade=int(80+(p_sup/amplitude)*15)
-            elif cor=='R' and p_inf>=amplitude*.50 and tamanho<=amplitude*.35: sinal='CALL'; probabilidade=int(80+(p_inf/amplitude)*15)
+        tamanho = abs(c[idx] - o[idx])
+        amplitude = max(h[idx] - l[idx], 1e-12)
+        if tamanho > 0:
+            cor = 'G' if c[idx] > o[idx] else 'R'
+            p_sup = h[idx] - max(o[idx], c[idx])
+            p_inf = min(o[idx], c[idx]) - l[idx]
+            wick_inf = p_inf / amplitude
+            wick_sup = p_sup / amplitude
+
+            if cor == 'G' and wick_inf >= .45 and wick_sup <= .20:
+                sinal = 'CALL'
+                probabilidade = int(82 + min(10, wick_inf * 12))
+            elif cor == 'R' and wick_sup >= .45 and wick_inf <= .20:
+                sinal = 'PUT'
+                probabilidade = int(82 + min(10, wick_sup * 12))
+            elif cor == 'G' and wick_sup >= .50 and tamanho <= amplitude * .35:
+                sinal = 'PUT'
+                probabilidade = int(80 + min(9, wick_sup * 11))
+            elif cor == 'R' and wick_inf >= .50 and tamanho <= amplitude * .35:
+                sinal = 'CALL'
+                probabilidade = int(80 + min(9, wick_inf * 11))
+
+    # -------------------------------------------------------------
+    # 2) RSI + MACD + MÉDIAS
+    # -------------------------------------------------------------
     elif estrategia == "RSI_MACD_MA":
-        rsi=_rsi_atual(c,14); macd_line,signal_line,_=_macd_atual(c)
-        if rsi<=35 and macd_line>signal_line: sinal='CALL'; probabilidade=int(83+(35-rsi)*.5)
-        elif rsi>=65 and macd_line<signal_line: sinal='PUT'; probabilidade=int(83+(rsi-65)*.5)
+        rsi = _rsi_atual(c, 14)
+        ema9 = calcular_ema(c, 9)
+        ema21 = calcular_ema(c, 21)
+        macd_line, macd_signal, macd_hist = _macd_atual(c)
+        hist_prev = float(macd_hist)
+        if len(c) >= 3:
+            macd_prev_line = calcular_ema(c, 12)[-2] - calcular_ema(c, 26)[-2]
+            macd_prev_signal = calcular_ema(calcular_ema(c, 12) - calcular_ema(c, 26), 9)[-2]
+            hist_prev = float(macd_prev_line - macd_prev_signal)
+
+        tendencia_alta = ema9[-1] > ema21[-1]
+        tendencia_baixa = ema9[-1] < ema21[-1]
+        cruzou_alta = hist_prev <= 0 < macd_hist
+        cruzou_baixa = hist_prev >= 0 > macd_hist
+
+        # Não exige RSI extremo de 30/70. O objetivo é identificar
+        # momentum + tendência + região de RSI de forma independente do PA.
+        call_score = 0
+        put_score = 0
+        if 38 <= rsi <= 55: call_score += 2
+        if 45 <= rsi <= 62: put_score += 2
+        if macd_hist > 0: call_score += 2
+        if macd_hist < 0: put_score += 2
+        if tendencia_alta: call_score += 2
+        if tendencia_baixa: put_score += 2
+        if cruzou_alta: call_score += 2
+        if cruzou_baixa: put_score += 2
+
+        if call_score >= 5 and call_score > put_score:
+            sinal = 'CALL'
+            probabilidade = 79 + call_score * 2
+            if cruzou_alta: probabilidade += 3
+        elif put_score >= 5 and put_score > call_score:
+            sinal = 'PUT'
+            probabilidade = 79 + put_score * 2
+            if cruzou_baixa: probabilidade += 3
+
+    # -------------------------------------------------------------
+    # 3) MHI 1 + FILTRO DE TENDÊNCIA
+    # -------------------------------------------------------------
     elif estrategia == "MHI1":
-        cores=[]
-        for j in range(i-2,i+1): cores.append('G' if c[j]>o[j] else 'R' if c[j]<o[j] else 'D')
-        if 'D' not in cores:
-            qtd_g=cores.count('G');qtd_r=cores.count('R');ema20=np.mean(c[-20:])
-            if qtd_g==2 and qtd_r==1 and c[i]<=ema20: sinal='PUT';probabilidade=84
-            elif qtd_r==2 and qtd_g==1 and c[i]>=ema20: sinal='CALL';probabilidade=84
-            elif qtd_g==3: sinal='PUT';probabilidade=88
-            elif qtd_r==3: sinal='CALL';probabilidade=88
-    elif estrategia in ['REVERSAO','RETRACAO']:
-        std=np.std(c[-20:]);ma=np.mean(c[-20:]);bs=ma+2*std;bi=ma-2*std
-        if c[i]<=bi and c[i]<o[i]: sinal='CALL';dist=(bi-c[i])/(std if std>0 else 1);probabilidade=int(81+min(15,dist*10))
-        elif c[i]>=bs and c[i]>o[i]: sinal='PUT';dist=(c[i]-bs)/(std if std>0 else 1);probabilidade=int(81+min(15,dist*10))
-    probabilidade=min(98,max(75,probabilidade)) if sinal else 0
-    return sinal,probabilidade
+        # Usa as três velas mais recentes já disponíveis e não depende da
+        # lógica de pavio do Price Action.
+        cores = []
+        for j in range(max(0, idx - 2), idx + 1):
+            if c[j] > o[j]:
+                cores.append('G')
+            elif c[j] < o[j]:
+                cores.append('R')
+            else:
+                cores.append('D')
+
+        if len(cores) == 3 and 'D' not in cores:
+            qtd_g = cores.count('G')
+            qtd_r = cores.count('R')
+            ema20 = np.mean(c[-20:])
+            tendencia = 'ALTA' if c[-1] >= ema20 else 'BAIXA'
+
+            # MHI contraria a maioria das três velas; o filtro de tendência
+            # evita aceitar qualquer sequência isolada.
+            if qtd_g == 3:
+                sinal = 'PUT'
+                probabilidade = 84 if tendencia == 'BAIXA' else 80
+            elif qtd_r == 3:
+                sinal = 'CALL'
+                probabilidade = 84 if tendencia == 'ALTA' else 80
+            elif qtd_g == 2 and qtd_r == 1 and c[idx] <= ema20:
+                sinal = 'PUT'
+                probabilidade = 82
+            elif qtd_r == 2 and qtd_g == 1 and c[idx] >= ema20:
+                sinal = 'CALL'
+                probabilidade = 82
+
+    # -------------------------------------------------------------
+    # 4) REVERSÃO DE BANDAS
+    # -------------------------------------------------------------
+    elif estrategia in ('REVERSAO', 'RETRACAO'):
+        ma20 = np.mean(c[-20:])
+        std = max(float(np.std(c[-20:])), 1e-12)
+        banda_sup = ma20 + 2 * std
+        banda_inf = ma20 - 2 * std
+        rsi = _rsi_atual(c, 14)
+        atr = float(np.mean(np.maximum(
+            h[-20:] - l[-20:],
+            np.maximum(np.abs(h[-20:] - c[-21:-1]), np.abs(l[-20:] - c[-21:-1]))
+        ))) if len(c) >= 21 else float(np.mean(h[-20:] - l[-20:]))
+        atr = max(atr, 1e-12)
+        preco = float(c[idx])
+        distancia_inf = abs(preco - banda_inf)
+        distancia_sup = abs(preco - banda_sup)
+        perto_inf = preco <= banda_inf + atr * 0.35
+        perto_sup = preco >= banda_sup - atr * 0.35
+
+        if perto_inf and rsi <= 45:
+            sinal = 'CALL'
+            probabilidade = 82 + (3 if rsi <= 35 else 0) + (2 if preco <= banda_inf else 0)
+        elif perto_sup and rsi >= 55:
+            sinal = 'PUT'
+            probabilidade = 82 + (3 if rsi >= 65 else 0) + (2 if preco >= banda_sup else 0)
+
+    probabilidade = int(min(96, max(75, probabilidade))) if sinal else 0
+    return sinal, probabilidade
 
 def analisar_estrategia_detalhada(data, estrategia):
     sinal, base_prob = analisar_estrategia(data, estrategia)
     indicadores = _indicadores_confluencia(data, sinal)
     if not sinal:
         return None, 0, indicadores
-    # Ajuste moderado baseado nas confluências, mantendo a faixa histórica do Vision Pro.
-    ajuste = round((indicadores['confluencia'] - 65) * 0.12)
-    prob = int(max(75, min(98, base_prob + ajuste)))
+
+    conf = float(indicadores.get('confluencia', 0))
+    conflitos = int(indicadores.get('conflitos', 0))
+    adx = float(indicadores.get('adx', 0))
+    macd_hist = float(indicadores.get('macd_hist', 0))
+    rsi = float(indicadores.get('rsi', 50))
+
+    # Penaliza conflito técnico em vez de simplesmente inflar a porcentagem.
+    ajuste = (conf - 60.0) * 0.18
+    bonus = 0.0
+    if conf >= 75: bonus += 3
+    elif conf >= 68: bonus += 1
+    if adx >= 25: bonus += 2
+    if conflitos: bonus -= conflitos * 4
+
+    # Confirmações específicas da própria estratégia.
+    c = np.asarray(data['close'], dtype=float)
+    o = np.asarray(data['open'], dtype=float)
+    if estrategia == 'RSI_MACD_MA':
+        ema9 = calcular_ema(c,9)[-1]; ema21 = calcular_ema(c,21)[-1]
+        if sinal == 'CALL' and macd_hist > 0 and ema9 > ema21 and 42 <= rsi <= 65: bonus += 3
+        if sinal == 'PUT' and macd_hist < 0 and ema9 < ema21 and 35 <= rsi <= 58: bonus += 3
+    elif estrategia == 'MHI1':
+        if len(c) >= 3:
+            cores=['G' if c[j]>o[j] else 'R' if c[j]<o[j] else 'D' for j in range(len(c)-3,len(c))]
+            if len(cores)==3 and 'D' not in cores:
+                if sinal=='CALL' and cores.count('R')>=2: bonus += 3
+                if sinal=='PUT' and cores.count('G')>=2: bonus += 3
+    elif estrategia in ('REVERSAO','RETRACAO'):
+        ma20=float(np.mean(c[-20:])); std20=max(float(np.std(c[-20:])),1e-12)
+        if sinal=='CALL' and c[-1] <= ma20-1.5*std20: bonus += 3
+        if sinal=='PUT' and c[-1] >= ma20+1.5*std20: bonus += 3
+    elif estrategia == 'LOGICA_DO_PRECO':
+        # Sem bônus artificial. Price Action compete nas mesmas condições.
+        bonus += 0
+
+    prob = int(max(75, min(97, round(base_prob + ajuste + bonus))))
+    indicadores['estrategia_base_probabilidade'] = int(base_prob)
+    indicadores['estrategia_bonus'] = int(round(bonus))
+    indicadores['estrategia'] = estrategia
+    indicadores['direcao'] = sinal
+    # Abaixo deste nível o setup é tratado como fraco pelo ensemble.
+    indicadores['qualidade_minima'] = 64.0
     return sinal, prob, indicadores
 
 # ================= ROTA SERVICE WORKER DE NOTIFICAÇÃO =================
@@ -3182,14 +3438,32 @@ def bot_loop():
                             if sinal_test:
                                 candidatos.append({"sinal": sinal_test, "prob": int(prob_test), "estrategia": est_nome, "analise": analise_test})
 
-                        # Bônus somente quando há concordância real entre estratégias.
+                        # Ensemble: consenso entre estratégias + qualidade técnica.
+                        # Um sinal isolado com probabilidade alta não vence automaticamente
+                        # um conjunto com múltiplas evidências concordantes.
+                        candidatos_filtrados = []
                         for cand in candidatos:
+                            conf = float(cand["analise"].get("confluencia", 0))
+                            conflitos = int(cand["analise"].get("conflitos", 0))
                             concordantes = sum(1 for x in candidatos if x["sinal"] == cand["sinal"] and x["estrategia"] != cand["estrategia"])
+                            discordantes = sum(1 for x in candidatos if x["sinal"] != cand["sinal"] and x["estrategia"] != cand["estrategia"])
                             cand["concordantes"] = concordantes
-                            cand["prob_final"] = min(98, int(cand["prob"]) + min(5, concordantes * 2))
+                            cand["discordantes"] = discordantes
+                            if conf < 64 or conflitos >= 3:
+                                continue
+                            consenso_bonus = min(8, concordantes * 3)
+                            conflito_penal = min(8, discordantes * 2)
+                            # Em mercado muito lateral, exigimos mais confluência.
+                            adx = float(cand["analise"].get("adx", 0))
+                            if adx < 14 and cand["estrategia"] not in ('REVERSAO','RETRACAO'):
+                                conflito_penal += 3
+                            cand["prob_final"] = max(75, min(97, int(cand["prob"]) + consenso_bonus - conflito_penal))
+                            cand["qualidade_ensemble"] = round(conf + consenso_bonus - conflito_penal, 1)
+                            candidatos_filtrados.append(cand)
+                        candidatos = candidatos_filtrados
 
                         if candidatos:
-                            melhor_local = max(candidatos, key=lambda x:(x["prob_final"], x["analise"].get("confluencia",0), x["concordantes"]))
+                            melhor_local = max(candidatos, key=lambda x:(x["qualidade_ensemble"], x["prob_final"], x["concordantes"]))
                             ana = dict(melhor_local["analise"])
                             ana.update({
                                 "ativo": ativo, "direcao": melhor_local["sinal"], "probabilidade": melhor_local["prob_final"],
@@ -3199,8 +3473,8 @@ def bot_loop():
                                 "motivos": ana.get("confluencias", []),
                                 "estrategias_concordantes": [NOME_ESTRATEGIAS_DISPLAY.get(x["estrategia"], x["estrategia"]) for x in candidatos if x["sinal"] == melhor_local["sinal"]]
                             })
-                            candidatos_globais.append({"ativo":ativo,"sinal":melhor_local["sinal"],"probabilidade":int(melhor_local["prob_final"]),"confluencia":float(ana.get("confluencia",0)),"concordantes":int(melhor_local["concordantes"]),"estrategia":melhor_local["estrategia"],"estrategia_fmt":ana["estrategia_fmt"],"analise":ana,"data":data})
-                            chave_diag=(int(melhor_local["prob_final"]),float(ana.get("confluencia",0)),int(melhor_local["concordantes"]))
+                            candidatos_globais.append({"ativo":ativo,"sinal":melhor_local["sinal"],"probabilidade":int(melhor_local["prob_final"]),"confluencia":float(ana.get("confluencia",0)),"qualidade_ensemble":float(melhor_local.get("qualidade_ensemble", ana.get("confluencia",0))),"concordantes":int(melhor_local["concordantes"]),"estrategia":melhor_local["estrategia"],"estrategia_fmt":ana["estrategia_fmt"],"analise":ana,"data":data})
+                            chave_diag=(float(melhor_local.get("qualidade_ensemble",0)),int(melhor_local["prob_final"]),int(melhor_local["concordantes"]))
                             if chave_diag>melhor_diag_chave:
                                 melhor_diag_chave=chave_diag; diagnostico_melhor=ana
                         else:
@@ -3220,7 +3494,7 @@ def bot_loop():
                         # Ordena todas as oportunidades pela mesma regra usada pelo Vision Pro.
                         candidatos_ordenados = sorted(
                             candidatos_globais,
-                            key=lambda x: (x["probabilidade"], x["confluencia"], x["concordantes"]),
+                            key=lambda x: (x.get("qualidade_ensemble", x["confluencia"]), x["probabilidade"], x["concordantes"]),
                             reverse=True
                         )
 
