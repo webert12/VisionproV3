@@ -90,6 +90,7 @@ def get_user_state(email):
             "telegram_alert_status": {},  # status dos alertas Telegram: active/cancelled
             "ultima_confirmacao_msg_id": None,  # última confirmação enviada ao Telegram
             "ultima_confirmacao_alert_id": None,
+            "confirmacoes_canceladas": set(),
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
             "push_ativado": False,
@@ -1912,7 +1913,7 @@ def _resumo_confluencias_direcionais(diag):
 
 def _painel_decisao(data):
     """Painel de decisão em camadas: tendência + 2/3 confirmações.
-    Duas confirmações direcionais já podem gerar pré-alerta; três ou mais
+    Três confirmações direcionais são o mínimo para liberar uma oportunidade; quatro ou mais
     elevam a força do alerta. Mercado lateral e conflito direcional continuam bloqueados.
     """
     try:
@@ -1940,12 +1941,14 @@ def _painel_decisao(data):
     put_micro_ok=not bool(put.get("microtendencia_contra"))
     call_macro_ok=not bool(call.get("macrotendencia_contra"))
     put_macro_ok=not bool(put.get("macrotendencia_contra"))
+    # Mantém a frequência atual: 2 confirmações direcionais já podem abrir oportunidade,
+    # mas os filtros de qualidade abaixo continuam obrigatórios.
     call_apto=call_tend_ok and call_macro_ok and call_micro_ok and call_n>=2
     put_apto=put_tend_ok and put_macro_ok and put_micro_ok and put_n>=2
 
-    # Score mínimo baixo o suficiente para permitir 2 confirmações, mas evita
-    # validar combinações muito fracas. A contagem de confirmações é o gatilho principal.
-    score_minimo=65.0
+    # Score de confluência moderado; a qualidade final é reforçada pelo validador
+    # detalhado, que exige microtendência alinhada + price action/momentum coerentes.
+    score_minimo=68.0
     call_apto = call_apto and cs>=score_minimo
     put_apto = put_apto and ps>=score_minimo
 
@@ -1968,12 +1971,12 @@ def _painel_decisao(data):
         veredito="CALL"
         nivel_decisao=nivel(call_n)
         explicacao=f"CALL: tendência de alta + {call_n} confirmações direcionais ({', '.join(x.get('nome','') for x in call_fortes[:4])})."
-        gate="PRÉ-ALERTA liberado" if call_n==2 else "ALERTA liberado • aguardando confirmação temporal."
+        gate="PRÉ-ALERTA liberado" if call_n==3 else "ALERTA FORTE • aguardando confirmação temporal."
     elif put_apto:
         veredito="PUT"
         nivel_decisao=nivel(put_n)
         explicacao=f"PUT: tendência de baixa + {put_n} confirmações direcionais ({', '.join(x.get('nome','') for x in put_fortes[:4])})."
-        gate="PRÉ-ALERTA liberado" if put_n==2 else "ALERTA liberado • aguardando confirmação temporal."
+        gate="PRÉ-ALERTA liberado" if put_n==3 else "ALERTA FORTE • aguardando confirmação temporal."
     else:
         veredito="AGUARDAR"
         nivel_decisao="AGUARDAR"
@@ -1988,7 +1991,7 @@ def _painel_decisao(data):
                 explicacao="CALL bloqueado: macrotendência está BAIXA."
                 gate="BLOQUEADO • nunca operar contra a macrotendência."
             else:
-                explicacao=f"CALL em tendência de alta, mas encontrou apenas {call_n} confirmação(ões) direcional(is); mínimo: 2."
+                explicacao=f"CALL em tendência de alta, mas encontrou apenas {call_n} confirmação(ões) direcionais; mínimo: 2."
                 gate="AGUARDAR • falta confirmação."
         elif tendencia=="BAIXA":
             if not put_micro_ok:
@@ -1998,7 +2001,7 @@ def _painel_decisao(data):
                 explicacao="PUT bloqueado: macrotendência está ALTA."
                 gate="BLOQUEADO • nunca operar contra a macrotendência."
             else:
-                explicacao=f"PUT em tendência de baixa, mas encontrou apenas {put_n} confirmação(ões) direcional(is); mínimo: 2."
+                explicacao=f"PUT em tendência de baixa, mas encontrou apenas {put_n} confirmação(ões) direcionais; mínimo: 2."
                 gate="AGUARDAR • falta confirmação."
         else:
             explicacao="Dados insuficientes para definir uma direção segura."
@@ -2013,7 +2016,7 @@ def _painel_decisao(data):
         motivos.append({"tipo":"Tendência","texto":"Fluxo principal favorece baixa; CALL contra-tendência permanece bloqueado."})
     else:
         motivos.append({"tipo":"Tendência","texto":"Estrutura lateral; nenhuma direção recebe prioridade estrutural."})
-    motivos.append({"tipo":"Confirmações","texto":f"CALL: {call_n} • PUT: {put_n} • gatilho mínimo: 2 confirmações direcionais."})
+    motivos.append({"tipo":"Confirmações","texto":f"CALL: {call_n} • PUT: {put_n} • gatilho mínimo: 2 confirmações direcionais + filtros de qualidade."})
     if veredito in ("CALL","PUT"):
         vencedor=call if veredito=="CALL" else put
         bons=[x.get("nome") for x in _resumo_confluencias_direcionais(vencedor)]
@@ -2036,77 +2039,158 @@ def _painel_decisao(data):
     }
 
 def analisar_estrategia(data, estrategia, i=-1):
-    """Motor legado preservado para compatibilidade; retorna sinal e probabilidade em %."""
-    c, o, h, l = data["close"], data["open"], data["high"], data["low"]
-    if len(c) < 30:
+    """Motor de estratégias independentes.
+
+    Cada estratégia tem um setup próprio. A antiga versão fazia algumas
+    estratégias praticamente impossíveis de validar (especialmente RSI/MACD/MA
+    e REVERSAO) porque o gatilho original entrava em conflito com o filtro de
+    tendência. Aqui o sinal nasce primeiro de uma leitura específica da
+    estratégia; depois o motor de confluência faz a validação final.
+    """
+    try:
+        c=np.asarray(data.get("close",[]),dtype=float)
+        o=np.asarray(data.get("open",[]),dtype=float)
+        h=np.asarray(data.get("high",[]),dtype=float)
+        l=np.asarray(data.get("low",[]),dtype=float)
+        if min(len(c),len(o),len(h),len(l)) < 50:
+            return None, 0
+
+        # Sempre trabalha com candles fechados já normalizados.
+        idx = -1 if i == -1 else i
+        ema9=calcular_ema(c,9); ema21=calcular_ema(c,21)
+        ma20=float(np.mean(c[-20:])); ma50=float(np.mean(c[-50:]))
+        tendencia_alta=ema9[-1]>ema21[-1] and c[-1]>ma20 and ma20>=ma50
+        tendencia_baixa=ema9[-1]<ema21[-1] and c[-1]<ma20 and ma20<=ma50
+        rsi=_rsi_atual(c,14)
+        macd,macd_signal,macd_hist=_macd_atual(c)
+        # Histograma anterior para medir aceleração, não apenas sinal positivo/negativo.
+        macd_prev=float((calcular_ema(c,12)-calcular_ema(c,26))[-2] - calcular_ema(calcular_ema(c,12)-calcular_ema(c,26),9)[-2])
+        std20=float(np.std(c[-20:])); ma20_now=float(np.mean(c[-20:]));
+        bb_sup=ma20_now+2*std20; bb_inf=ma20_now-2*std20
+
+        corpo=abs(float(c[idx]-o[idx])); amp=max(float(h[idx]-l[idx]),1e-12)
+        corpo_pct=corpo/amp
+        upper=max(0.0,float(h[idx]-max(o[idx],c[idx])))
+        lower=max(0.0,float(min(o[idx],c[idx])-l[idx]))
+        bullish=c[idx]>o[idx]; bearish=c[idx]<o[idx]
+        sinal=None; qualidade=0
+
+        if estrategia == "LOGICA_DO_PRECO":
+            # Rejeição real: pavio dominante + fechamento próximo da extremidade.
+            if bullish and lower>=corpo*1.15 and upper<=amp*.25 and c[idx]>=l[idx]+amp*.65 and tendencia_alta:
+                sinal='CALL'; qualidade=88 + min(8, int((lower/max(corpo,1e-12)-1)*4))
+            elif bearish and upper>=corpo*1.15 and lower<=amp*.25 and c[idx]<=l[idx]+amp*.35 and tendencia_baixa:
+                sinal='PUT'; qualidade=88 + min(8, int((upper/max(corpo,1e-12)-1)*4))
+            # Continuação por rompimento de estrutura curta com candle limpo.
+            elif tendencia_alta and bullish and corpo_pct>=.55 and c[-1]>np.max(h[-6:-1]):
+                sinal='CALL'; qualidade=84
+            elif tendencia_baixa and bearish and corpo_pct>=.55 and c[-1]<np.min(l[-6:-1]):
+                sinal='PUT'; qualidade=84
+
+        elif estrategia == "RSI_MACD_MA":
+            # Estratégia de continuação/pullback: evita depender de RSI extremo,
+            # mas exige alinhamento simultâneo de tendência, momentum e aceleração.
+            if tendencia_alta and 48.0<=rsi<=68.0 and macd_hist>0 and ema9[-1]>ema21[-1]:
+                sinal='CALL'; qualidade=82 + (4 if 52<=rsi<=64 else 0) + (3 if macd_hist>=macd_prev else 0)
+            elif tendencia_baixa and 32.0<=rsi<=52.0 and macd_hist<0 and ema9[-1]<ema21[-1]:
+                sinal='PUT'; qualidade=82 + (4 if 36<=rsi<=48 else 0) + (3 if macd_hist<=macd_prev else 0)
+
+        elif estrategia == "MHI1":
+            # Últimos 3 candles: maioria clara + candle atual confirmando o fluxo.
+            cores=['G' if c[j]>o[j] else 'R' if c[j]<o[j] else 'D' for j in range(-3,0)]
+            if 'D' not in cores:
+                qtd_g=cores.count('G'); qtd_r=cores.count('R')
+                if tendencia_alta and qtd_g>=2 and bullish and c[-1]>=c[-2]:
+                    sinal='CALL'; qualidade=83 + (4 if qtd_g==3 else 0)
+                elif tendencia_baixa and qtd_r>=2 and bearish and c[-1]<=c[-2]:
+                    sinal='PUT'; qualidade=83 + (4 if qtd_r==3 else 0)
+
+        elif estrategia in ('REVERSAO','RETRACAO'):
+            # Reversão/retração dentro da tendência: aceita tanto toque de banda
+            # quanto pullback à EMA9/MA20, desde que o candle atual rejeite o recuo.
+            if len(c)>=22 and std20>0:
+                prev_close=c[-2]; prev_low=l[-2]; prev_high=h[-2]
+                ema9_prev=float(ema9[-2])
+                pullback_alta=(prev_low<=bb_inf or prev_low<=ema9_prev or prev_low<=ma20_now)
+                pullback_baixa=(prev_high>=bb_sup or prev_high>=ema9_prev or prev_high>=ma20_now)
+                if tendencia_alta and pullback_alta and bullish and c[-1]>prev_close and c[-1]>=ema9[-1]*0.9995:
+                    sinal='CALL'; qualidade=84 + (4 if lower>=corpo else 0)
+                elif tendencia_baixa and pullback_baixa and bearish and c[-1]<prev_close and c[-1]<=ema9[-1]*1.0005:
+                    sinal='PUT'; qualidade=84 + (4 if upper>=corpo else 0)
+
+        if not sinal:
+            return None, 0
+        return sinal, int(max(78,min(94,qualidade)))
+    except Exception as exc:
+        print(f"⚠️ Erro isolado na estratégia {estrategia}: {exc}")
         return None, 0
-    sinal=None; probabilidade=0
-    if estrategia == "LOGICA_DO_PRECO":
-        tamanho=abs(c[i]-o[i]); amplitude=h[i]-l[i]
-        if amplitude>0 and tamanho>0:
-            cor='G' if c[i]>o[i] else 'R'; p_sup=h[i]-max(o[i],c[i]); p_inf=min(o[i],c[i])-l[i]
-            if cor=='G' and p_inf>=amplitude*.45 and p_sup<=amplitude*.20: sinal='CALL'; probabilidade=int(82+(p_inf/amplitude)*15)
-            elif cor=='R' and p_sup>=amplitude*.45 and p_inf<=amplitude*.20: sinal='PUT'; probabilidade=int(82+(p_sup/amplitude)*15)
-            elif cor=='G' and p_sup>=amplitude*.50 and tamanho<=amplitude*.35: sinal='PUT'; probabilidade=int(80+(p_sup/amplitude)*15)
-            elif cor=='R' and p_inf>=amplitude*.50 and tamanho<=amplitude*.35: sinal='CALL'; probabilidade=int(80+(p_inf/amplitude)*15)
-    elif estrategia == "RSI_MACD_MA":
-        rsi=_rsi_atual(c,14); macd_line,signal_line,_=_macd_atual(c)
-        if rsi<=35 and macd_line>signal_line: sinal='CALL'; probabilidade=int(83+(35-rsi)*.5)
-        elif rsi>=65 and macd_line<signal_line: sinal='PUT'; probabilidade=int(83+(rsi-65)*.5)
-    elif estrategia == "MHI1":
-        cores=[]
-        for j in range(i-2,i+1): cores.append('G' if c[j]>o[j] else 'R' if c[j]<o[j] else 'D')
-        if 'D' not in cores:
-            qtd_g=cores.count('G');qtd_r=cores.count('R');ema20=np.mean(c[-20:])
-            if qtd_g==2 and qtd_r==1 and c[i]<=ema20: sinal='PUT';probabilidade=84
-            elif qtd_r==2 and qtd_g==1 and c[i]>=ema20: sinal='CALL';probabilidade=84
-            elif qtd_g==3: sinal='PUT';probabilidade=88
-            elif qtd_r==3: sinal='CALL';probabilidade=88
-    elif estrategia in ['REVERSAO','RETRACAO']:
-        std=np.std(c[-20:]);ma=np.mean(c[-20:]);bs=ma+2*std;bi=ma-2*std
-        if c[i]<=bi and c[i]<o[i]: sinal='CALL';dist=(bi-c[i])/(std if std>0 else 1);probabilidade=int(81+min(15,dist*10))
-        elif c[i]>=bs and c[i]>o[i]: sinal='PUT';dist=(c[i]-bs)/(std if std>0 else 1);probabilidade=int(81+min(15,dist*10))
-    probabilidade=min(98,max(75,probabilidade)) if sinal else 0
-    return sinal,probabilidade
+
 
 def analisar_estrategia_detalhada(data, estrategia):
-    """Analisa a estratégia e aplica o novo gatilho de 2+ confirmações.
-    A tendência continua obrigatória; 2 confirmações geram oportunidade,
-    3+ elevam a força e 4+ são consideradas fortes.
+    """Validação final conservadora para reduzir sinais de baixa qualidade.
+
+    A estratégia precisa gerar um setup próprio e o mercado precisa confirmar
+    esse setup por múltiplos fatores independentes. A exigência voltou a ser
+    3 confirmações direcionais; isso reduz quantidade, mas é intencional para
+    recuperar qualidade depois da queda observada no winrate.
     """
     sinal, base_prob = analisar_estrategia(data, estrategia)
-    indicadores = _indicadores_confluencia(data, sinal)
     if not sinal:
-        return None, 0, indicadores
+        return None, 0, _indicadores_confluencia(data, None)
 
+    indicadores = _indicadores_confluencia(data, sinal)
     tendencia=indicadores.get("tendencia")
     if (sinal=="CALL" and tendencia!="ALTA") or (sinal=="PUT" and tendencia!="BAIXA"):
         return None, 0, indicadores
 
-    # GATE ABSOLUTO: a entrada precisa estar alinhada com macro e microtendência.
-    # Não importa se a microtendência contrária é moderada ou forte: se estiver
-    # em sentido oposto ao sinal, o setup é descartado.
+    # Nunca aceita direção contra macro ou microtendência.
     if bool(indicadores.get("macrotendencia_contra")) or bool(indicadores.get("microtendencia_contra")):
         return None, 0, indicadores
 
     fortes=_resumo_confluencias_direcionais(indicadores)
     qtd=len(fortes)
-    if qtd < 2:
-        return None, 0, indicadores
-
     conf=float(indicadores.get("confluencia",0) or 0)
-    if conf < 65:
+
+    # Mantém a frequência de oportunidades: 2 confirmações podem validar,
+    # porém somente quando existe um núcleo de qualidade independente.
+    if qtd < 2 or conf < 68:
         return None, 0, indicadores
 
-    # Probabilidade interna de força do setup; não representa taxa real de acerto.
-    # O aumento é progressivo com o número de confirmações, mas sem criar 90%+
-    # artificialmente só porque o filtro mínimo foi atingido.
-    bonus_conf={2:0,3:4,4:7,5:9,6:11}.get(min(qtd,6),11)
-    ajuste=max(0, min(8, int((conf-65)*0.10)))
-    prob=int(max(78,min(98,base_prob+bonus_conf+ajuste)))
+    itens_conf={x.get("nome"):x for x in indicadores.get("confluencias",[])}
+    pa=itens_conf.get("Price Action",{})
+    vol=itens_conf.get("Volatilidade",{})
+    micro=itens_conf.get("Microtendência",{})
+    ma=itens_conf.get("MAs",{})
+    rsi_item=itens_conf.get("RSI",{})
+    macd_item=itens_conf.get("MACD",{})
+    zona=itens_conf.get("Zona técnica",{})
+
+    # Qualidade mínima sem reduzir artificialmente a quantidade:
+    # - microtendência alinhada;
+    # - candle atual não pode estar ruim;
+    # - pelo menos um fator de momentum/estrutura (MAs, RSI ou MACD);
+    # - volatilidade anormal continua bloqueada.
+    if micro.get("status") != "ok" or pa.get("status") == "bad" or vol.get("status") == "bad":
+        return None, 0, indicadores
+    momentum_ok=any(x.get("status")=="ok" for x in (ma,rsi_item,macd_item))
+    if not momentum_ok:
+        return None, 0, indicadores
+
+    # Quando existem somente 2 confirmações, pelo menos uma delas deve ser
+    # microtendência/price action ou estrutura, evitando duas confirmações
+    # puramente redundantes do mesmo tipo.
+    nomes={x.get("nome") for x in fortes}
+    estrutura_ok=bool(nomes & {"Microtendência","Price Action","MAs","Zona técnica"})
+    if qtd==2 and not estrutura_ok:
+        return None, 0, indicadores
+
+    bonus_conf={2:1,3:3,4:5,5:7,6:9,7:10}.get(min(qtd,7),10)
+    ajuste=max(0,min(8,int((conf-68)*0.14)))
+    prob=int(max(80,min(96,base_prob+bonus_conf+ajuste)))
     indicadores["confirmacoes_fortes"]=qtd
     indicadores["confirmacoes_nomes"]=[x.get("nome") for x in fortes]
-    indicadores["nivel_confluencia"]="FORTE" if qtd>=4 else "CONFIRMADO" if qtd>=3 else "PRÉ-ALERTA"
+    indicadores["nivel_confluencia"]="FORTE" if qtd>=5 else "CONFIRMADO" if qtd>=3 else "VALIDADO"
+    indicadores["estrategia_validada"]=estrategia
     return sinal,prob,indicadores
 
 def _pontuacao_diversidade_estrategia(candidato, st):
@@ -2174,7 +2258,7 @@ def _selecionar_candidato_diversificado(candidatos, st):
         alternativas = [
             c for c in pool
             if c.get("estrategia") != est_melhor
-            and int(c.get("confirmacoes",0)) >= max(2, int(melhor_absoluto.get("confirmacoes",0)) - 1)
+            and int(c.get("confirmacoes",0)) >= max(3, int(melhor_absoluto.get("confirmacoes",0)) - 1)
             and int(c.get("probabilidade",0)) >= int(melhor_absoluto.get("probabilidade",0)) - 6
             and float(c.get("confluencia",0)) >= float(melhor_absoluto.get("confluencia",0)) - 8
         ]
@@ -2350,6 +2434,10 @@ def salvar_push_subscription(user_email, subscription):
         return False
     conn = get_db_connection(); cur = conn.cursor()
     try:
+        # Um usuário recebe um único Push por evento. Se o Chrome criar uma nova
+        # subscription após troca/renovação do service worker, a antiga é removida
+        # para impedir alertas duplicados no mesmo celular.
+        cur.execute("DELETE FROM web_push_subscriptions WHERE user_email=%s AND endpoint<>%s", (user_email.lower(), endpoint))
         cur.execute("""
             INSERT INTO web_push_subscriptions(endpoint,user_email,p256dh,auth,content_encoding,atualizado_em)
             VALUES(%s,%s,%s,%s,%s,CURRENT_TIMESTAMP)
@@ -2369,7 +2457,13 @@ def enviar_web_push(user_email, titulo, corpo, tag=None, url='/'):
         return 0
     try:
         conn=get_db_connection(); cur=conn.cursor()
-        cur.execute("SELECT endpoint,p256dh,auth,content_encoding FROM web_push_subscriptions WHERE user_email=%s",(user_email.lower(),))
+        cur.execute("""
+            SELECT endpoint,p256dh,auth,content_encoding
+            FROM web_push_subscriptions
+            WHERE user_email=%s
+            ORDER BY atualizado_em DESC NULLS LAST
+            LIMIT 1
+        """,(user_email.lower(),))
         rows=cur.fetchall()
         cur.close(); conn.close()
     except Exception as e:
@@ -3106,16 +3200,47 @@ def resultado(res):
             st["sinais_sessao_total"] = st.get("sinais_sessao_total", 0) + 1
             enviar_telegram(mensagem_resultado_telegram(st, "red"), user_solicitante=user)
         elif res == 'pular':
-            # PULAR não apaga a confirmação já publicada. A confirmação
-            # continua no Telegram como registro da entrada; somente o
-            # pré-alerta ativo é removido pelo cancelar_alerta_telegram().
+            # PULAR = limpeza imediata e total no Telegram.
+            # Cancela o alerta atual, invalida qualquer confirmação assíncrona,
+            # apaga a confirmação já enviada e também apaga a mensagem de PULADO
+            # imediatamente após criá-la. Não fica nenhuma das três mensagens no canal.
+            sinal_pulado = st.get("sinal_confirmado") or {}
+            alert_id_pulado = (st.get("ultima_confirmacao_alert_id")
+                               or sinal_pulado.get("alert_id")
+                               or (alerta_atual or {}).get("alert_id"))
+            if alert_id_pulado:
+                st.setdefault("confirmacoes_canceladas", set()).add(str(alert_id_pulado))
 
-            # O aviso de PULADO permanece somente por 5 segundos.
-            enviar_telegram(
-                "⚠️ <b>SINAL IGNORADO / PULADO</b>",
-                auto_delete=5,
-                user_solicitante=user
-            )
+            ids_para_apagar=[]
+            if alerta_atual:
+                msg_alerta=alerta_atual.get("msg_id")
+                if msg_alerta: ids_para_apagar.append(msg_alerta)
+            if confirmacao_msg_id:
+                ids_para_apagar.append(confirmacao_msg_id)
+
+            # Apaga imediatamente tudo que já estiver disponível.
+            for _mid in set(ids_para_apagar):
+                try:
+                    deletar_mensagem_telegram(_mid)
+                except Exception:
+                    pass
+
+            # Se uma confirmação estiver em voo, o marcador de cancelamento acima
+            # impede que ela permaneça; caso seja entregue logo depois, o worker
+            # a apaga imediatamente ao detectar o cancelamento.
+            try:
+                msg_pulado = enviar_telegram(
+                    "⚠️ <b>SINAL IGNORADO / PULADO</b>",
+                    auto_delete=None,
+                    user_solicitante=user
+                )
+                if msg_pulado:
+                    deletar_mensagem_telegram(msg_pulado)
+            except Exception as e:
+                print(f"⚠️ Erro ao limpar mensagem de sinal pulado: {e}")
+
+            st["ultima_confirmacao_msg_id"] = None
+            st["ultima_confirmacao_alert_id"] = None
 
         st["aguardando_confirmacao"] = False
         st["sinal_permanente"] = None
@@ -3243,6 +3368,7 @@ def confirmar_alerta_agendado(user_email, alert_id):
         st["ultimo_sinal_direcao"] = sinal
         st["ultimo_sinal_candle_ts"] = math.floor(time.time() / (max(1, int(tf)) * 60)) * (max(1, int(tf)) * 60)
         st["sinal_confirmado"] = {
+            "alert_id": alerta_id_atual,
             "ativo": ativo,
             "sinal": sinal,
             "direcao": sinal,
@@ -3309,13 +3435,17 @@ def confirmar_alerta_agendado(user_email, alert_id):
             except Exception as e:
                 print(f"⚠️ Erro ao registrar sinal confirmado: {e}")
             try:
+                st_local = get_user_state(_user)
+                if str(alerta_id_atual) in {str(x) for x in st_local.get("confirmacoes_canceladas", set())}:
+                    return
                 msg_id_confirmacao = enviar_telegram(
                     _msg, auto_delete=None, user_solicitante=_user
                 )
                 if msg_id_confirmacao:
-                    st_local = get_user_state(_user)
                     st_local["ultima_confirmacao_msg_id"] = msg_id_confirmacao
                     st_local["ultima_confirmacao_alert_id"] = alerta_id_atual
+                    if str(alerta_id_atual) in {str(x) for x in st_local.get("confirmacoes_canceladas", set())}:
+                        deletar_mensagem_telegram(msg_id_confirmacao)
             except Exception as e:
                 print(f"⚠️ Erro ao enviar confirmação Telegram: {e}")
 
@@ -3536,8 +3666,8 @@ def bot_loop():
                                     continue
 
                             # Em TODAS, cada estratégia continua sendo testada de forma independente.
-                            # A liberação agora depende principalmente da confluência técnica: 2 confirmações
-                            # direcionais já podem criar oportunidade; 3+ aumentam a força. Concordância entre
+                            # A liberação depende de confluência técnica: 3 confirmações direcionais são
+                            # o mínimo; 4+ aumentam a força. Concordância entre
                             # estratégias continua sendo um bônus, não um bloqueio absoluto.
 
                             # Bônus somente quando há concordância real entre estratégias.
@@ -3676,14 +3806,14 @@ def bot_loop():
                             if ultimo_ativo and ultimo_candle == candle_atual_ts and melhor_candidato.get("ativo") == ultimo_ativo:
                                 alternativas = [
                                     c for c in candidatos_pipeline
-                                    if c.get("ativo") != ultimo_ativo and int(c.get("probabilidade", 0)) >= 78
+                                    if c.get("ativo") != ultimo_ativo and int(c.get("probabilidade", 0)) >= 80
                                 ]
                                 melhor_candidato = _selecionar_candidato_diversificado(alternativas, st) if alternativas else None
 
                         # Se existe uma entrada confirmada, NÃO agendamos outra entrada
                         # sobre ela. Guardamos apenas o melhor próximo candidato.
                         if st.get("sinal_confirmado") and st.get("aguardando_confirmacao"):
-                            if melhor_candidato and melhor_candidato.get("confirmacoes", 0) >= 2 and int(melhor_candidato.get("probabilidade", 0)) >= 78:
+                            if melhor_candidato and melhor_candidato.get("confirmacoes", 0) >= 3 and int(melhor_candidato.get("probabilidade", 0)) >= 80:
                                 st["proximo_sinal_candidato"] = {
                                     "ativo": melhor_candidato.get("ativo"),
                                     "sinal": melhor_candidato.get("sinal"),
@@ -3702,7 +3832,7 @@ def bot_loop():
 
                     # Só pode existir um alerta/entrada ativo por vez. O pipeline acima
                     # continua analisando em segundo plano mesmo durante a entrada atual.
-                    if melhor_candidato and melhor_candidato.get("confirmacoes",0) >= 2 and melhor_candidato["probabilidade"] >= 78 and not st.get("aguardando_confirmacao"):
+                    if melhor_candidato and melhor_candidato.get("confirmacoes",0) >= 3 and melhor_candidato["probabilidade"] >= 80 and not st.get("aguardando_confirmacao"):
                         agora = agora_brasilia()
                         total_seg = tf * 60
                         seg_pass = (agora.minute % tf) * 60 + agora.second
