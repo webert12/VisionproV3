@@ -58,6 +58,10 @@ VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "").strip()
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "").strip()
 VAPID_CLAIMS_EMAIL = os.getenv("VAPID_CLAIMS_EMAIL", "mailto:admin@visionpro.local").strip()
 
+# O pré-alerta precisa chegar com antecedência real para o usuário abrir o ativo.
+# A confirmação continua ocorrendo exatamente 5s antes da virada do candle.
+MIN_LEAD_ALERT_SECONDS = 30
+
 def get_db_connection():
     if not DB_URL:
         raise ValueError("A variável de ambiente DB_URL (ou DATABASE_URL) precisa estar configurada.")
@@ -91,6 +95,7 @@ def get_user_state(email):
             "ultima_confirmacao_msg_id": None,  # última confirmação enviada ao Telegram
             "ultima_confirmacao_alert_id": None,
             "confirmacoes_canceladas": set(),
+            "confirmacao_processada_alert_id": None,
             "notificacao": None,
             "notificacao_ultima_hora": 0.0,
             "push_ativado": False,
@@ -3347,7 +3352,14 @@ def confirmar_alerta_agendado(user_email, alert_id):
         if not alerta or alerta.get("alert_id") != alert_id:
             return
 
+        # Timer e fallback da varredura podem chegar quase juntos. Apenas a primeira
+        # chamada pode confirmar/enviar Push/Telegram para este alerta.
+        if st.get("confirmacao_processada_alert_id") == str(alert_id):
+            return
+        st["confirmacao_processada_alert_id"] = str(alert_id)
+
         if not st.get("bot_iniciado") or st.get("bot_pausado"):
+            st["confirmacao_processada_alert_id"] = None
             return
 
         ativo = alerta["ativo"]
@@ -3855,13 +3867,21 @@ def bot_loop():
                         total_seg = tf * 60
                         seg_pass = (agora.minute % tf) * 60 + agora.second
                         seg_restantes = total_seg - seg_pass
-                        if seg_restantes <= 5:
-                            continue
 
-                        prox_minuto_entrada = agora + timedelta(seconds=seg_restantes)
+                        # Se a oportunidade só foi identificada perto da virada, não
+                        # mande o pré-alerta colado na confirmação. Em vez disso,
+                        # programe a oportunidade para a PRÓXIMA vela, mantendo no
+                        # mínimo 60s de antecedência para o usuário abrir o ativo.
+                        if seg_restantes < MIN_LEAD_ALERT_SECONDS:
+                            segundos_ate_proxima_vela = seg_restantes + total_seg
+                            prox_minuto_entrada = agora + timedelta(seconds=segundos_ate_proxima_vela)
+                        else:
+                            prox_minuto_entrada = agora + timedelta(seconds=seg_restantes)
+
                         momento_confirmacao = prox_minuto_entrada - timedelta(seconds=5)
                         horario_saida = prox_minuto_entrada + timedelta(minutes=tf)
-                        # Entrada é a virada exata do candle; a confirmação é disparada 5s antes.
+                        # Entrada é a virada exata do candle; o pré-alerta chega com
+                        # antecedência mínima de 60s e a confirmação é disparada 5s antes.
                         str_entrada = prox_minuto_entrada.strftime("%H:%M:%S")
                         str_saida = horario_saida.strftime("%H:%M:%S")
                         ativo = melhor_candidato["ativo"]
