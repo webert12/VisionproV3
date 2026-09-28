@@ -828,7 +828,7 @@ function atualizarSessao(d){setText('win-count',d.wins||0);setText('loss-count',
 function formatarTempo(seg){seg=Math.max(0,Math.floor(Number(seg)||0));const h=Math.floor(seg/3600),m=Math.floor((seg%3600)/60),s=seg%60;return h>0?String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'):String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')}
 function formatarHora(ts){if(!ts)return'--:--:--';return new Date(Number(ts)*1000).toLocaleTimeString('pt-BR',{hour12:false})}
 function atualizarTimerMercado(d){const end=Number(d.candle_end_ts||0),start=Number(d.candle_start_ts||0),server=Number(d.server_now||Date.now()/1000),now=server+((Date.now()/1000)-server);const remaining=Math.max(0,end-now);const elapsed=Math.max(0,Math.min(end-start,now-start));const total=Math.max(1,Number(d.candle_total||((d.timeframe||5)*60)));const pct=Math.max(0,Math.min(100,(elapsed/total)*100));setText('candle-countdown',formatarTempo(remaining));const fill=document.getElementById('candle-fill');if(fill)fill.style.width=pct+'%';setText('candle-window',formatarHora(start)+' → '+formatarHora(end));const entryTs=Number(d.entry_end_ts||0);const entryRemaining=entryTs?Math.max(0,entryTs-now):0;const confirmTs=Number(d.confirmation_ts||0);const confirmRemaining=confirmTs?Math.max(0,confirmTs-now):0;const entrada=d.entry_time||'--:--:--';setText('entry-countdown',entryTs?(entrada+' • '+formatarTempo(entryRemaining)):(entrada==='--:--:--'?'--:--:--':entrada));const note=document.getElementById('timer-note');if(note){if(d.sinal_confirmado){note.innerText='🎯 Entrada confirmada • expiração: '+((d.sinal_confirmado||{}).str_saida||'--:--:--');note.className='timer-note timer-confirm'}else if(d.alerta){note.innerText=confirmRemaining<=5&&confirmRemaining>0?'⚡ CONFIRMAÇÃO EM '+Math.ceil(confirmRemaining)+'s':'⚠️ Confirmação programada 5s antes da virada • entrada '+entrada;note.className='timer-note '+(confirmRemaining<=5&&confirmRemaining>0?'timer-alert':'')}else{note.innerText='Aguardando uma confluência válida para programar a entrada.';note.className='timer-note'}}}
-async function atualizarPainel(){try{const r=await fetch('/status',{cache:'no-store'});const d=await r.json();if(d.redirect){location.href=d.redirect;return}latestData=d;atualizarAssetPickers(d);renderSignal(d);const nb=document.getElementById('btn-enable-notify');if(nb){nb.innerText=d.push_ativado?'✅ ALERTAS EM SEGUNDO PLANO ATIVOS':(d.push_configurado?'🔔 ATIVAR ALERTAS EM SEGUNDO PLANO':'⚙️ CONFIGURE WEB PUSH NO SERVIDOR')}atualizarSessao(d);atualizarTimerMercado(d);atualizarAtivosBloqueados(d.news_blocked_assets||[]);const ng=d.news_guard_status||'AGUARDANDO CALENDÁRIO';setText('news-guard-status',ng);setText('guard-detail-status',ng);const blocked=(d.news_blocked_assets||[]).length;const color=blocked?'#fb7185':ng.includes('INDISPONÍVEL')?'#fbbf24':'#86efac';['news-guard-status','guard-detail-status'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.color=color});const b=document.getElementById('guard-badge');if(b)b.innerText=blocked?'● PROTEGENDO':'● ATIVO';const b2=document.getElementById('guard-badge-2');if(b2)b2.innerText=blocked?'● PROTEGENDO':'● ATIVO';const result=document.getElementById('result-area');if(result)result.style.display=d.aguardando?'grid':'none';renderHistory(d.historico||[]);renderResumoHistorico(d.historico_resumo||{});if(d.notificacao&&d.notificacao.id!==lastNotifId){lastNotifId=d.notificacao.id;dispararNotificacaoNativa(d.notificacao.titulo,d.notificacao.corpo,d.notificacao.id)}}catch(e){setText('top-status','REDE');}finally{setTimeout(atualizarPainel,1000)}}
+async function atualizarPainel(){try{const r=await fetch('/status',{cache:'no-store'});const d=await r.json();if(d.redirect){location.href=d.redirect;return}latestData=d;atualizarAssetPickers(d);renderSignal(d);const nb=document.getElementById('btn-enable-notify');if(nb){nb.innerText=d.push_ativado?'✅ ALERTAS EM SEGUNDO PLANO ATIVOS':(d.push_configurado?'🔔 ATIVAR ALERTAS EM SEGUNDO PLANO':'⚙️ CONFIGURE WEB PUSH NO SERVIDOR')}atualizarSessao(d);atualizarTimerMercado(d);atualizarAtivosBloqueados(d.news_blocked_assets||[]);const ng=d.news_guard_status||'AGUARDANDO CALENDÁRIO';setText('news-guard-status',ng);setText('guard-detail-status',ng);const blocked=(d.news_blocked_assets||[]).length;const color=blocked?'#fb7185':ng.includes('INDISPONÍVEL')?'#fbbf24':'#86efac';['news-guard-status','guard-detail-status'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.color=color});const b=document.getElementById('guard-badge');if(b)b.innerText=blocked?'● PROTEGENDO':'● ATIVO';const b2=document.getElementById('guard-badge-2');if(b2)b2.innerText=blocked?'● PROTEGENDO':'● ATIVO';const result=document.getElementById('result-area');if(result)result.style.display=d.aguardando?'grid':'none';renderHistory(d.historico||[]);renderResumoHistorico(d.historico_resumo||{});/* Quando Web Push está ativo, ele é o ÚNICO canal de notificação. A notificação nativa do /status fica apenas como fallback, evitando duplicidade (Push + navegador). */if(!d.push_ativado&&d.notificacao&&d.notificacao.id!==lastNotifId){lastNotifId=d.notificacao.id;dispararNotificacaoNativa(d.notificacao.titulo,d.notificacao.corpo,d.notificacao.id)}}catch(e){setText('top-status','REDE');}finally{setTimeout(atualizarPainel,1000)}}
 window.addEventListener('resize',()=>{if(latestData){const f=latestData.sinal_confirmado||latestData.alerta||latestData.analise_atual||{};const fa=f.analise||f;drawChart((fa.grafico&&fa.grafico.length?fa.grafico:(latestData.grafico_atual||[])),'market-chart');drawChart((fa.grafico&&fa.grafico.length?fa.grafico:(latestData.grafico_atual||[])),'market-chart-2')}});
 document.getElementById('bt-market')?.addEventListener('change',e=>renderAssetPicker('bt-assets',e.target.value,[]));
 const opPicker=document.getElementById('operating-assets'); if(opPicker) opPicker.addEventListener('change',()=>saveOperatingAssets());
@@ -2493,6 +2493,24 @@ def enviar_web_push(user_email, titulo, corpo, tag=None, url='/'):
                 print(f"⚠️ Web Push falhou para {user_email}: {e}")
     return enviados
 
+def usuario_tem_push_ativo(user_email):
+    """Verifica de forma leve se existe uma inscrição Web Push persistida para o usuário.
+    Isso mantém o modo Push ativo mesmo após reinício/deploy do Render, evitando que o
+    fallback de notificação do /status seja disparado junto com o Web Push.
+    """
+    if not user_email:
+        return False
+    try:
+        conn=get_db_connection(); cur=conn.cursor()
+        cur.execute("SELECT 1 FROM web_push_subscriptions WHERE user_email=%s LIMIT 1", (user_email.lower(),))
+        ativo=cur.fetchone() is not None
+        cur.close(); conn.close()
+        return ativo
+    except Exception as e:
+        print(f"⚠️ Web Push: não foi possível verificar inscrição ativa: {e}")
+        return False
+
+
 @app.route('/push/config')
 def push_config():
     user=session.get('user')
@@ -2775,7 +2793,7 @@ def status():
         "rodando": st["bot_iniciado"] and not st["bot_pausado"],
         "notificacao": st["notificacao"],
         "push_configurado": _push_configurado(),
-        "push_ativado": bool(st.get("push_ativado")),
+        "push_ativado": bool(st.get("push_ativado")) or usuario_tem_push_ativo(user),
         "timeframe": st["timeframe"],
         "selected_assets": st.get("selected_assets", []),
         "assets_catalog": ATIVOS_BASE,
