@@ -719,7 +719,26 @@ async function executarBacktest(){
         box.innerHTML='<div class="card"><div class="card-pad empty">❌ Falha de comunicação com o servidor ao iniciar o backtest.</div></div>';
     }
 }
-function renderBacktestResults(d){const box=document.getElementById('backtest-results');const s=d.summary||{};const cards=[['Entradas',s.entradas||0,''],['Wins',s.wins||0,'bt-win'],['G1',s.g1||0,'bt-g1'],['Loss',s.losses||0,'bt-loss'],['Assertividade',((s.assertividade||0).toFixed? s.assertividade.toFixed(1):s.assertividade)+'%','']];let html='<div class="card"><div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Backtest histórico</div></div><div class="mini">'+(d.meta||'')+'</div></div><div class="card-pad"><div class="bt-summary">'+cards.map(c=>`<div class="stat-box"><div class="stat-k">${c[0]}</div><div class="stat-v ${c[2]}">${c[1]}</div></div>`).join('')+'</div></div></div>';const mk=(arr,key)=>'<div class="card"><div class="card-head"><div><div class="eyebrow">Ranking</div><div class="card-title">'+key+'</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Nome</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(arr||[]).map(x=>`<tr><td><b>${x.nome||x.ativo||x.estrategia||'--'}</b></td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+=mk(d.top_assets,'Melhores ativos');html+=mk(d.top_strategies,'Melhores estratégias');html+='<div class="card"><div class="card-head"><div><div class="eyebrow">Detalhamento</div><div class="card-title">Ativo × estratégia</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Ativo</th><th>Estratégia</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(d.rows||[]).map(x=>`<tr><td><b>${x.ativo}</b></td><td>${x.estrategia}</td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+='<div class="card"><div class="card-pad bt-note">Fonte: '+(d.source||'dados históricos públicos')+'. '+(d.note||'')+'</div></div>';box.innerHTML=html}
+function renderBacktestResults(d){
+    const box=document.getElementById('backtest-results');
+    const s=d.summary||{};
+    const cards=[
+        ['Entradas',s.entradas||0,''],
+        ['Wins',s.wins||0,'bt-win'],
+        ['G1',s.g1||0,'bt-g1'],
+        ['Loss / RED',s.losses||0,'bt-loss'],
+        ['Assertividade',((s.assertividade||0).toFixed?s.assertividade.toFixed(1):s.assertividade)+'%',''],
+        ['Maior sequência WIN',s.max_win_streak||0,'bt-win'],
+        ['Maior sequência RED',s.max_red_streak||0,'bt-loss']
+    ];
+    let html='<div class="card"><div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Backtest histórico</div></div><div class="mini">'+(d.meta||'')+'</div></div><div class="card-pad"><div class="bt-summary">'+cards.map(c=>`<div class="stat-box"><div class="stat-k">${c[0]}</div><div class="stat-v ${c[2]}">${c[1]}</div></div>`).join('')+'</div><div class="bt-note" style="margin-top:10px">📈 <b>WINs seguidos:</b> maior sequência de vitórias diretas encontrada em cada série. &nbsp;|&nbsp; 🔴 <b>REDs seguidos:</b> maior sequência de perdas consecutivas. G1 interrompe as duas sequências.</div></div></div>';
+    const mk=(arr,key)=>'<div class="card"><div class="card-head"><div><div class="eyebrow">Ranking</div><div class="card-title">'+key+'</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Nome</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss / RED</th><th>WINs seguidos</th><th>REDs seguidos</th><th>Assert.</th></tr></thead><tbody>'+(arr||[]).map(x=>`<tr><td><b>${x.nome||x.ativo||x.estrategia||'--'}</b></td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td class="bt-win"><b>${x.max_win_streak||0}</b></td><td class="bt-loss"><b>${x.max_red_streak||0}</b></td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';
+    html+=mk(d.top_assets,'Melhores ativos');
+    html+=mk(d.top_strategies,'Melhores estratégias');
+    html+='<div class="card"><div class="card-head"><div><div class="eyebrow">Detalhamento</div><div class="card-title">Ativo × estratégia</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Ativo</th><th>Estratégia</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss / RED</th><th>WINs seguidos</th><th>REDs seguidos</th><th>Assert.</th></tr></thead><tbody>'+(d.rows||[]).map(x=>`<tr><td><b>${x.ativo}</b></td><td>${x.estrategia}</td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td class="bt-win"><b>${x.max_win_streak||0}</b></td><td class="bt-loss"><b>${x.max_red_streak||0}</b></td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';
+    html+='<div class="card"><div class="card-pad bt-note">Fonte: '+(d.source||'dados históricos públicos')+'. '+(d.note||'')+'<br><br><b>Importante para o Soros de 1 nível:</b> as sequências são calculadas na ordem cronológica dos sinais de cada ativo + estratégia. Assim você consegue identificar quantas vitórias diretas aconteceram consecutivamente antes de um G1/RED.</div></div>';
+    box.innerHTML=html;
+}
 function atualizarAssetPickers(d){assetsCatalog=d.assets_catalog||{};const m=d.mercado||'TODOS';const selected=d.selected_assets||[];const op=document.getElementById('operating-assets');if(op&&!op.dataset.userEditing){renderAssetPicker('operating-assets',m,selected)}const btM=document.getElementById('bt-market');if(btM&&!document.getElementById('bt-assets')?.dataset.initialized){document.getElementById('bt-assets').dataset.initialized='1';renderAssetPicker('bt-assets',btM.value,[])} }
 function registrarResultado(res){fetch('/resultado/'+res,{cache:'no-store'}).then(()=>toast('Resultado registrado')).catch(()=>toast('Falha ao registrar resultado'))}
 function toggleTelegram(){fetch('/command/telegram_toggle',{cache:'no-store'}).then(r=>r.json()).then(d=>{if(d.ok){const b=document.getElementById('btn-telegram-toggle');if(b)b.innerText=d.telegram_ativo?'🟢 ENVIO TELEGRAM ATIVADO':'🔴 ENVIO TELEGRAM DESATIVADO';}})}
@@ -3130,7 +3149,7 @@ def _executar_backtest_job(job_id, user_email, assets, estrategias, tf, limit, u
 
         def executar_ativo(ativo, data):
             local_rows = []
-            local_asset = {"entradas": 0, "wins": 0, "g1": 0, "losses": 0}
+            local_asset = {"entradas": 0, "wins": 0, "g1": 0, "losses": 0, "max_win_streak": 0, "max_red_streak": 0}
             local_est = {}
             total_e = total_w = total_g = total_l = 0
 
@@ -3150,6 +3169,8 @@ def _executar_backtest_job(job_id, user_email, assets, estrategias, tf, limit, u
 
                 for est in estrategias:
                     entradas = wins = g1s = losses = 0
+                    sequencia_win = sequencia_red = 0
+                    max_win_streak = max_red_streak = 0
                     for i in range(inicio, fim + 1):
                         janela = {k: v[:i + 1] for k, v in base.items()}
                         sinal, prob, _ana = analisar_estrategia_detalhada(janela, est)
@@ -3168,6 +3189,9 @@ def _executar_backtest_job(job_id, user_email, assets, estrategias, tf, limit, u
                         direto = (prox_close > prox_open) if sinal == "CALL" else (prox_close < prox_open)
                         if direto:
                             wins += 1
+                            sequencia_win += 1
+                            sequencia_red = 0
+                            max_win_streak = max(max_win_streak, sequencia_win)
                         elif use_g1 and i + 2 < len(c):
                             g_open = float(base["open"][i + 2])
                             g_close = float(base["close"][i + 2])
@@ -3176,8 +3200,14 @@ def _executar_backtest_job(job_id, user_email, assets, estrategias, tf, limit, u
                                 g1s += 1
                             else:
                                 losses += 1
+                                sequencia_red += 1
+                                sequencia_win = 0
+                                max_red_streak = max(max_red_streak, sequencia_red)
                         else:
                             losses += 1
+                            sequencia_red += 1
+                            sequencia_win = 0
+                            max_red_streak = max(max_red_streak, sequencia_red)
 
                     if entradas:
                         concl = wins + g1s + losses
@@ -3190,17 +3220,23 @@ def _executar_backtest_job(job_id, user_email, assets, estrategias, tf, limit, u
                             "wins": wins,
                             "g1": g1s,
                             "losses": losses,
+                            "max_win_streak": max_win_streak,
+                            "max_red_streak": max_red_streak,
                             "assertividade": round(acc, 1)
                         })
                         local_asset["entradas"] += entradas
                         local_asset["wins"] += wins
                         local_asset["g1"] += g1s
                         local_asset["losses"] += losses
-                        er = local_est.setdefault(est, {"nome": nome_est, "entradas": 0, "wins": 0, "g1": 0, "losses": 0})
+                        local_asset["max_win_streak"] = max(local_asset.get("max_win_streak", 0), max_win_streak)
+                        local_asset["max_red_streak"] = max(local_asset.get("max_red_streak", 0), max_red_streak)
+                        er = local_est.setdefault(est, {"nome": nome_est, "entradas": 0, "wins": 0, "g1": 0, "losses": 0, "max_win_streak": 0, "max_red_streak": 0})
                         er["entradas"] += entradas
                         er["wins"] += wins
                         er["g1"] += g1s
                         er["losses"] += losses
+                        er["max_win_streak"] = max(er.get("max_win_streak", 0), max_win_streak)
+                        er["max_red_streak"] = max(er.get("max_red_streak", 0), max_red_streak)
                         total_e += entradas
                         total_w += wins
                         total_g += g1s
@@ -3215,6 +3251,7 @@ def _executar_backtest_job(job_id, user_email, assets, estrategias, tf, limit, u
         asset_acc = {}
         est_acc = {}
         total_entries = total_wins = total_g1 = total_losses = 0
+        total_max_win_streak = total_max_red_streak = 0
         workers_calc = min(6, max(1, len(dados_por_ativo)))
 
         with ThreadPoolExecutor(max_workers=workers_calc, thread_name_prefix="bt-calc") as pool:
@@ -3233,6 +3270,8 @@ def _executar_backtest_job(job_id, user_email, assets, estrategias, tf, limit, u
                 total_wins += tw
                 total_g1 += tg
                 total_losses += tl
+                total_max_win_streak = max(total_max_win_streak, int(local_asset.get("max_win_streak", 0)))
+                total_max_red_streak = max(total_max_red_streak, int(local_asset.get("max_red_streak", 0)))
                 with BACKTEST_JOBS_LOCK:
                     job = BACKTEST_JOBS.get(job_id)
                     if job:
@@ -3252,6 +3291,8 @@ def _executar_backtest_job(job_id, user_email, assets, estrategias, tf, limit, u
                     "wins": v["wins"],
                     "g1": v["g1"],
                     "losses": v["losses"],
+                    "max_win_streak": int(v.get("max_win_streak", 0)),
+                    "max_red_streak": int(v.get("max_red_streak", 0)),
                     "assertividade": round(((v["wins"] + v["g1"]) / concl * 100), 1) if concl else 0
                 })
             return sorted(out, key=lambda x: (-x["assertividade"], -x["entradas"]))[:10]
@@ -3262,6 +3303,8 @@ def _executar_backtest_job(job_id, user_email, assets, estrategias, tf, limit, u
             "wins": total_wins,
             "g1": total_g1,
             "losses": total_losses,
+            "max_win_streak": total_max_win_streak,
+            "max_red_streak": total_max_red_streak,
             "assertividade": round(((total_wins + total_g1) / concl * 100), 1) if concl else 0
         }
         ignorados = list(falhas_por_ativo.keys())
