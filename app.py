@@ -593,7 +593,7 @@ HTML_INDEX = """
                     <div class="backtest-grid">
                         <div class="field"><label>Timeframe</label><select class="select" id="bt-tf"><option value="1">M1</option><option value="5" selected>M5</option><option value="15">M15</option></select></div>
                         <div class="field"><label>Mercado</label><select class="select" id="bt-market"><option value="TODOS">Todos</option><option value="ABERTO_TODOS">Abertos</option><option value="OTC_TODOS">OTC</option><option value="FOREX_ABERTO">Forex Aberto</option><option value="CRIPTO_ABERTO">Cripto Aberto</option><option value="FOREX_OTC">Forex OTC</option><option value="CRIPTO_OTC">Cripto OTC</option></select></div>
-                        <div class="field"><label>Estratégia</label><select class="select" id="bt-est"><option value="TODAS">Todas</option><option value="LOGICA_DO_PRECO">Lógica do Preço</option><option value="RSI_MACD_MA">RSI + MACD + MA</option><option value="MHI1">MHI 1 + Tendência</option><option value="REVERSAO">Reversão de Bandas</option></select></div>
+                        <div class="field"><label>Estratégia</label><select class="select" id="bt-est"><option value="TODAS">Todas</option><option value="LOGICA_DO_PRECO">Lógica do Preço</option><option value="RSI_MACD_MA">RSI + MACD + MA</option><option value="MHI1">MHI 1 + Tendência</option><option value="REVERSAO">Reversão de Bandas</option><option value="PIVO_DE_ALTA">Pivô de Alta + Confluências</option></select></div>
                         <div class="field"><label>G1</label><select class="select" id="bt-g1"><option value="sim">Com G1</option><option value="nao">Sem G1</option></select></div>
                     </div>
                     <div class="field"><label>Quantidade de candles históricos</label><select class="select" id="bt-limit"><option value="200">200 candles</option><option value="300" selected>300 candles</option><option value="500">500 candles</option></select></div>
@@ -611,7 +611,7 @@ HTML_INDEX = """
                         <div class="field"><label>Mercado</label><select class="select" onchange="sendCommand('mkt_'+this.value)"><option value="TODOS" {% if modo == 'TODOS' %}selected{% endif %}>🌐 Todos</option><option value="ABERTO_TODOS" {% if modo == 'ABERTO_TODOS' %}selected{% endif %}>🟢 Aberto</option><option value="OTC_TODOS" {% if modo == 'OTC_TODOS' %}selected{% endif %}>🌙 OTC</option><option value="FOREX_ABERTO" {% if modo == 'FOREX_ABERTO' %}selected{% endif %}>📈 Forex Aberto</option><option value="CRIPTO_ABERTO" {% if modo == 'CRIPTO_ABERTO' %}selected{% endif %}>🪙 Cripto Aberto</option><option value="FOREX_OTC" {% if modo == 'FOREX_OTC' %}selected{% endif %}>📊 Forex OTC</option><option value="CRIPTO_OTC" {% if modo == 'CRIPTO_OTC' %}selected{% endif %}>⚡ Cripto OTC</option></select></div>
                         <div class="field"><label>Timeframe</label><select class="select" onchange="sendCommand('tf_'+this.value)"><option value="1" {% if tf == 1 %}selected{% endif %}>M1</option><option value="5" {% if tf == 5 %}selected{% endif %}>M5</option><option value="15" {% if tf == 15 %}selected{% endif %}>M15</option></select></div>
                     </div>
-                    <div class="field"><label>Estratégia operacional</label><select class="select" onchange="sendCommand('set_est_'+this.value)"><option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS — análise dinâmica múltipla</option><option value="LOGICA_DO_PRECO" {% if estrat == 'LOGICA_DO_PRECO' %}selected{% endif %}>Lógica do Preço</option><option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + MACD + MA</option><option value="MHI1" {% if estrat == 'MHI1' %}selected{% endif %}>MHI 1 + Tendência</option><option value="REVERSAO" {% if estrat == 'REVERSAO' %}selected{% endif %}>Reversão de Bandas</option></select></div>
+                    <div class="field"><label>Estratégia operacional</label><select class="select" onchange="sendCommand('set_est_'+this.value)"><option value="TODAS" {% if estrat == 'TODAS' %}selected{% endif %}>💎 TODAS — análise dinâmica múltipla</option><option value="LOGICA_DO_PRECO" {% if estrat == 'LOGICA_DO_PRECO' %}selected{% endif %}>Lógica do Preço</option><option value="RSI_MACD_MA" {% if estrat == 'RSI_MACD_MA' %}selected{% endif %}>RSI + MACD + MA</option><option value="MHI1" {% if estrat == 'MHI1' %}selected{% endif %}>MHI 1 + Tendência</option><option value="REVERSAO" {% if estrat == 'REVERSAO' %}selected{% endif %}>Reversão de Bandas</option><option value="PIVO_DE_ALTA" {% if estrat == 'PIVO_DE_ALTA' %}selected{% endif %}>Pivô de Alta + Confluências</option></select></div>
                     <div class="field"><label>Ativos para operar</label><div class="picker-actions"><button type="button" onclick="selecionarTodosAtivos()">TODOS DO MERCADO</button><button type="button" onclick="limparAtivosOperacao()">LIMPAR</button></div><div id="operating-assets" class="asset-picker" style="margin-top:8px"></div><div class="bt-note" style="margin-top:6px">Selecione um ou mais ativos. Se nenhum for selecionado, o Vision Pro usa todos os ativos do mercado escolhido.</div></div>
                     <div class="metric"><div class="k">Regra de proteção</div><div class="v">🐂🐂 / 🐂🐂🐂 → trava ±30 min</div></div>
                     <div class="metric"><div class="k">Dados</div><div class="v">Somente candles válidos e fechados</div></div>
@@ -1195,13 +1195,14 @@ def resumir_historico(historico):
     return {"estrategias":finalizar(por_estrategia),"ativos":finalizar(por_ativo)}
 
 # ================= BOT CONFIGS & ESTRATÉGIAS =================
-LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO"]
+LISTA_ESTRATEGIAS = ["LOGICA_DO_PRECO", "RSI_MACD_MA", "MHI1", "REVERSAO", "PIVO_DE_ALTA"]
 
 NOME_ESTRATEGIAS_DISPLAY = {
     "LOGICA_DO_PRECO": "Lógica do Preço",
     "RSI_MACD_MA": "RSI + Cruzamento MACD + MA",
     "MHI1": "MHI 1 (+ Filtro Tendência)",
     "REVERSAO": "Reversão de Bandas",
+    "PIVO_DE_ALTA": "Pivô de Alta + Confluências",
     "TODAS": "Análise Dinâmica Múltipla"
 }
 
@@ -2189,6 +2190,78 @@ def analisar_estrategia(data, estrategia, i=-1):
                 elif tendencia_baixa and pullback_baixa and bearish and c[-1]<prev_close and c[-1]<=ema9[-1]*1.0005:
                     sinal='PUT'; qualidade=84 + (4 if upper>=corpo else 0)
 
+        elif estrategia == "PIVO_DE_ALTA":
+            # Estratégia baseada no vídeo enviado: estrutura de pivô, topos/fundos
+            # ascendentes, correção até a média móvel, respeito de uma linha de
+            # tendência e rompimento do topo anterior. O setup é simétrico para
+            # PUT, usando a estrutura descendente.
+            if len(c) >= 35:
+                def pivôs_confirmados(highs, lows, esquerda=2, direita=2):
+                    ph=[]; pl=[]
+                    fim=len(highs)-direita
+                    for j in range(esquerda, max(esquerda, fim)):
+                        if highs[j] == np.max(highs[j-esquerda:j+direita+1]):
+                            ph.append(j)
+                        if lows[j] == np.min(lows[j-esquerda:j+direita+1]):
+                            pl.append(j)
+                    return ph, pl
+
+                ph, pl = pivôs_confirmados(h, l)
+                # Trabalha somente com pivôs suficientemente antigos para que
+                # já estejam confirmados, evitando olhar o futuro no candle de entrada.
+                ph = [j for j in ph if j < len(c)-3][-6:]
+                pl = [j for j in pl if j < len(c)-3][-6:]
+
+                def linha_no_indice(p1, p2, idx_linha):
+                    if p2 == p1:
+                        return None
+                    return float(l[p1] + (l[p2]-l[p1]) * ((idx_linha-p1)/(p2-p1)))
+
+                def linha_alta_no_indice(p1, p2, idx_linha):
+                    if p2 == p1:
+                        return None
+                    return float(l[p1] + (l[p2]-l[p1]) * ((idx_linha-p1)/(p2-p1)))
+
+                # --------------------------- CALL ---------------------------
+                if len(ph) >= 2 and len(pl) >= 2:
+                    h1, h2 = ph[-2], ph[-1]
+                    lows_before_h2 = [j for j in pl if j < h2]
+                    if len(lows_before_h2) >= 2:
+                        l1, l2 = lows_before_h2[-2], lows_before_h2[-1]
+                        estrutura_alta = (h2 > h1 and h[h2] > h[h1] and l2 > l1 and l[l2] > l[l1])
+                        correcao = [j for j in range(h2+1, len(c)-1) if l[j] <= calcular_ema(c,20)[j]*1.006]
+                        tocou_media = bool(correcao)
+                        rompimento = c[-1] > h[h2] and c[-2] <= h[h2]
+                        ema20=calcular_ema(c,20)
+                        media_respeitada = bool(tocou_media and l[-2] >= ema20[-2]*0.994 and c[-1] > ema20[-1])
+                        linha = linha_alta_no_indice(l1,l2,len(c)-1)
+                        linha_ok = linha is not None and c[-1] > linha and l[-1] >= linha*0.997
+                        candle_limpo = bullish and corpo_pct >= 0.50
+                        rsi_ok = 52 <= rsi <= 68
+                        macd_ok = macd_hist > 0 and macd_hist >= macd_prev
+                        if tendencia_alta and estrutura_alta and tocou_media and media_respeitada and linha_ok and rompimento and candle_limpo and rsi_ok and macd_ok:
+                            sinal='CALL'; qualidade=93 + (1 if rsi>=55 else 0)
+
+                # ---------------------------- PUT ----------------------------
+                if sinal is None and len(ph) >= 2 and len(pl) >= 2:
+                    l1, l2 = pl[-2], pl[-1]
+                    highs_before_l2 = [j for j in ph if j < l2]
+                    if len(highs_before_l2) >= 2:
+                        h1b, h2b = highs_before_l2[-2], highs_before_l2[-1]
+                        estrutura_baixa = (l2 > l1 and l[l2] < l[l1] and h2b > h1b and h[h2b] < h[h1b])
+                        correcao = [j for j in range(l2+1, len(c)-1) if h[j] >= calcular_ema(c,20)[j]*0.994]
+                        tocou_media = bool(correcao)
+                        rompimento = c[-1] < l[l2] and c[-2] >= l[l2]
+                        ema20=calcular_ema(c,20)
+                        media_respeitada = bool(tocou_media and h[-2] <= ema20[-2]*1.006 and c[-1] < ema20[-1])
+                        linha = float(h[h1b] + (h[h2b]-h[h1b]) * ((len(c)-1-h1b)/(h2b-h1b))) if h2b != h1b else None
+                        linha_ok = linha is not None and c[-1] < linha and h[-1] <= linha*1.003
+                        candle_limpo = bearish and corpo_pct >= 0.50
+                        rsi_ok = 32 <= rsi <= 48
+                        macd_ok = macd_hist < 0 and macd_hist <= macd_prev
+                        if tendencia_baixa and estrutura_baixa and tocou_media and media_respeitada and linha_ok and rompimento and candle_limpo and rsi_ok and macd_ok:
+                            sinal='PUT'; qualidade=93 + (1 if rsi<=45 else 0)
+
         if not sinal:
             return None, 0
         return sinal, int(max(78,min(94,qualidade)))
@@ -2210,6 +2283,22 @@ def analisar_estrategia_detalhada(data, estrategia):
         return None, 0, _indicadores_confluencia(data, None)
 
     indicadores = _indicadores_confluencia(data, sinal)
+
+    # O setup do vídeo exige confluências extras além do filtro geral: estrutura
+    # de pivô + média móvel + linha de tendência + rompimento + momentum.
+    # O gatilho da estratégia já verifica esses pontos; aqui exigimos também
+    # quatro confirmações direcionais do motor geral para validar a entrada.
+    if estrategia == "PIVO_DE_ALTA":
+        fortes_video = _resumo_confluencias_direcionais(indicadores)
+        nomes_video = {x.get("nome") for x in fortes_video}
+        if len(fortes_video) < 4:
+            return None, 0, indicadores
+        if not {"MAs", "RSI", "MACD"}.issubset(nomes_video):
+            return None, 0, indicadores
+        indicadores["confirmacoes_fortes"] = len(fortes_video)
+        indicadores["confirmacoes_nomes"] = [x.get("nome") for x in fortes_video]
+        indicadores["nivel_confluencia"] = "FORTE"
+        indicadores["estrategia_validada"] = estrategia
     tendencia=indicadores.get("tendencia")
     if (sinal=="CALL" and tendencia!="ALTA") or (sinal=="PUT" and tendencia!="BAIXA"):
         return None, 0, indicadores
