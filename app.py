@@ -674,36 +674,50 @@ async function executarBacktest(){
         limit:Number(document.getElementById('bt-limit').value),
         assets
     };
-    box.innerHTML='<div class="card"><div class="card-pad empty">⏳ Executando backtest histórico...<br><small>Buscando candles em paralelo e processando somente os ativos selecionados.</small></div></div>';
-    const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),90000);
+    box.innerHTML='<div class="card"><div class="card-pad empty">⏳ Iniciando backtest...<br><small>O processamento continuará em segundo plano mesmo se a requisição inicial terminar.</small></div></div>';
     try{
         const r=await fetch('/backtest',{
-            method:'POST',
-            headers:{'Content-Type':'application/json','Accept':'application/json'},
-            credentials:'same-origin',
-            cache:'no-store',
-            signal:controller.signal,
-            body:JSON.stringify(payload)
+            method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},
+            credentials:'same-origin',cache:'no-store',body:JSON.stringify(payload)
         });
-        const contentType=(r.headers.get('content-type')||'').toLowerCase();
-        let d=null;
-        if(contentType.includes('application/json')) d=await r.json();
-        else{
-            const raw=await r.text();
-            d={ok:false,error:r.status===401?'Sua sessão expirou. Entre novamente no sistema.':('Servidor retornou uma resposta inválida ('+r.status+').')};
-            console.error('[Vision Backtest] resposta não-JSON:',raw.slice(0,500));
-        }
-        if(!r.ok || !d || !d.ok){
-            box.innerHTML='<div class="card"><div class="card-pad empty">❌ '+((d&&d.error)||('Falha no backtest (HTTP '+r.status+').'))+'</div></div>';
-            return;
-        }
-        renderBacktestResults(d);
+        const d=await r.json().catch(()=>({}));
+        if(!r.ok||!d.ok){box.innerHTML='<div class="card"><div class="card-pad empty">❌ '+(d.error||('Falha ao iniciar o backtest (HTTP '+r.status+').'))+'</div></div>';return}
+        const jobId=d.job_id;
+        if(!jobId){box.innerHTML='<div class="card"><div class="card-pad empty">❌ O servidor não retornou o identificador do backtest.</div></div>';return}
+
+        let tentativas=0;
+        const consultar=async()=>{
+            tentativas++;
+            try{
+                const sr=await fetch('/backtest/status/'+encodeURIComponent(jobId),{cache:'no-store',credentials:'same-origin',headers:{'Accept':'application/json'}});
+                const sd=await sr.json().catch(()=>({}));
+                if(!sr.ok||!sd.ok){
+                    box.innerHTML='<div class="card"><div class="card-pad empty">❌ '+(sd.error||('Falha ao consultar o backtest (HTTP '+sr.status+').'))+'</div></div>';
+                    return;
+                }
+                if(sd.status==='done'){
+                    renderBacktestResults(sd.result||{});
+                    return;
+                }
+                if(sd.status==='error'){
+                    box.innerHTML='<div class="card"><div class="card-pad empty">❌ '+(sd.error||'Falha durante o processamento do backtest.')+'</div></div>';
+                    return;
+                }
+                const pct=Math.max(0,Math.min(100,Number(sd.progress||0)));
+                box.innerHTML='<div class="card"><div class="card-pad empty">⏳ '+(sd.message||'Processando backtest...')+'<br><small>Progresso: '+pct+'%</small></div></div>';
+                if(tentativas<360)setTimeout(consultar,1000);
+                else box.innerHTML='<div class="card"><div class="card-pad empty">❌ O backtest ultrapassou o tempo máximo de acompanhamento. O servidor pode ainda estar processando. Atualize a página e tente novamente.</div></div>';
+            }catch(e){
+                console.error('[Vision Backtest status]',e);
+                if(tentativas<360)setTimeout(consultar,1500);
+                else box.innerHTML='<div class="card"><div class="card-pad empty">❌ Falha de comunicação durante o acompanhamento do backtest.</div></div>';
+            }
+        };
+        consultar();
     }catch(e){
-        const msg=e&&e.name==='AbortError'?'O backtest demorou mais que 90 segundos. Reduza a quantidade de ativos ou candles e tente novamente.':'Falha de comunicação com o servidor. Verifique se o serviço está online e tente novamente.';
         console.error('[Vision Backtest]',e);
-        box.innerHTML='<div class="card"><div class="card-pad empty">❌ '+msg+'</div></div>';
-    }finally{clearTimeout(timer)}
+        box.innerHTML='<div class="card"><div class="card-pad empty">❌ Falha de comunicação com o servidor ao iniciar o backtest.</div></div>';
+    }
 }
 function renderBacktestResults(d){const box=document.getElementById('backtest-results');const s=d.summary||{};const cards=[['Entradas',s.entradas||0,''],['Wins',s.wins||0,'bt-win'],['G1',s.g1||0,'bt-g1'],['Loss',s.losses||0,'bt-loss'],['Assertividade',((s.assertividade||0).toFixed? s.assertividade.toFixed(1):s.assertividade)+'%','']];let html='<div class="card"><div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Backtest histórico</div></div><div class="mini">'+(d.meta||'')+'</div></div><div class="card-pad"><div class="bt-summary">'+cards.map(c=>`<div class="stat-box"><div class="stat-k">${c[0]}</div><div class="stat-v ${c[2]}">${c[1]}</div></div>`).join('')+'</div></div></div>';const mk=(arr,key)=>'<div class="card"><div class="card-head"><div><div class="eyebrow">Ranking</div><div class="card-title">'+key+'</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Nome</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(arr||[]).map(x=>`<tr><td><b>${x.nome||x.ativo||x.estrategia||'--'}</b></td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+=mk(d.top_assets,'Melhores ativos');html+=mk(d.top_strategies,'Melhores estratégias');html+='<div class="card"><div class="card-head"><div><div class="eyebrow">Detalhamento</div><div class="card-title">Ativo × estratégia</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Ativo</th><th>Estratégia</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(d.rows||[]).map(x=>`<tr><td><b>${x.ativo}</b></td><td>${x.estrategia}</td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+='<div class="card"><div class="card-pad bt-note">Fonte: '+(d.source||'dados históricos públicos')+'. '+(d.note||'')+'</div></div>';box.innerHTML=html}
 function atualizarAssetPickers(d){assetsCatalog=d.assets_catalog||{};const m=d.mercado||'TODOS';const selected=d.selected_assets||[];const op=document.getElementById('operating-assets');if(op&&!op.dataset.userEditing){renderAssetPicker('operating-assets',m,selected)}const btM=document.getElementById('bt-market');if(btM&&!document.getElementById('bt-assets')?.dataset.initialized){document.getElementById('bt-assets').dataset.initialized='1';renderAssetPicker('bt-assets',btM.value,[])} }
@@ -3045,90 +3059,74 @@ def set_assets():
     st["warmup_status"] = "ANÁLISE EM TEMPO REAL"
     return jsonify({"ok": True, "assets": selecionados})
 
-@app.route('/backtest', methods=['POST'])
-def backtest():
-    """Executa o backtest histórico sem bloquear o servidor com buscas sequenciais.
+BACKTEST_JOBS = {}
+BACKTEST_JOBS_LOCK = threading.RLock()
+BACKTEST_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="vision-backtest")
+BACKTEST_JOB_TTL = 900
 
-    Correções principais:
-    - candles dos ativos são buscados em paralelo;
-    - o número de candles solicitado é respeitado (com margem de aquecimento);
-    - ativos sem fonte histórica não derrubam o backtest inteiro;
-    - estratégias são executadas somente para os ativos que realmente possuem dados;
-    - erros e ausência total de dados retornam JSON explicativo, nunca uma página HTML;
-    - o resultado informa quantos ativos foram processados/ignorados.
-    """
-    user = session.get('user')
-    if not user:
-        return jsonify({"ok": False, "error": "Não autenticado. Entre novamente no sistema."}), 401
 
+def _limpar_backtest_jobs():
+    agora = time.time()
+    with BACKTEST_JOBS_LOCK:
+        antigos = [jid for jid, job in BACKTEST_JOBS.items()
+                   if agora - float(job.get("created_at", agora)) > BACKTEST_JOB_TTL]
+        for jid in antigos:
+            BACKTEST_JOBS.pop(jid, None)
+
+
+def _buscar_dados_backtest(ativo, tf):
+    """Busca dados históricos diretamente, sem depender do cache do robô em tempo real."""
+    ticker = MAPA_TICKERS.get(ativo, ativo)
     try:
-        payload = request.get_json(silent=True) or {}
-        try:
-            tf = int(payload.get("timeframe", 5))
-        except Exception:
-            tf = 5
-        if tf not in (1, 5, 15):
-            tf = 5
+        # O cache pode economizar chamadas quando o ativo já foi analisado recentemente,
+        # mas nunca é considerado obrigatório para o backtest.
+        data = obter_dados_cache(ticker, tf)
+        if data is not None and len(data.get("close", [])) >= 60:
+            return ativo, data, None
 
-        market = str(payload.get("market", "TODOS") or "TODOS")
-        mercado_assets = set(ativos_por_mercado(market))
-        assets = []
-        for ativo in (payload.get("assets") or []):
-            ativo = str(ativo).strip()
-            if ativo in mercado_assets and ativo not in assets:
-                assets.append(ativo)
-        if not assets:
-            return jsonify({"ok": False, "error": "Selecione pelo menos um ativo válido para o backtest."}), 400
+        data = get_data_v2(ticker, tf, velas_minimas=60)
+        if data is None or len(data.get("close", [])) < 60:
+            return ativo, None, "Fonte histórica indisponível ou dados insuficientes."
+        return ativo, data, None
+    except Exception as exc:
+        return ativo, None, f"{type(exc).__name__}: {exc}"
 
-        est_req = str(payload.get("estrategia", "TODAS") or "TODAS")
-        if est_req == "TODAS":
-            estrategias = LISTA_ESTRATEGIAS.copy()
-        elif est_req in LISTA_ESTRATEGIAS:
-            estrategias = [est_req]
-        else:
-            estrategias = LISTA_ESTRATEGIAS.copy()
 
-        use_g1 = bool(payload.get("g1", True))
-        try:
-            limit = int(payload.get("limit", 300))
-        except Exception:
-            limit = 300
-        limit = max(100, min(limit, 600))
+def _executar_backtest_job(job_id, user_email, assets, estrategias, tf, limit, use_g1):
+    try:
+        with BACKTEST_JOBS_LOCK:
+            job = BACKTEST_JOBS.get(job_id)
+            if not job:
+                return
+            job["status"] = "running"
+            job["message"] = "Buscando candles históricos..."
+            job["progress"] = 5
 
-        # Busca em paralelo. O código antigo fazia um request de até 5s por ativo,
-        # em sequência; com muitos ativos isso fazia o proxy do Render encerrar a
-        # requisição antes de o Flask conseguir responder.
         dados_por_ativo = {}
         falhas_por_ativo = {}
-        max_workers = min(12, max(1, len(assets)))
+        workers_data = min(10, max(1, len(assets)))
 
-        def buscar_ativo(ativo):
-            ticker = MAPA_TICKERS.get(ativo, ativo)
-            try:
-                data = obter_dados_cache(ticker, tf)
-                if data is None or len(data.get("close", [])) < 60:
-                    data = get_data_v2(ticker, tf, velas_minimas=60)
-                return ativo, data, None
-            except Exception as exc:
-                return ativo, None, str(exc)
-
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="backtest-data") as pool:
-            futuros = [pool.submit(buscar_ativo, ativo) for ativo in assets]
-            for futuro in futuros:
+        with ThreadPoolExecutor(max_workers=workers_data, thread_name_prefix="bt-data") as pool:
+            futures = [pool.submit(_buscar_dados_backtest, ativo, tf) for ativo in assets]
+            total = len(futures)
+            for idx, futuro in enumerate(futures, 1):
                 ativo, data, erro = futuro.result()
                 if data is not None and len(data.get("close", [])) >= 60:
                     dados_por_ativo[ativo] = data
                 else:
-                    falhas_por_ativo[ativo] = erro or "Fonte histórica indisponível ou dados insuficientes."
+                    falhas_por_ativo[ativo] = erro or "Fonte histórica indisponível."
+                with BACKTEST_JOBS_LOCK:
+                    job = BACKTEST_JOBS.get(job_id)
+                    if job:
+                        job["progress"] = min(55, 5 + int((idx / max(1, total)) * 50))
+                        job["message"] = f"Candles recebidos: {idx}/{total} ativos"
 
         if not dados_por_ativo:
-            detalhes = "; ".join(f"{a}: {e}" for a, e in list(falhas_por_ativo.items())[:6])
-            return jsonify({
-                "ok": False,
-                "error": "Nenhum dos ativos selecionados retornou candles históricos suficientes. "
-                         "Verifique a fonte de mercado e tente novamente.",
-                "details": detalhes
-            }), 503
+            detalhes = "; ".join(f"{a}: {e}" for a, e in list(falhas_por_ativo.items())[:8])
+            raise RuntimeError(
+                "Nenhum dos ativos selecionados retornou candles históricos suficientes. "
+                "Verifique a fonte pública e tente novamente. " + (f"Detalhes: {detalhes}" if detalhes else "")
+            )
 
         def executar_ativo(ativo, data):
             local_rows = []
@@ -3147,22 +3145,26 @@ def backtest():
                     return ativo, local_rows, local_asset, local_est, 0, 0, 0, 0
 
                 c = base["close"]
-                # 50 candles de aquecimento; os "limit" últimos candles são o período avaliado.
-                inicio = max(50, len(c) - limit)
-                fim = len(c) - 1
+                inicio = max(50, len(c) - limit - 1)
+                fim = len(c) - 2
 
                 for est in estrategias:
                     entradas = wins = g1s = losses = 0
-                    for i in range(inicio, fim):
+                    for i in range(inicio, fim + 1):
                         janela = {k: v[:i + 1] for k, v in base.items()}
                         sinal, prob, _ana = analisar_estrategia_detalhada(janela, est)
                         if not sinal or prob < 80:
                             continue
 
                         entradas += 1
+                        # Entrada na abertura do candle seguinte e resultado no fechamento
+                        # desse mesmo candle. Isso evita comparar o fechamento atual com ele mesmo.
                         prox_open = float(base["open"][i + 1])
                         prox_close = float(base["close"][i + 1])
-                        # Resultado da entrada é sempre medido no candle imediatamente posterior.
+                        if not np.isfinite(prox_open) or not np.isfinite(prox_close):
+                            entradas -= 1
+                            continue
+
                         direto = (prox_close > prox_open) if sinal == "CALL" else (prox_close < prox_open)
                         if direto:
                             wins += 1
@@ -3206,20 +3208,19 @@ def backtest():
 
                 return ativo, local_rows, local_asset, local_est, total_e, total_w, total_g, total_l
             except Exception as exc:
-                print(f"⚠️ Backtest isolado {ativo}: {exc}")
+                print(f"⚠️ Backtest isolado {ativo}: {type(exc).__name__}: {exc}")
                 return ativo, local_rows, local_asset, local_est, 0, 0, 0, 0
 
         rows = []
         asset_acc = {}
         est_acc = {}
         total_entries = total_wins = total_g1 = total_losses = 0
+        workers_calc = min(6, max(1, len(dados_por_ativo)))
 
-        # Cada ativo é independente; processá-los em paralelo reduz muito o tempo
-        # quando o usuário seleciona vários pares.
-        workers_calc = min(8, max(1, len(dados_por_ativo)))
-        with ThreadPoolExecutor(max_workers=workers_calc, thread_name_prefix="backtest-calc") as pool:
-            futuros = [pool.submit(executar_ativo, ativo, data) for ativo, data in dados_por_ativo.items()]
-            for futuro in futuros:
+        with ThreadPoolExecutor(max_workers=workers_calc, thread_name_prefix="bt-calc") as pool:
+            futures = [pool.submit(executar_ativo, ativo, data) for ativo, data in dados_por_ativo.items()]
+            total_calc = len(futures)
+            for idx, futuro in enumerate(futures, 1):
                 ativo, local_rows, local_asset, local_est, te, tw, tg, tl = futuro.result()
                 rows.extend(local_rows)
                 if local_asset.get("entradas", 0):
@@ -3232,6 +3233,11 @@ def backtest():
                 total_wins += tw
                 total_g1 += tg
                 total_losses += tl
+                with BACKTEST_JOBS_LOCK:
+                    job = BACKTEST_JOBS.get(job_id)
+                    if job:
+                        job["progress"] = min(95, 55 + int((idx / max(1, total_calc)) * 40))
+                        job["message"] = f"Calculando estratégias: {idx}/{total_calc} ativos"
 
         rows.sort(key=lambda x: (-x["assertividade"], -x["entradas"], -x["wins"]))
 
@@ -3258,8 +3264,6 @@ def backtest():
             "losses": total_losses,
             "assertividade": round(((total_wins + total_g1) / concl * 100), 1) if concl else 0
         }
-
-        source = "Yahoo Finance / CryptoCompare (candles históricos públicos)"
         ignorados = list(falhas_por_ativo.keys())
         note = (
             f"Processados {len(dados_por_ativo)} de {len(assets)} ativo(s). "
@@ -3267,19 +3271,105 @@ def backtest():
             "Com G1, a primeira falha é testada no candle seguinte. "
             "Para OTC, o ticker público equivalente é apenas um proxy e não representa o feed OTC proprietário."
         )
-        return jsonify({
+        result = {
             "ok": True,
             "summary": summary,
             "rows": rows[:100],
             "top_assets": finalize_map(asset_acc, "ativo"),
             "top_strategies": finalize_map(est_acc, "estrategia"),
             "meta": f"M{tf} • {len(dados_por_ativo)}/{len(assets)} ativo(s) • {'com G1' if use_g1 else 'sem G1'} • {limit} candles avaliados/ativo",
-            "source": source,
+            "source": "Yahoo Finance / CryptoCompare (candles históricos públicos)",
             "note": note
-        })
-    except Exception as e:
-        print(f"⚠️ Backtest geral: {type(e).__name__}: {e}")
-        return jsonify({"ok": False, "error": f"Falha interna no backtest: {type(e).__name__}. Consulte os logs do servidor."}), 500
+        }
+        with BACKTEST_JOBS_LOCK:
+            job = BACKTEST_JOBS.get(job_id)
+            if job:
+                job["status"] = "done"
+                job["progress"] = 100
+                job["message"] = "Backtest concluído."
+                job["result"] = result
+    except Exception as exc:
+        print(f"⚠️ Backtest geral {job_id}: {type(exc).__name__}: {exc}")
+        with BACKTEST_JOBS_LOCK:
+            job = BACKTEST_JOBS.get(job_id)
+            if job:
+                job["status"] = "error"
+                job["progress"] = 100
+                job["message"] = f"Falha no backtest: {type(exc).__name__}"
+                job["error"] = str(exc)
+
+
+@app.route('/backtest', methods=['POST'])
+def backtest():
+    """Inicia o backtest em segundo plano para não deixar a requisição HTTP aberta."""
+    user = session.get('user')
+    if not user:
+        return jsonify({"ok": False, "error": "Não autenticado. Entre novamente no sistema."}), 401
+
+    _limpar_backtest_jobs()
+    try:
+        payload = request.get_json(silent=True) or {}
+        try:
+            tf = int(payload.get("timeframe", 5))
+        except Exception:
+            tf = 5
+        if tf not in (1, 5, 15):
+            tf = 5
+
+        market = str(payload.get("market", "TODOS") or "TODOS")
+        mercado_assets = set(ativos_por_mercado(market))
+        assets = []
+        for ativo in (payload.get("assets") or []):
+            ativo = str(ativo).strip()
+            if ativo in mercado_assets and ativo not in assets:
+                assets.append(ativo)
+        if not assets:
+            return jsonify({"ok": False, "error": "Selecione pelo menos um ativo válido para o backtest."}), 400
+
+        est_req = str(payload.get("estrategia", "TODAS") or "TODAS")
+        estrategias = LISTA_ESTRATEGIAS.copy() if est_req == "TODAS" else ([est_req] if est_req in LISTA_ESTRATEGIAS else LISTA_ESTRATEGIAS.copy())
+        use_g1 = bool(payload.get("g1", True))
+        try:
+            limit = int(payload.get("limit", 300))
+        except Exception:
+            limit = 300
+        limit = max(100, min(limit, 600))
+
+        job_id = f"bt_{session.get('user','user')}_{time.time_ns()}"
+        with BACKTEST_JOBS_LOCK:
+            BACKTEST_JOBS[job_id] = {
+                "user": user,
+                "status": "queued",
+                "progress": 0,
+                "message": "Backtest colocado na fila.",
+                "created_at": time.time(),
+                "result": None,
+                "error": ""
+            }
+        BACKTEST_EXECUTOR.submit(_executar_backtest_job, job_id, user, assets, estrategias, tf, limit, use_g1)
+        return jsonify({"ok": True, "job_id": job_id, "status": "queued"}), 202
+    except Exception as exc:
+        print(f"⚠️ Falha ao iniciar backtest: {type(exc).__name__}: {exc}")
+        return jsonify({"ok": False, "error": f"Não foi possível iniciar o backtest: {type(exc).__name__}."}), 500
+
+
+@app.route('/backtest/status/<job_id>', methods=['GET'])
+def backtest_status(job_id):
+    user = session.get('user')
+    if not user:
+        return jsonify({"ok": False, "error": "Não autenticado. Entre novamente no sistema."}), 401
+    with BACKTEST_JOBS_LOCK:
+        job = BACKTEST_JOBS.get(job_id)
+        if not job:
+            return jsonify({"ok": False, "error": "Backtest não encontrado ou expirado."}), 404
+        if job.get("user") != user:
+            return jsonify({"ok": False, "error": "Acesso negado a este backtest."}), 403
+        status = job.get("status", "queued")
+        if status == "done":
+            return jsonify({"ok": True, "status": status, "progress": 100, "message": job.get("message"), "result": job.get("result")})
+        if status == "error":
+            return jsonify({"ok": False, "status": status, "progress": job.get("progress", 100), "error": job.get("error") or job.get("message")})
+        return jsonify({"ok": True, "status": status, "progress": job.get("progress", 0), "message": job.get("message", "Processando...")})
 
 @app.route('/command/<cmd>')
 def command(cmd):
