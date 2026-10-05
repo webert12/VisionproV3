@@ -1333,6 +1333,9 @@ INVESTING_CALENDAR_CACHE = {
     "events": [],
     "ok": False,
     "error": "",
+    "source": "",
+    "last_success": 0.0,
+    "degraded": False,
 }
 INVESTING_CALENDAR_LOCK = threading.Lock()
 
@@ -1352,20 +1355,17 @@ def _limpar_html_investing(valor):
 
 
 def _parsear_datetime_investing(valor, origem="local"):
-    """Converte data/hora do Investing.com sem deslocar 3 horas por engano."""
+    """Converte data/hora do calendário para America/Sao_Paulo sem deslocamento indevido."""
     if valor is None or valor == "":
         return None
-
     bruto = str(valor).strip()
 
-    # event_timestamp pode aparecer como timestamp Unix em algumas respostas.
     if re.fullmatch(r"\d{10}(?:\.\d+)?", bruto):
         try:
             return datetime.fromtimestamp(float(bruto), tz=pytz.utc).astimezone(FUSO_SP)
         except Exception:
             return None
 
-    # Algumas versões usam ISO com timezone.
     try:
         iso = bruto.replace("Z", "+00:00")
         dt_iso = datetime.fromisoformat(iso)
@@ -1375,16 +1375,13 @@ def _parsear_datetime_investing(valor, origem="local"):
         pass
 
     for fmt in (
-        "%Y/%m/%d %H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y/%m/%d %H:%M",
-        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M",
     ):
         try:
             dt = datetime.strptime(bruto, fmt)
             if origem == "utc":
                 return pytz.utc.localize(dt).astimezone(FUSO_SP)
-            # Com timeZone=12, o Investing devolve o horário do calendário em GMT-3.
             return FUSO_SP.localize(dt)
         except ValueError:
             continue
@@ -1392,214 +1389,247 @@ def _parsear_datetime_investing(valor, origem="local"):
 
 
 def _extrair_eventos_investing(html_resposta):
-    """Extrai somente eventos de 2 ou 3 estrelas/touros do calendário."""
+    """Parser tolerante para HTML/JSON retornado pelo Investing.com."""
     if not html_resposta:
         return []
-
     texto = html_resposta.decode("utf-8", errors="ignore") if isinstance(html_resposta, bytes) else str(html_resposta)
 
-    # O endpoint Service retorna JSON com o HTML dentro de data.
     try:
         obj = json.loads(texto)
-        if isinstance(obj, dict) and obj.get("data"):
-            texto = obj["data"]
+        if isinstance(obj, dict):
+            for chave in ("data", "html", "content", "result"):
+                if obj.get(chave):
+                    texto = obj[chave]
+                    break
     except Exception:
         pass
 
-    # Aceita tanto js-event-item quanto eventRowId_ (variações do Investing).
     rows = re.findall(
         r"<tr\b[^>]*(?:class=[\"'][^\"']*js-event-item[^\"']*|id=[\"']eventRowId_[^\"']+)[^>]*>.*?</tr>",
-        texto,
-        flags=re.I | re.S,
-    )
-
-    # Fallback mais amplo para respostas do widget/espelho.
+        texto, flags=re.I | re.S)
     if not rows:
         rows = re.findall(r"<tr\b[^>]*id=[\"'][^\"']*eventRowId[^\"']*[\"'][^>]*>.*?</tr>", texto, flags=re.I | re.S)
+    if not rows:
+        # Algumas respostas atuais chegam sem a classe antiga, mas ainda carregam
+        # data-event-datetime + flagCur + sentiment na mesma linha.
+        rows = re.findall(r"<tr\b[^>]*>.*?data-event-datetime=.*?flagCur.*?sentiment.*?</tr>", texto, flags=re.I | re.S)
 
-    eventos = []
-    vistos = set()
-
+    eventos=[]; vistos=set()
     for row in rows:
-        # data-event-datetime normalmente representa o horário exibido pelo calendário.
-        m_dt = re.search(r'data-event-datetime=[\"\']([^\"\']+)', row, flags=re.I)
+        m_dt=re.search(r'data-event-datetime=[\"\']([^\"\']+)',row,flags=re.I)
         if m_dt:
-            dt_evento = _parsear_datetime_investing(m_dt.group(1), origem="local")
+            dt_evento=_parsear_datetime_investing(m_dt.group(1),"local")
         else:
-            m_ts = re.search(r'event_timestamp=[\"\']([^\"\']+)', row, flags=re.I)
-            dt_evento = _parsear_datetime_investing(m_ts.group(1) if m_ts else "", origem="utc")
+            m_ts=re.search(r'event_timestamp=[\"\']([^\"\']+)',row,flags=re.I)
+            dt_evento=_parsear_datetime_investing(m_ts.group(1) if m_ts else "","utc")
         if not dt_evento:
             continue
 
-        # Moeda: o Investing usa td.flagCur e, em algumas versões, title/data-attr.
-        m_cur = re.search(
-            r'<td[^>]*class=["\'][^"\']*flagCur[^"\']*["\'][^>]*>(.*?)</td>',
-            row,
-            flags=re.I | re.S,
-        )
-        currency_text = _limpar_html_investing(m_cur.group(1) if m_cur else "")
-        currencies = re.findall(r"\b[A-Z]{3}\b", currency_text.upper())
-        currency = currencies[0] if currencies else ""
+        m_cur=re.search(r'<td[^>]*class=[\"\'][^\"\']*flagCur[^\"\']*[\"\'][^>]*>(.*?)</td>',row,flags=re.I|re.S)
+        currency_text=_limpar_html_investing(m_cur.group(1) if m_cur else "")
+        currencies=re.findall(r"\b[A-Z]{3}\b",currency_text.upper())
+        currency=currencies[0] if currencies else ""
         if not currency and m_cur:
-            m_title = re.search(r'(?:title|data-currency)=["\']([A-Za-z]{3})["\']', m_cur.group(1), flags=re.I)
-            currency = m_title.group(1).upper() if m_title else ""
+            m_title=re.search(r'(?:title|data-currency)=[\"\']([A-Za-z]{3})',m_cur.group(1),flags=re.I)
+            currency=m_title.group(1).upper() if m_title else ""
 
-        # Impacto: 2/3 grayFullBullishIcon = 2/3 touros/estrelas.
-        m_sent = re.search(
-            r'<td[^>]*class=["\'][^"\']*sentiment[^"\']*["\'][^>]*>(.*?)</td>',
-            row,
-            flags=re.I | re.S,
-        )
-        sentiment_html = m_sent.group(1) if m_sent else ""
-        impacto = len(re.findall(r"grayFullBullishIcon", sentiment_html, flags=re.I))
-
-        # Fallbacks para versões que expõem bull1/bull2/bull3 ou quantidade de ícones.
-        if impacto <= 0:
-            m_bull = re.search(r'data-img_key=["\']bull([1-3])["\']', sentiment_html, flags=re.I)
-            impacto = int(m_bull.group(1)) if m_bull else 0
-        if impacto <= 0:
-            bull_classes = re.findall(r"bull(?:ish)?(?:Icon)?(?:[ _-]?(?:1|2|3))?", sentiment_html, flags=re.I)
-            if bull_classes:
-                impacto = min(3, len(bull_classes))
-
-        if not currency or impacto < NEWS_MIN_IMPACT:
+        m_sent=re.search(r'<td[^>]*class=[\"\'][^\"\']*sentiment[^\"\']*[\"\'][^>]*>(.*?)</td>',row,flags=re.I|re.S)
+        sentiment_html=m_sent.group(1) if m_sent else ""
+        impacto=len(re.findall(r"grayFullBullishIcon",sentiment_html,flags=re.I))
+        if impacto<=0:
+            m_bull=re.search(r'data-img_key=[\"\']bull([1-3])[\"\']',sentiment_html,flags=re.I)
+            impacto=int(m_bull.group(1)) if m_bull else 0
+        if impacto<=0:
+            icons=re.findall(r"(?:bullish|bull)[^<\"']*",sentiment_html,flags=re.I)
+            if icons:
+                impacto=min(3,len(icons))
+        if not currency or impacto<NEWS_MIN_IMPACT:
             continue
 
-        m_event = re.search(
-            r'<td[^>]*class=["\'][^"\']*event[^"\']*["\'][^>]*>(.*?)</td>',
-            row,
-            flags=re.I | re.S,
-        )
-        nome_evento = _limpar_html_investing(m_event.group(1) if m_event else "") or "Evento econômico"
-
-        chave = (dt_evento.isoformat(), currency, impacto, nome_evento)
+        m_event=re.search(r'<td[^>]*class=[\"\'][^\"\']*event[^\"\']*[\"\'][^>]*>(.*?)</td>',row,flags=re.I|re.S)
+        nome_evento=_limpar_html_investing(m_event.group(1) if m_event else "") or "Evento econômico"
+        chave=(dt_evento.isoformat(),currency,impacto,nome_evento)
         if chave in vistos:
             continue
         vistos.add(chave)
-        eventos.append({
-            "datetime": dt_evento,
-            "currency": currency,
-            "impact": impacto,
-            "event": nome_evento,
-        })
-
-    eventos.sort(key=lambda x: x["datetime"])
+        eventos.append({"datetime":dt_evento,"currency":currency,"impact":impacto,"event":nome_evento,"source":"Investing.com"})
+    eventos.sort(key=lambda x:x["datetime"])
     return eventos
 
 
+def _extrair_eventos_forexfactory_json(resposta):
+    """Fallback de calendário. Não substitui o Investing; só mantém a proteção viva."""
+    try:
+        dados=resposta.json() if hasattr(resposta,"json") else json.loads(resposta)
+    except Exception:
+        return []
+    if not isinstance(dados,list):
+        return []
+    mapa_impacto={"high":3,"medium":2,"low":1,"holiday":1}
+    eventos=[]
+    for item in dados:
+        if not isinstance(item,dict):
+            continue
+        currency=str(item.get("country") or item.get("currency") or "").upper().strip()
+        impacto=mapa_impacto.get(str(item.get("impact") or "").lower().strip(),0)
+        if not currency or impacto<NEWS_MIN_IMPACT:
+            continue
+        bruto=item.get("date") or item.get("datetime") or item.get("timestamp")
+        dt=None
+        if isinstance(bruto,(int,float)):
+            try: dt=datetime.fromtimestamp(float(bruto),tz=pytz.utc).astimezone(FUSO_SP)
+            except Exception: dt=None
+        elif bruto:
+            dt=_parsear_datetime_investing(str(bruto),"utc")
+        if not dt:
+            continue
+        nome=str(item.get("title") or item.get("event") or "Evento econômico").strip()
+        eventos.append({"datetime":dt,"currency":currency,"impact":impacto,"event":nome,"source":"Calendário alternativo"})
+    eventos.sort(key=lambda x:x["datetime"])
+    return eventos
+
+
+def _http_investing_request(sess, method, url, **kwargs):
+    """Pequena camada de resiliência para Render: retry + backoff + timeouts curtos."""
+    ultima=None
+    for tentativa in range(3):
+        try:
+            if method=="POST":
+                resp=sess.post(url,**kwargs)
+            else:
+                resp=sess.get(url,**kwargs)
+            if resp.status_code in (200,204):
+                return resp
+            ultima=RuntimeError(f"HTTP {resp.status_code}")
+            if resp.status_code not in (403,408,425,429,500,502,503,504):
+                break
+        except Exception as exc:
+            ultima=exc
+        time.sleep(0.8*(tentativa+1))
+    if ultima:
+        raise ultima
+    return None
+
+
 def atualizar_calendario_investing(force=False):
-    """Consulta o Investing.com e mantém apenas eventos reais de 2/3 touros."""
-    agora_ts = time.time()
+    """Atualiza o calendário com múltiplas rotas do Investing e fallback controlado."""
+    agora_ts=time.time()
     with INVESTING_CALENDAR_LOCK:
-        if not force and (agora_ts - INVESTING_CALENDAR_CACHE.get("updated", 0)) < NEWS_CACHE_TTL:
-            return INVESTING_CALENDAR_CACHE.get("ok", False)
+        if not force and (agora_ts-float(INVESTING_CALENDAR_CACHE.get("updated",0) or 0))<NEWS_CACHE_TTL:
+            return bool(INVESTING_CALENDAR_CACHE.get("ok",False))
 
-        hoje = agora_brasilia().date()
-        amanha = hoje + timedelta(days=1)
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/140.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-            "X-Requested-With": "XMLHttpRequest",
-            "Origin": "https://www.investing.com",
-            "Referer": "https://www.investing.com/economic-calendar/",
+        hoje=agora_brasilia().date(); amanha=hoje+timedelta(days=1)
+        headers={
+            "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+            "Accept":"text/html,application/json;q=0.9,*/*;q=0.8",
+            "Accept-Language":"pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "X-Requested-With":"XMLHttpRequest",
+            "Origin":"https://www.investing.com",
+            "Referer":"https://www.investing.com/economic-calendar/",
+            "Connection":"keep-alive",
         }
+        eventos=[]; erros=[]; sucesso_investing=False; fonte=""
 
-        eventos = []
-        erro = ""
-        sucesso_fonte = False
-
-        # 1) Endpoint oficial usado pelo calendário.
-        urls_api = [
+        urls_api=[
             "https://br.investing.com/economic-calendar/Service/getCalendarFilteredData",
             "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData",
         ]
-
         for url in urls_api:
             try:
                 with requests.Session() as sess:
-                    base = url.split("/Service/")[0] + "/"
-                    sess.headers.update({"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]})
-                    try:
-                        sess.get(base, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=8)
-                    except Exception:
-                        pass
-
-                    payload = {
-                        "country[]": INVESTING_COUNTRIES.split(","),
-                        "dateFrom": hoje.strftime("%Y-%m-%d"),
-                        "dateTo": amanha.strftime("%Y-%m-%d"),
-                        "timeZone": INVESTING_TIMEZONE,
-                        "timeFilter": "timeRemain",
-                        "currentTab": "custom",
-                        "submitFilters": "1",
-                        "limit_from": "0",
+                    sess.headers.update(headers)
+                    base=url.split("/Service/")[0]+"/"
+                    try: _http_investing_request(sess,"GET",base,headers=headers,timeout=(5,8))
+                    except Exception: pass
+                    payload={
+                        "country[]":INVESTING_COUNTRIES.split(","),"dateFrom":hoje.strftime("%Y-%m-%d"),
+                        "dateTo":amanha.strftime("%Y-%m-%d"),"timeZone":INVESTING_TIMEZONE,
+                        "timezoneId":INVESTING_TIMEZONE,"timeFilter":"timeRemain","currentTab":"custom",
+                        "submitFilters":"1","limit_from":"0","limit":"0,200",
                     }
-                    resp = sess.post(url, data=payload, headers=headers, timeout=12)
-                    if resp.status_code == 200 and resp.text:
-                        sucesso_fonte = True
-                        eventos = _extrair_eventos_investing(resp.text)
-                        # Resposta válida sem eventos de 2/3 touros é normal.
-                        break
-                    erro = f"HTTP {resp.status_code} em {url}"
+                    resp=_http_investing_request(sess,"POST",url,data=payload,headers=headers,timeout=(5,15))
+                    if resp and resp.text:
+                        parsed=_extrair_eventos_investing(resp.text)
+                        # HTTP 200 + HTML sem parser não é considerado sucesso: isso evita
+                        # o falso "ATIVA" quando o Investing devolve uma página de bloqueio.
+                        if parsed or "economic-calendar" in resp.text.lower() or "eventrowid" in resp.text.lower():
+                            sucesso_investing=True; eventos=parsed; fonte="Investing.com API/Service"; break
             except Exception as exc:
-                erro = str(exc)
+                erros.append(f"API:{type(exc).__name__}: {str(exc)[:100]}")
 
-        # 2) Página oficial do calendário como fallback.
-        if not sucesso_fonte:
-            for url in ("https://br.investing.com/economic-calendar/", "https://www.investing.com/economic-calendar/"):
+        if not sucesso_investing:
+            urls_paginas=[
+                "https://br.investing.com/economic-calendar/index",
+                "https://br.investing.com/economic-calendar/",
+                "https://www.investing.com/economic-calendar/index",
+                "https://www.investing.com/economic-calendar/",
+            ]
+            for url in urls_paginas:
                 try:
-                    resp = requests.get(url, headers={**headers, "X-Requested-With": ""}, timeout=12)
-                    if resp.status_code == 200 and resp.text:
-                        sucesso_fonte = True
-                        eventos = _extrair_eventos_investing(resp.text)
-                        break
-                    erro = f"HTTP {resp.status_code} em {url}"
+                    with requests.Session() as sess:
+                        sess.headers.update(headers)
+                        resp=_http_investing_request(sess,"GET",url,headers={**headers,"X-Requested-With":""},timeout=(5,15))
+                        if resp and resp.text:
+                            parsed=_extrair_eventos_investing(resp.text)
+                            if parsed:
+                                sucesso_investing=True; eventos=parsed; fonte="Investing.com página"; break
+                            erros.append(f"HTML sem eventos:{url}")
                 except Exception as exc:
-                    erro = str(exc)
+                    erros.append(f"HTML:{type(exc).__name__}: {str(exc)[:100]}")
 
-        # 3) Widget oficial do Investing.com: alternativa quando o endpoint principal
-        # estiver protegido/indisponível no servidor do Render.
-        if not sucesso_fonte:
-            widget_url = (
-                "https://sslecal2.investing.com/?"
-                "columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous&"
-                "features=datepicker,timezone&"
-                f"countries={INVESTING_COUNTRIES}&"
-                "calType=week&"
-                f"timeZone={INVESTING_TIMEZONE}&"
-                "lang=12"
-            )
+        if not sucesso_investing:
+            widgets=[
+                "https://sslecal2.investing.com/",
+                "https://sslecal2.investing.com/?columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous&features=datepicker,timezone&countries="+INVESTING_COUNTRIES+"&calType=week&timeZone="+INVESTING_TIMEZONE+"&lang=12",
+            ]
+            for url in widgets:
+                try:
+                    resp=requests.get(url,headers={"User-Agent":headers["User-Agent"],"Accept-Language":headers["Accept-Language"]},timeout=(5,15))
+                    if resp.status_code==200 and resp.text:
+                        parsed=_extrair_eventos_investing(resp.text)
+                        if parsed:
+                            sucesso_investing=True; eventos=parsed; fonte="Investing.com widget"; break
+                except Exception as exc:
+                    erros.append(f"WIDGET:{type(exc).__name__}: {str(exc)[:100]}")
+
+        # Fallback somente para continuidade operacional. O Investing continua sendo
+        # a fonte prioritária. O feed semanal é leve e deve ser consultado com baixa frequência.
+        if not sucesso_investing:
             try:
-                resp = requests.get(widget_url, headers={"User-Agent": headers["User-Agent"], "Accept-Language": headers["Accept-Language"]}, timeout=12)
-                if resp.status_code == 200 and resp.text:
-                    sucesso_fonte = True
-                    eventos = _extrair_eventos_investing(resp.text)
+                ff=requests.get("https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+                                headers={"User-Agent":headers["User-Agent"],"Accept":"application/json"},timeout=(5,12))
+                if ff.status_code==200 and ff.text:
+                    parsed=_extrair_eventos_forexfactory_json(ff)
+                    if parsed:
+                        eventos=parsed; fonte="Calendário alternativo"; sucesso_investing=True
             except Exception as exc:
-                erro = str(exc)
+                erros.append(f"FALLBACK:{type(exc).__name__}: {str(exc)[:100]}")
 
-        INVESTING_CALENDAR_CACHE["updated"] = agora_ts
-
-        if sucesso_fonte:
-            INVESTING_CALENDAR_CACHE["events"] = eventos
-            INVESTING_CALENDAR_CACHE["ok"] = True
-            INVESTING_CALENDAR_CACHE["error"] = ""
+        INVESTING_CALENDAR_CACHE["updated"]=agora_ts
+        INVESTING_CALENDAR_CACHE["source"]=fonte
+        INVESTING_CALENDAR_CACHE["error"]=" | ".join(erros[-4:])
+        if sucesso_investing:
+            INVESTING_CALENDAR_CACHE["events"]=eventos
+            INVESTING_CALENDAR_CACHE["ok"]=True
+            INVESTING_CALENDAR_CACHE["last_success"]=agora_ts
+            INVESTING_CALENDAR_CACHE["degraded"]=fonte!="Investing.com API/Service" and not fonte.startswith("Investing.com página")
         else:
-            # Não limpa eventos antigos aqui para facilitar diagnóstico, mas o motor
-            # não usa cache antigo quando a fonte não confirmou uma atualização.
-            INVESTING_CALENDAR_CACHE["ok"] = False
-            INVESTING_CALENDAR_CACHE["error"] = erro or "Fonte indisponível"
+            # Mantém um snapshot recém-confirmado por até 10 minutos para não perder
+            # uma proteção durante uma falha transitória do Render/DNS.
+            ultima=float(INVESTING_CALENDAR_CACHE.get("last_success",0) or 0)
+            cache_recente=ultima>0 and (agora_ts-ultima)<=600 and bool(INVESTING_CALENDAR_CACHE.get("events"))
+            INVESTING_CALENDAR_CACHE["ok"]=cache_recente
+            INVESTING_CALENDAR_CACHE["degraded"]=cache_recente
+            if cache_recente:
+                INVESTING_CALENDAR_CACHE["source"]="CACHE RECENTE — INVESTING"
+            else:
+                INVESTING_CALENDAR_CACHE["events"]=[]
+        return bool(INVESTING_CALENDAR_CACHE.get("ok",False))
 
-        return sucesso_fonte
 
-
-CALENDAR_FETCH_INFLIGHT = None
-CALENDAR_FETCH_LOCK = threading.Lock()
-CALENDAR_REFRESH_INTERVAL = 60.0
+CALENDAR_FETCH_INFLIGHT=None
+CALENDAR_FETCH_LOCK=threading.Lock()
+CALENDAR_REFRESH_INTERVAL=60.0
 
 def _agendar_calendario_investing_async():
     global CALENDAR_FETCH_INFLIGHT
@@ -1608,11 +1638,10 @@ def _agendar_calendario_investing_async():
         atualizado=float(INVESTING_CALENDAR_CACHE.get("updated",0) or 0)
         if CALENDAR_FETCH_INFLIGHT is not None and not CALENDAR_FETCH_INFLIGHT.done():
             return
-        if agora-atualizado < CALENDAR_REFRESH_INTERVAL:
+        if agora-atualizado<CALENDAR_REFRESH_INTERVAL:
             return
         try:
-            fut=DATA_FETCH_EXECUTOR.submit(atualizar_calendario_investing, True)
-            CALENDAR_FETCH_INFLIGHT=fut
+            CALENDAR_FETCH_INFLIGHT=DATA_FETCH_EXECUTOR.submit(atualizar_calendario_investing,True)
         except Exception as exc:
             print(f"⚠️ Não foi possível agendar calendário Investing: {exc}")
 
@@ -2979,7 +3008,7 @@ def command(cmd):
         st["ultima_confirmacao_msg_id"] = None
         st["ultima_confirmacao_alert_id"] = None
         st["sessao_resultados"] = []
-        st["news_guard_status"] = "CONSULTANDO INVESTING.COM"
+        st["news_guard_status"] = "CONSULTANDO CALENDÁRIO ECONÔMICO"
         st["news_guard_event"] = None
         st["news_blocked_assets"] = []
         st["news_guard_updated"] = 0.0
@@ -3562,6 +3591,8 @@ def bot_loop():
                     detalhes_bloqueados = []
 
                     if calendario_ok:
+                        fonte_cal = INVESTING_CALENDAR_CACHE.get("source", "Investing.com")
+                        degradado = bool(INVESTING_CALENDAR_CACHE.get("degraded", False))
                         for ativo_candidato in ativos:
                             evento_candidato = evento_bloqueia_ativo(ativo_candidato, agora_scan, eventos_calendario)
                             if evento_candidato:
@@ -3585,13 +3616,13 @@ def bot_loop():
                                 "count": len(ativos_bloqueados),
                             }
                         else:
-                            st["news_guard_status"] = "ATIVA — SEM BLOQUEIO"
+                            st["news_guard_status"] = (f"ATIVA — SEM BLOQUEIO • {fonte_cal}" if not degradado else f"MODO RESERVA — SEM BLOQUEIO • {fonte_cal}")
                             st["news_guard_event"] = None
                     else:
                         # FAIL-OPEN: se o Investing não responder, não inventamos
                         # uma notícia e não bloqueamos o mercado inteiro.
                         ativos_bloqueados = set()
-                        st["news_guard_status"] = "INVESTING INDISPONÍVEL — ANÁLISE LIBERADA"
+                        st["news_guard_status"] = "CALENDÁRIO INDISPONÍVEL — ANÁLISE LIBERADA"
                         st["news_guard_event"] = None
                         st["news_guard_updated"] = time.time()
 
