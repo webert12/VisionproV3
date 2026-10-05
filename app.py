@@ -662,7 +662,49 @@ function selecionarTodosAtivos(){const m=(latestData&&latestData.mercado)||'TODO
 function limparAtivosOperacao(){document.querySelectorAll('#operating-assets input').forEach(x=>{x.checked=false;x.parentElement.classList.remove('selected')});saveOperatingAssets()}
 function btSelecionarTodos(){const m=document.getElementById('bt-market').value;renderAssetPicker('bt-assets',m,assetsForMarket(m))}
 function btLimparAtivos(){document.querySelectorAll('#bt-assets input').forEach(x=>{x.checked=false;x.parentElement.classList.remove('selected')})}
-function executarBacktest(){const box=document.getElementById('backtest-results');const assets=pickerValues('bt-assets');if(!assets.length){toast('Selecione pelo menos um ativo para o backtest');return}box.innerHTML='<div class="card"><div class="card-pad empty">⏳ Executando backtest histórico...</div></div>';fetch('/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({timeframe:Number(document.getElementById('bt-tf').value),market:document.getElementById('bt-market').value,estrategia:document.getElementById('bt-est').value,g1:document.getElementById('bt-g1').value==='sim',limit:Number(document.getElementById('bt-limit').value),assets})}).then(r=>r.json()).then(d=>{if(!d.ok){box.innerHTML='<div class="card"><div class="card-pad empty">❌ '+(d.error||'Falha no backtest')+'</div></div>';return}renderBacktestResults(d)}).catch(()=>{box.innerHTML='<div class="card"><div class="card-pad empty">❌ Falha de comunicação com o servidor.</div></div>'})}
+async function executarBacktest(){
+    const box=document.getElementById('backtest-results');
+    const assets=pickerValues('bt-assets');
+    if(!assets.length){toast('Selecione pelo menos um ativo para o backtest');return}
+    const payload={
+        timeframe:Number(document.getElementById('bt-tf').value),
+        market:document.getElementById('bt-market').value,
+        estrategia:document.getElementById('bt-est').value,
+        g1:document.getElementById('bt-g1').value==='sim',
+        limit:Number(document.getElementById('bt-limit').value),
+        assets
+    };
+    box.innerHTML='<div class="card"><div class="card-pad empty">⏳ Executando backtest histórico...<br><small>Buscando candles em paralelo e processando somente os ativos selecionados.</small></div></div>';
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),90000);
+    try{
+        const r=await fetch('/backtest',{
+            method:'POST',
+            headers:{'Content-Type':'application/json','Accept':'application/json'},
+            credentials:'same-origin',
+            cache:'no-store',
+            signal:controller.signal,
+            body:JSON.stringify(payload)
+        });
+        const contentType=(r.headers.get('content-type')||'').toLowerCase();
+        let d=null;
+        if(contentType.includes('application/json')) d=await r.json();
+        else{
+            const raw=await r.text();
+            d={ok:false,error:r.status===401?'Sua sessão expirou. Entre novamente no sistema.':('Servidor retornou uma resposta inválida ('+r.status+').')};
+            console.error('[Vision Backtest] resposta não-JSON:',raw.slice(0,500));
+        }
+        if(!r.ok || !d || !d.ok){
+            box.innerHTML='<div class="card"><div class="card-pad empty">❌ '+((d&&d.error)||('Falha no backtest (HTTP '+r.status+').'))+'</div></div>';
+            return;
+        }
+        renderBacktestResults(d);
+    }catch(e){
+        const msg=e&&e.name==='AbortError'?'O backtest demorou mais que 90 segundos. Reduza a quantidade de ativos ou candles e tente novamente.':'Falha de comunicação com o servidor. Verifique se o serviço está online e tente novamente.';
+        console.error('[Vision Backtest]',e);
+        box.innerHTML='<div class="card"><div class="card-pad empty">❌ '+msg+'</div></div>';
+    }finally{clearTimeout(timer)}
+}
 function renderBacktestResults(d){const box=document.getElementById('backtest-results');const s=d.summary||{};const cards=[['Entradas',s.entradas||0,''],['Wins',s.wins||0,'bt-win'],['G1',s.g1||0,'bt-g1'],['Loss',s.losses||0,'bt-loss'],['Assertividade',((s.assertividade||0).toFixed? s.assertividade.toFixed(1):s.assertividade)+'%','']];let html='<div class="card"><div class="card-head"><div><div class="eyebrow">Resultado</div><div class="card-title">Backtest histórico</div></div><div class="mini">'+(d.meta||'')+'</div></div><div class="card-pad"><div class="bt-summary">'+cards.map(c=>`<div class="stat-box"><div class="stat-k">${c[0]}</div><div class="stat-v ${c[2]}">${c[1]}</div></div>`).join('')+'</div></div></div>';const mk=(arr,key)=>'<div class="card"><div class="card-head"><div><div class="eyebrow">Ranking</div><div class="card-title">'+key+'</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Nome</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(arr||[]).map(x=>`<tr><td><b>${x.nome||x.ativo||x.estrategia||'--'}</b></td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+=mk(d.top_assets,'Melhores ativos');html+=mk(d.top_strategies,'Melhores estratégias');html+='<div class="card"><div class="card-head"><div><div class="eyebrow">Detalhamento</div><div class="card-title">Ativo × estratégia</div></div></div><div class="card-pad table-card"><table class="bt-table"><thead><tr><th>Ativo</th><th>Estratégia</th><th>Entradas</th><th>Wins</th><th>G1</th><th>Loss</th><th>Assert.</th></tr></thead><tbody>'+(d.rows||[]).map(x=>`<tr><td><b>${x.ativo}</b></td><td>${x.estrategia}</td><td>${x.entradas}</td><td class="bt-win">${x.wins}</td><td class="bt-g1">${x.g1}</td><td class="bt-loss">${x.losses}</td><td>${x.assertividade}%</td></tr>`).join('')+'</tbody></table></div></div>';html+='<div class="card"><div class="card-pad bt-note">Fonte: '+(d.source||'dados históricos públicos')+'. '+(d.note||'')+'</div></div>';box.innerHTML=html}
 function atualizarAssetPickers(d){assetsCatalog=d.assets_catalog||{};const m=d.mercado||'TODOS';const selected=d.selected_assets||[];const op=document.getElementById('operating-assets');if(op&&!op.dataset.userEditing){renderAssetPicker('operating-assets',m,selected)}const btM=document.getElementById('bt-market');if(btM&&!document.getElementById('bt-assets')?.dataset.initialized){document.getElementById('bt-assets').dataset.initialized='1';renderAssetPicker('bt-assets',btM.value,[])} }
 function registrarResultado(res){fetch('/resultado/'+res,{cache:'no-store'}).then(()=>toast('Resultado registrado')).catch(()=>toast('Falha ao registrar resultado'))}
@@ -3005,76 +3047,239 @@ def set_assets():
 
 @app.route('/backtest', methods=['POST'])
 def backtest():
+    """Executa o backtest histórico sem bloquear o servidor com buscas sequenciais.
+
+    Correções principais:
+    - candles dos ativos são buscados em paralelo;
+    - o número de candles solicitado é respeitado (com margem de aquecimento);
+    - ativos sem fonte histórica não derrubam o backtest inteiro;
+    - estratégias são executadas somente para os ativos que realmente possuem dados;
+    - erros e ausência total de dados retornam JSON explicativo, nunca uma página HTML;
+    - o resultado informa quantos ativos foram processados/ignorados.
+    """
     user = session.get('user')
     if not user:
-        return jsonify({"ok": False, "error": "Não autenticado"}), 401
+        return jsonify({"ok": False, "error": "Não autenticado. Entre novamente no sistema."}), 401
+
     try:
         payload = request.get_json(silent=True) or {}
-        tf = int(payload.get("timeframe", 5))
-        if tf not in (1,5,15): tf = 5
-        market = str(payload.get("market", "TODOS"))
-        mercado_assets=set(ativos_por_mercado(market))
-        assets = [a for a in (payload.get("assets") or []) if a in mercado_assets]
+        try:
+            tf = int(payload.get("timeframe", 5))
+        except Exception:
+            tf = 5
+        if tf not in (1, 5, 15):
+            tf = 5
+
+        market = str(payload.get("market", "TODOS") or "TODOS")
+        mercado_assets = set(ativos_por_mercado(market))
+        assets = []
+        for ativo in (payload.get("assets") or []):
+            ativo = str(ativo).strip()
+            if ativo in mercado_assets and ativo not in assets:
+                assets.append(ativo)
         if not assets:
-            return jsonify({"ok": False, "error": "Selecione pelo menos um ativo."}), 400
-        est_req = str(payload.get("estrategia", "TODAS"))
-        estrategias = LISTA_ESTRATEGIAS.copy() if est_req == "TODAS" else ([est_req] if est_req in LISTA_ESTRATEGIAS else LISTA_ESTRATEGIAS.copy())
+            return jsonify({"ok": False, "error": "Selecione pelo menos um ativo válido para o backtest."}), 400
+
+        est_req = str(payload.get("estrategia", "TODAS") or "TODAS")
+        if est_req == "TODAS":
+            estrategias = LISTA_ESTRATEGIAS.copy()
+        elif est_req in LISTA_ESTRATEGIAS:
+            estrategias = [est_req]
+        else:
+            estrategias = LISTA_ESTRATEGIAS.copy()
+
         use_g1 = bool(payload.get("g1", True))
-        limit = max(100, min(int(payload.get("limit", 300)), 600))
-        rows=[]; asset_acc={}; est_acc={}; total_entries=total_wins=total_g1=total_losses=0
-        for ativo in assets:
+        try:
+            limit = int(payload.get("limit", 300))
+        except Exception:
+            limit = 300
+        limit = max(100, min(limit, 600))
+
+        # Busca em paralelo. O código antigo fazia um request de até 5s por ativo,
+        # em sequência; com muitos ativos isso fazia o proxy do Render encerrar a
+        # requisição antes de o Flask conseguir responder.
+        dados_por_ativo = {}
+        falhas_por_ativo = {}
+        max_workers = min(12, max(1, len(assets)))
+
+        def buscar_ativo(ativo):
             ticker = MAPA_TICKERS.get(ativo, ativo)
-            data = get_data_v2(ticker, tf, velas_minimas=60)
-            if not data or len(data.get("close", [])) < 40:
-                continue
-            n=min(len(data["close"]), limit+32)
-            base={k: np.asarray(v)[-n:] for k,v in data.items() if k in ("time","open","high","low","close")}
-            for est in estrategias:
-                entradas=wins=g1s=losses=0
-                c=base["close"]
-                for i in range(30, len(c)-1):
-                    janela={k: v[:i+1] for k,v in base.items()}
-                    sinal, prob, ana = analisar_estrategia_detalhada(janela, est)
-                    if not sinal or prob < 80:
-                        continue
-                    entradas += 1
-                    prox_open=float(c[i+1] if i+1 < len(c) else np.nan)
-                    prox_close=float(base["close"][i+1])
-                    direto=(prox_close>prox_open) if sinal=="CALL" else (prox_close<prox_open)
-                    if direto:
-                        wins += 1
-                    elif use_g1 and i+2 < len(c):
-                        g_open=float(base["open"][i+2]); g_close=float(base["close"][i+2])
-                        g_ok=(g_close>g_open) if sinal=="CALL" else (g_close<g_open)
-                        if g_ok: g1s += 1
-                        else: losses += 1
-                    else:
-                        losses += 1
-                if entradas:
-                    concl=wins+g1s+losses
-                    acc=((wins+g1s)/concl*100) if concl else 0
-                    row={"ativo":ativo,"estrategia":NOME_ESTRATEGIAS_DISPLAY.get(est,est),"entradas":entradas,"wins":wins,"g1":g1s,"losses":losses,"assertividade":round(acc,1)}
-                    rows.append(row)
-                    ar=asset_acc.setdefault(ativo,{"entradas":0,"wins":0,"g1":0,"losses":0})
-                    er=est_acc.setdefault(est,{"nome":NOME_ESTRATEGIAS_DISPLAY.get(est,est),"entradas":0,"wins":0,"g1":0,"losses":0})
-                    for reg in (ar,er):
-                        reg["entradas"]+=entradas; reg["wins"]+=wins; reg["g1"]+=g1s; reg["losses"]+=losses
-                    total_entries+=entradas; total_wins+=wins; total_g1+=g1s; total_losses+=losses
-        rows.sort(key=lambda x:(-x["assertividade"],-x["entradas"],-x["wins"]))
+            try:
+                data = obter_dados_cache(ticker, tf)
+                if data is None or len(data.get("close", [])) < 60:
+                    data = get_data_v2(ticker, tf, velas_minimas=60)
+                return ativo, data, None
+            except Exception as exc:
+                return ativo, None, str(exc)
+
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="backtest-data") as pool:
+            futuros = [pool.submit(buscar_ativo, ativo) for ativo in assets]
+            for futuro in futuros:
+                ativo, data, erro = futuro.result()
+                if data is not None and len(data.get("close", [])) >= 60:
+                    dados_por_ativo[ativo] = data
+                else:
+                    falhas_por_ativo[ativo] = erro or "Fonte histórica indisponível ou dados insuficientes."
+
+        if not dados_por_ativo:
+            detalhes = "; ".join(f"{a}: {e}" for a, e in list(falhas_por_ativo.items())[:6])
+            return jsonify({
+                "ok": False,
+                "error": "Nenhum dos ativos selecionados retornou candles históricos suficientes. "
+                         "Verifique a fonte de mercado e tente novamente.",
+                "details": detalhes
+            }), 503
+
+        def executar_ativo(ativo, data):
+            local_rows = []
+            local_asset = {"entradas": 0, "wins": 0, "g1": 0, "losses": 0}
+            local_est = {}
+            total_e = total_w = total_g = total_l = 0
+
+            try:
+                n = min(len(data["close"]), limit + 50)
+                base = {
+                    k: np.asarray(data[k])[-n:]
+                    for k in ("time", "open", "high", "low", "close")
+                    if k in data
+                }
+                if any(k not in base for k in ("open", "high", "low", "close")) or len(base["close"]) < 60:
+                    return ativo, local_rows, local_asset, local_est, 0, 0, 0, 0
+
+                c = base["close"]
+                # 50 candles de aquecimento; os "limit" últimos candles são o período avaliado.
+                inicio = max(50, len(c) - limit)
+                fim = len(c) - 1
+
+                for est in estrategias:
+                    entradas = wins = g1s = losses = 0
+                    for i in range(inicio, fim):
+                        janela = {k: v[:i + 1] for k, v in base.items()}
+                        sinal, prob, _ana = analisar_estrategia_detalhada(janela, est)
+                        if not sinal or prob < 80:
+                            continue
+
+                        entradas += 1
+                        prox_open = float(base["open"][i + 1])
+                        prox_close = float(base["close"][i + 1])
+                        # Resultado da entrada é sempre medido no candle imediatamente posterior.
+                        direto = (prox_close > prox_open) if sinal == "CALL" else (prox_close < prox_open)
+                        if direto:
+                            wins += 1
+                        elif use_g1 and i + 2 < len(c):
+                            g_open = float(base["open"][i + 2])
+                            g_close = float(base["close"][i + 2])
+                            g_ok = (g_close > g_open) if sinal == "CALL" else (g_close < g_open)
+                            if g_ok:
+                                g1s += 1
+                            else:
+                                losses += 1
+                        else:
+                            losses += 1
+
+                    if entradas:
+                        concl = wins + g1s + losses
+                        acc = ((wins + g1s) / concl * 100) if concl else 0.0
+                        nome_est = NOME_ESTRATEGIAS_DISPLAY.get(est, est)
+                        local_rows.append({
+                            "ativo": ativo,
+                            "estrategia": nome_est,
+                            "entradas": entradas,
+                            "wins": wins,
+                            "g1": g1s,
+                            "losses": losses,
+                            "assertividade": round(acc, 1)
+                        })
+                        local_asset["entradas"] += entradas
+                        local_asset["wins"] += wins
+                        local_asset["g1"] += g1s
+                        local_asset["losses"] += losses
+                        er = local_est.setdefault(est, {"nome": nome_est, "entradas": 0, "wins": 0, "g1": 0, "losses": 0})
+                        er["entradas"] += entradas
+                        er["wins"] += wins
+                        er["g1"] += g1s
+                        er["losses"] += losses
+                        total_e += entradas
+                        total_w += wins
+                        total_g += g1s
+                        total_l += losses
+
+                return ativo, local_rows, local_asset, local_est, total_e, total_w, total_g, total_l
+            except Exception as exc:
+                print(f"⚠️ Backtest isolado {ativo}: {exc}")
+                return ativo, local_rows, local_asset, local_est, 0, 0, 0, 0
+
+        rows = []
+        asset_acc = {}
+        est_acc = {}
+        total_entries = total_wins = total_g1 = total_losses = 0
+
+        # Cada ativo é independente; processá-los em paralelo reduz muito o tempo
+        # quando o usuário seleciona vários pares.
+        workers_calc = min(8, max(1, len(dados_por_ativo)))
+        with ThreadPoolExecutor(max_workers=workers_calc, thread_name_prefix="backtest-calc") as pool:
+            futuros = [pool.submit(executar_ativo, ativo, data) for ativo, data in dados_por_ativo.items()]
+            for futuro in futuros:
+                ativo, local_rows, local_asset, local_est, te, tw, tg, tl = futuro.result()
+                rows.extend(local_rows)
+                if local_asset.get("entradas", 0):
+                    asset_acc[ativo] = local_asset
+                for est, reg in local_est.items():
+                    acc = est_acc.setdefault(est, {"nome": reg["nome"], "entradas": 0, "wins": 0, "g1": 0, "losses": 0})
+                    for campo in ("entradas", "wins", "g1", "losses"):
+                        acc[campo] += reg[campo]
+                total_entries += te
+                total_wins += tw
+                total_g1 += tg
+                total_losses += tl
+
+        rows.sort(key=lambda x: (-x["assertividade"], -x["entradas"], -x["wins"]))
+
         def finalize_map(m, keyname):
-            out=[]
-            for key,v in m.items():
-                concl=v["wins"]+v["g1"]+v["losses"]
-                out.append({keyname:key,"nome":v.get("nome",key),"entradas":v["entradas"],"wins":v["wins"],"g1":v["g1"],"losses":v["losses"],"assertividade":round(((v["wins"]+v["g1"])/concl*100),1) if concl else 0})
-            return sorted(out,key=lambda x:(-x["assertividade"],-x["entradas"]))[:10]
-        concl=total_wins+total_g1+total_losses
-        summary={"entradas":total_entries,"wins":total_wins,"g1":total_g1,"losses":total_losses,"assertividade":round(((total_wins+total_g1)/concl*100),1) if concl else 0}
-        source="Yahoo Finance/CryptoCompare (candles históricos públicos)"
-        note="Com G1, a primeira falha é testada novamente no candle seguinte. Para OTC, o ticker público equivalente pode representar um proxy e não o feed OTC proprietário."
-        return jsonify({"ok":True,"summary":summary,"rows":rows[:50],"top_assets":finalize_map(asset_acc,"ativo"),"top_strategies":finalize_map(est_acc,"estrategia"),"meta":f"M{tf} • {len(assets)} ativo(s) • {'com G1' if use_g1 else 'sem G1'} • até {limit} candles/ativo","source":source,"note":note})
+            out = []
+            for key, v in m.items():
+                concl = v["wins"] + v["g1"] + v["losses"]
+                out.append({
+                    keyname: key,
+                    "nome": v.get("nome", key),
+                    "entradas": v["entradas"],
+                    "wins": v["wins"],
+                    "g1": v["g1"],
+                    "losses": v["losses"],
+                    "assertividade": round(((v["wins"] + v["g1"]) / concl * 100), 1) if concl else 0
+                })
+            return sorted(out, key=lambda x: (-x["assertividade"], -x["entradas"]))[:10]
+
+        concl = total_wins + total_g1 + total_losses
+        summary = {
+            "entradas": total_entries,
+            "wins": total_wins,
+            "g1": total_g1,
+            "losses": total_losses,
+            "assertividade": round(((total_wins + total_g1) / concl * 100), 1) if concl else 0
+        }
+
+        source = "Yahoo Finance / CryptoCompare (candles históricos públicos)"
+        ignorados = list(falhas_por_ativo.keys())
+        note = (
+            f"Processados {len(dados_por_ativo)} de {len(assets)} ativo(s). "
+            f"{'Ignorados: ' + ', '.join(ignorados[:8]) + '. ' if ignorados else ''}"
+            "Com G1, a primeira falha é testada no candle seguinte. "
+            "Para OTC, o ticker público equivalente é apenas um proxy e não representa o feed OTC proprietário."
+        )
+        return jsonify({
+            "ok": True,
+            "summary": summary,
+            "rows": rows[:100],
+            "top_assets": finalize_map(asset_acc, "ativo"),
+            "top_strategies": finalize_map(est_acc, "estrategia"),
+            "meta": f"M{tf} • {len(dados_por_ativo)}/{len(assets)} ativo(s) • {'com G1' if use_g1 else 'sem G1'} • {limit} candles avaliados/ativo",
+            "source": source,
+            "note": note
+        })
     except Exception as e:
-        print(f"⚠️ Backtest: {e}")
-        return jsonify({"ok":False,"error":"Não foi possível concluir o backtest com os dados disponíveis agora."}), 500
+        print(f"⚠️ Backtest geral: {type(e).__name__}: {e}")
+        return jsonify({"ok": False, "error": f"Falha interna no backtest: {type(e).__name__}. Consulte os logs do servidor."}), 500
 
 @app.route('/command/<cmd>')
 def command(cmd):
