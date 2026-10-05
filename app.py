@@ -1320,7 +1320,7 @@ def obter_dados_cache(ticker, tf):
 NEWS_MIN_IMPACT = 2
 NEWS_LOCK_BEFORE_MIN = 30
 NEWS_LOCK_AFTER_MIN = 30
-NEWS_CACHE_TTL = 60
+NEWS_CACHE_TTL = 45
 
 # IMPORTANTE: se o Investing.com estiver temporariamente indisponível, o bot NÃO
 # bloqueia todos os ativos. Ele continua a análise normal e tenta consultar a fonte
@@ -1336,12 +1336,14 @@ INVESTING_CALENDAR_CACHE = {
     "source": "",
     "last_success": 0.0,
     "degraded": False,
+    "attempts": 0,
+    "event_count": 0,
 }
 INVESTING_CALENDAR_LOCK = threading.Lock()
 
 # Códigos de países usados pelo calendário do Investing.com para as moedas dos ativos.
 # O código 12 é GMT -3:00 (horário de Brasília) no calendário do Investing.com.
-INVESTING_COUNTRIES = "5,4,72,35,25,6,12,43"
+INVESTING_COUNTRIES = "5,4,17,72,35,25,6,12,43,36,110,14,32,7,22,26,10,38,39"
 INVESTING_TIMEZONE = "12"
 
 
@@ -1410,9 +1412,14 @@ def _extrair_eventos_investing(html_resposta):
     if not rows:
         rows = re.findall(r"<tr\b[^>]*id=[\"'][^\"']*eventRowId[^\"']*[\"'][^>]*>.*?</tr>", texto, flags=re.I | re.S)
     if not rows:
-        # Algumas respostas atuais chegam sem a classe antiga, mas ainda carregam
-        # data-event-datetime + flagCur + sentiment na mesma linha.
-        rows = re.findall(r"<tr\b[^>]*>.*?data-event-datetime=.*?flagCur.*?sentiment.*?</tr>", texto, flags=re.I | re.S)
+        # Layouts mais novos podem remover as classes antigas. Basta a linha
+        # carregar a data do evento para ser candidata; moeda e importância
+        # são extraídas de forma independente abaixo.
+        rows = re.findall(r"<tr\b[^>]*>.*?data-event-datetime=[\"\'][^\"\']+[\"\'].*?</tr>", texto, flags=re.I | re.S)
+    if not rows:
+        # Último recurso para respostas compactadas/fragmentadas: captura
+        # qualquer bloco que contenha data do evento e encerra na próxima linha.
+        rows = re.findall(r"(?:<tr\b[^>]*>|<div[^>]*>)[^<]{0,200}.*?data-event-datetime=.*?(?:</tr>|</div>)", texto, flags=re.I | re.S)
 
     eventos=[]; vistos=set()
     for row in rows:
@@ -1432,17 +1439,40 @@ def _extrair_eventos_investing(html_resposta):
         if not currency and m_cur:
             m_title=re.search(r'(?:title|data-currency)=[\"\']([A-Za-z]{3})',m_cur.group(1),flags=re.I)
             currency=m_title.group(1).upper() if m_title else ""
+        if not currency:
+            # Alguns layouts atuais exibem a moeda em data-currency, title ou
+            # simplesmente como texto da célula, sem a classe flagCur.
+            m_any_cur=re.search(r'(?:data-currency|currency|data-currency-code|title)=[\"\']([A-Za-z]{3})[\"\']',row,flags=re.I)
+            if m_any_cur:
+                currency=m_any_cur.group(1).upper()
+        if not currency:
+            # Último fallback: moedas suportadas pelo Vision Pro encontradas
+            # na linha. A lista é restrita para não capturar siglas de eventos.
+            moedas_validas={"USD","EUR","GBP","JPY","CHF","CAD","AUD","NZD","SGD","ZAR","INR","TRY","MXN","SEK","NOK","DKK","PLN","HUF","CNY","HKD"}
+            candidatos=re.findall(r"\b[A-Z]{3}\b",_limpar_html_investing(row).upper())
+            for cand in candidatos:
+                if cand in moedas_validas:
+                    currency=cand; break
 
-        m_sent=re.search(r'<td[^>]*class=[\"\'][^\"\']*sentiment[^\"\']*[\"\'][^>]*>(.*?)</td>',row,flags=re.I|re.S)
+        m_sent=re.search(r'<td[^>]*class=[\"\'][^\"\']*(?:sentiment|importance|impact)[^\"\']*[\"\'][^>]*>(.*?)</td>',row,flags=re.I|re.S)
         sentiment_html=m_sent.group(1) if m_sent else ""
-        impacto=len(re.findall(r"grayFullBullishIcon",sentiment_html,flags=re.I))
+        # O Investing já alternou entre ícones/classes diferentes para a
+        # importância. Tenta várias representações antes de descartar a linha.
+        impacto=len(re.findall(r"(?:grayFullBullishIcon|bullishIcon|bullish|bull)[^<\"']*",sentiment_html,flags=re.I))
+        if impacto>3:
+            impacto=3
         if impacto<=0:
-            m_bull=re.search(r'data-img_key=[\"\']bull([1-3])[\"\']',sentiment_html,flags=re.I)
+            m_bull=re.search(r'(?:data-img_key|data-impact|data-importance|impact|importance)[=_:\"\']+(?:bull)?([1-3])',row,flags=re.I)
             impacto=int(m_bull.group(1)) if m_bull else 0
         if impacto<=0:
-            icons=re.findall(r"(?:bullish|bull)[^<\"']*",sentiment_html,flags=re.I)
-            if icons:
-                impacto=min(3,len(icons))
+            m_cls=re.search(r'class=[\"\'][^\"\']*(?:bullish|importance|impact)[^\"\']*(?:[ _-]([1-3]))?[^\"\']*[\"\']',row,flags=re.I)
+            if m_cls and m_cls.group(1):
+                impacto=int(m_cls.group(1))
+        if impacto<=0:
+            m_aria=re.search(r'(?:aria-label|title|data-tooltip|data-original-title)=[\"\'][^\"\']*(?:high|medium|moderate|3|2)[^\"\']*[\"\']',row,flags=re.I)
+            if m_aria:
+                rot=m_aria.group(0).lower()
+                impacto=3 if re.search(r'\bhigh\b|\b3\b',rot) else 2
         if not currency or impacto<NEWS_MIN_IMPACT:
             continue
 
@@ -1607,12 +1637,14 @@ def atualizar_calendario_investing(force=False):
 
         INVESTING_CALENDAR_CACHE["updated"]=agora_ts
         INVESTING_CALENDAR_CACHE["source"]=fonte
-        INVESTING_CALENDAR_CACHE["error"]=" | ".join(erros[-4:])
+        INVESTING_CALENDAR_CACHE["error"]=" | ".join(erros[-6:])
+        INVESTING_CALENDAR_CACHE["attempts"] = len(erros) + (1 if sucesso_investing else 0)
         if sucesso_investing:
             INVESTING_CALENDAR_CACHE["events"]=eventos
             INVESTING_CALENDAR_CACHE["ok"]=True
             INVESTING_CALENDAR_CACHE["last_success"]=agora_ts
-            INVESTING_CALENDAR_CACHE["degraded"]=fonte!="Investing.com API/Service" and not fonte.startswith("Investing.com página")
+            INVESTING_CALENDAR_CACHE["degraded"]=not fonte.startswith("Investing.com")
+            INVESTING_CALENDAR_CACHE["event_count"]=len(eventos)
         else:
             # Mantém um snapshot recém-confirmado por até 10 minutos para não perder
             # uma proteção durante uma falha transitória do Render/DNS.
@@ -1624,12 +1656,17 @@ def atualizar_calendario_investing(force=False):
                 INVESTING_CALENDAR_CACHE["source"]="CACHE RECENTE — INVESTING"
             else:
                 INVESTING_CALENDAR_CACHE["events"]=[]
+                INVESTING_CALENDAR_CACHE["event_count"]=0
         return bool(INVESTING_CALENDAR_CACHE.get("ok",False))
 
 
+# Executor exclusivo para o calendário.
+# Não compartilhamos com os 16 workers de mercado: se muitos ativos estiverem
+# sendo atualizados ao mesmo tempo, o calendário não pode ficar esperando na fila.
+CALENDAR_FETCH_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision-calendar")
 CALENDAR_FETCH_INFLIGHT=None
 CALENDAR_FETCH_LOCK=threading.Lock()
-CALENDAR_REFRESH_INTERVAL=60.0
+CALENDAR_REFRESH_INTERVAL=45.0
 
 def _agendar_calendario_investing_async():
     global CALENDAR_FETCH_INFLIGHT
@@ -1641,7 +1678,7 @@ def _agendar_calendario_investing_async():
         if agora-atualizado<CALENDAR_REFRESH_INTERVAL:
             return
         try:
-            CALENDAR_FETCH_INFLIGHT=DATA_FETCH_EXECUTOR.submit(atualizar_calendario_investing,True)
+            CALENDAR_FETCH_INFLIGHT=CALENDAR_FETCH_EXECUTOR.submit(atualizar_calendario_investing,True)
         except Exception as exc:
             print(f"⚠️ Não foi possível agendar calendário Investing: {exc}")
 
