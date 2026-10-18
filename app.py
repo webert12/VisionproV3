@@ -1978,25 +1978,42 @@ def _indicadores_confluencia(data, direcao=None):
     preco=float(c[-1]); atr_pct=(atr/preco*100) if preco else 0.0
     std20=float(np.std(c[-20:])); bb_sup=ma20+2*std20; bb_inf=ma20-2*std20
     suporte=float(np.min(l[-20:-1])); resistencia=float(np.max(h[-20:-1]))
-    # Estrutura de mercado: rompimento de swing (BOS), possível mudança de caráter
-    # (MSS) e desequilíbrio de 3 candles (FVG). Usamos apenas candles disponíveis
-    # no snapshot; estes eventos são confirmações, não previsões nem garantia.
+    # Estrutura de mercado: BOS/MSS aproximado e FVG pesquisado numa janela recente.
     janela=max(8,min(20,len(c)-3))
     swing_high=float(np.max(h[-(janela+1):-2]))
     swing_low=float(np.min(l[-(janela+1):-2]))
     bos_call=bool(c[-1]>swing_high)
     bos_put=bool(c[-1]<swing_low)
-    # MSS aproximado: rompimento do swing oposto após movimento recente contrário.
     movimento_recente=float(c[-4]-c[-8]) if len(c)>=8 else 0.0
-    mss_call=bool(c[-1]>swing_high and movimento_recente<0)
-    mss_put=bool(c[-1]<swing_low and movimento_recente>0)
-    fvg_call=bool(len(c)>=3 and l[-1]>h[-3])
-    fvg_put=bool(len(c)>=3 and h[-1]<l[-3])
+    mss_call=bool(bos_call and movimento_recente<0)
+    mss_put=bool(bos_put and movimento_recente>0)
     estrutura_call=bos_call or mss_call
     estrutura_put=bos_put or mss_put
-    # Filtro simples de lateralização: médias muito próximas relativamente ao ATR.
+
+    # FVG de 3 candles: examina os últimos 12 trios e mede o maior gap.
+    fvg_call=False; fvg_put=False; fvg_call_pct=0.0; fvg_put_pct=0.0
+    for k in range(max(2,len(c)-12),len(c)):
+        gap_call=float(l[k]-h[k-2])
+        gap_put=float(l[k-2]-h[k])
+        if gap_call>0:
+            fvg_call=True
+            fvg_call_pct=max(fvg_call_pct,gap_call/max(abs(float(c[k])),1e-12)*100.0)
+        if gap_put>0:
+            fvg_put=True
+            fvg_put_pct=max(fvg_put_pct,gap_put/max(abs(float(c[k])),1e-12)*100.0)
+
+    # Lateralidade graduada com distância entre médias normalizada pelo ATR
+    # e alternância de direção dos últimos movimentos.
     spread_ma=abs(float(ema9[-1])-float(ema21[-1]))
-    mercado_comprimido=bool(atr>0 and spread_ma/atr<0.08 and abs(ma20-ma50)/atr<0.12)
+    spread_ma_atr=spread_ma/max(atr,1e-12)
+    spread_longo_atr=abs(ma20-ma50)/max(atr,1e-12)
+    ult_diffs=np.diff(c[-12:])
+    alternancias=int(np.sum((ult_diffs[1:]*ult_diffs[:-1])<0)) if len(ult_diffs)>1 else 0
+    alternancia_pct=alternancias/max(1,len(ult_diffs)-1)
+    compressao_ma=max(0.0,min(1.0,1.0-spread_ma_atr/0.30))
+    compressao_longa=max(0.0,min(1.0,1.0-spread_longo_atr/0.50))
+    lateralidade_pct=max(0.0,min(100.0,100.0*(0.45*compressao_ma+0.35*compressao_longa+0.20*alternancia_pct)))
+    mercado_comprimido=bool(lateralidade_pct>=70.0)
     # Tendência exige alinhamento das médias, evitando operar contra o fluxo principal.
     alta=ema9[-1]>ema21[-1] and c[-1]>ma20 and (ma20>=ma50 if len(c)>=50 else ema21[-1]>=ema21[-5])
     baixa=ema9[-1]<ema21[-1] and c[-1]<ma20 and (ma20<=ma50 if len(c)>=50 else ema21[-1]<=ema21[-5])
@@ -2058,18 +2075,37 @@ def _indicadores_confluencia(data, direcao=None):
     bb_ok=(direcao=="CALL" and preco>=ma20 and preco<bb_sup) or (direcao=="PUT" and preco<=ma20 and preco>bb_inf)
     add("Zona técnica",10 if (sr_ok and bb_ok) else 5,f"Sup {suporte:.5g} • Res {resistencia:.5g}","ok" if (sr_ok and bb_ok) else "warn")
     estrutura_ok=(direcao=="CALL" and estrutura_call) or (direcao=="PUT" and estrutura_put) if direcao else False
-    estrutura_txt=("BOS" if ((direcao=="CALL" and bos_call) or (direcao=="PUT" and bos_put)) else
-                   "MSS" if ((direcao=="CALL" and mss_call) or (direcao=="PUT" and mss_put)) else
-                   "sem rompimento estrutural")
-    add("Estrutura",16 if estrutura_ok else 4,estrutura_txt,"ok" if estrutura_ok else "warn")
+    distancia_bos_atr=(float(c[-1])-swing_high)/max(atr,1e-12) if direcao=="CALL" else (swing_low-float(c[-1]))/max(atr,1e-12) if direcao=="PUT" else 0.0
+    if estrutura_ok:
+        estrutura_pts=int(max(12,min(20,14+round(max(0.0,distancia_bos_atr)*6))))
+        estrutura_txt="BOS confirmado" if ((direcao=="CALL" and bos_call) or (direcao=="PUT" and bos_put)) else "MSS confirmado"
+        estrutura_status="ok"
+    else:
+        perto_swing=max(0.0,1.0-abs(distancia_bos_atr)/1.5) if direcao else 0.0
+        estrutura_pts=int(max(0,min(11,round(2+perto_swing*9))))
+        estrutura_txt=f"Sem rompimento confirmado • distância {distancia_bos_atr:.2f} ATR"
+        estrutura_status="warn"
+    add("Estrutura",estrutura_pts,estrutura_txt,estrutura_status)
+
     fvg_ok=(direcao=="CALL" and fvg_call) or (direcao=="PUT" and fvg_put) if direcao else False
-    add("FVG",12 if fvg_ok else 4,
-        "Desequilíbrio comprador" if direcao=="CALL" and fvg_call else
-        "Desequilíbrio vendedor" if direcao=="PUT" and fvg_put else "FVG não identificado",
-        "ok" if fvg_ok else "warn")
-    add("Lateralização",4 if mercado_comprimido else 12,
-        "Médias comprimidas; evitar entrada" if mercado_comprimido else "Sem compressão forte das médias",
-        "bad" if mercado_comprimido else "ok")
+    fvg_rel_pct=fvg_call_pct if direcao=="CALL" else fvg_put_pct if direcao=="PUT" else max(fvg_call_pct,fvg_put_pct)
+    if fvg_ok:
+        fvg_pts=int(max(10,min(20,10+round(min(1.0,fvg_rel_pct/max(atr_pct,1e-9))*10))))
+        fvg_txt=f"Desequilíbrio {'comprador' if direcao=='CALL' else 'vendedor'} • gap {fvg_rel_pct:.4f}%"
+        fvg_status="ok"
+    else:
+        fvg_pts=int(max(0,min(9,round(fvg_rel_pct/max(atr_pct,1e-9)*5)))) if fvg_rel_pct>0 else 0
+        fvg_txt="FVG contrário/ausente na janela recente"
+        fvg_status="warn"
+    add("FVG",fvg_pts,fvg_txt,fvg_status)
+
+    # Neste painel, pontos altos significam mercado menos lateral; pontuação baixa
+    # sinaliza compressão/alternância e deve reduzir a qualidade da oportunidade.
+    lateral_pts=int(round(20.0*(1.0-lateralidade_pct/100.0)))
+    lateral_status="bad" if lateralidade_pct>=70 else "warn" if lateralidade_pct>=45 else "ok"
+    add("Lateralização",lateral_pts,
+        f"Índice lateral {lateralidade_pct:.0f}/100 • {'evitar entrada' if mercado_comprimido else 'compressão não crítica'}",
+        lateral_status)
     soma=sum(x["pontos"] for x in itens); maximo=len(itens)*20
     confluencia=round(soma/maximo*100,1) if maximo else 0.0
     return {"rsi":float(rsi),"ema9":float(ema9[-1]),"ema21":float(ema21[-1]),"ma20":ma20,"ma50":ma50,"ma100":ma100,
@@ -2081,7 +2117,9 @@ def _indicadores_confluencia(data, direcao=None):
             "microtendencia_contra_forte":micro_contra_forte,
             "estrutura_call":estrutura_call,"estrutura_put":estrutura_put,
             "bos_call":bos_call,"bos_put":bos_put,"mss_call":mss_call,"mss_put":mss_put,
-            "fvg_call":fvg_call,"fvg_put":fvg_put,"mercado_comprimido":mercado_comprimido,
+            "fvg_call":fvg_call,"fvg_put":fvg_put,"fvg_call_pct":fvg_call_pct,"fvg_put_pct":fvg_put_pct,
+            "lateralidade_pct":lateralidade_pct,"spread_ma_atr":spread_ma_atr,"spread_longo_atr":spread_longo_atr,
+            "mercado_comprimido":mercado_comprimido,
             "macrotendencia":tendencia,
             "macrotendencia_contra":bool((direcao=="CALL" and tendencia=="BAIXA") or (direcao=="PUT" and tendencia=="ALTA")),
             "confluencia":confluencia,"confluencias":itens}
