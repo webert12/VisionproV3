@@ -1978,42 +1978,6 @@ def _indicadores_confluencia(data, direcao=None):
     preco=float(c[-1]); atr_pct=(atr/preco*100) if preco else 0.0
     std20=float(np.std(c[-20:])); bb_sup=ma20+2*std20; bb_inf=ma20-2*std20
     suporte=float(np.min(l[-20:-1])); resistencia=float(np.max(h[-20:-1]))
-    # Estrutura de mercado: BOS/MSS aproximado e FVG pesquisado numa janela recente.
-    janela=max(8,min(20,len(c)-3))
-    swing_high=float(np.max(h[-(janela+1):-2]))
-    swing_low=float(np.min(l[-(janela+1):-2]))
-    bos_call=bool(c[-1]>swing_high)
-    bos_put=bool(c[-1]<swing_low)
-    movimento_recente=float(c[-4]-c[-8]) if len(c)>=8 else 0.0
-    mss_call=bool(bos_call and movimento_recente<0)
-    mss_put=bool(bos_put and movimento_recente>0)
-    estrutura_call=bos_call or mss_call
-    estrutura_put=bos_put or mss_put
-
-    # FVG de 3 candles: examina os últimos 12 trios e mede o maior gap.
-    fvg_call=False; fvg_put=False; fvg_call_pct=0.0; fvg_put_pct=0.0
-    for k in range(max(2,len(c)-12),len(c)):
-        gap_call=float(l[k]-h[k-2])
-        gap_put=float(l[k-2]-h[k])
-        if gap_call>0:
-            fvg_call=True
-            fvg_call_pct=max(fvg_call_pct,gap_call/max(abs(float(c[k])),1e-12)*100.0)
-        if gap_put>0:
-            fvg_put=True
-            fvg_put_pct=max(fvg_put_pct,gap_put/max(abs(float(c[k])),1e-12)*100.0)
-
-    # Lateralidade graduada com distância entre médias normalizada pelo ATR
-    # e alternância de direção dos últimos movimentos.
-    spread_ma=abs(float(ema9[-1])-float(ema21[-1]))
-    spread_ma_atr=spread_ma/max(atr,1e-12)
-    spread_longo_atr=abs(ma20-ma50)/max(atr,1e-12)
-    ult_diffs=np.diff(c[-12:])
-    alternancias=int(np.sum((ult_diffs[1:]*ult_diffs[:-1])<0)) if len(ult_diffs)>1 else 0
-    alternancia_pct=alternancias/max(1,len(ult_diffs)-1)
-    compressao_ma=max(0.0,min(1.0,1.0-spread_ma_atr/0.30))
-    compressao_longa=max(0.0,min(1.0,1.0-spread_longo_atr/0.50))
-    lateralidade_pct=max(0.0,min(100.0,100.0*(0.45*compressao_ma+0.35*compressao_longa+0.20*alternancia_pct)))
-    mercado_comprimido=bool(lateralidade_pct>=70.0)
     # Tendência exige alinhamento das médias, evitando operar contra o fluxo principal.
     alta=ema9[-1]>ema21[-1] and c[-1]>ma20 and (ma20>=ma50 if len(c)>=50 else ema21[-1]>=ema21[-5])
     baixa=ema9[-1]<ema21[-1] and c[-1]<ma20 and (ma20<=ma50 if len(c)>=50 else ema21[-1]<=ema21[-5])
@@ -2042,8 +2006,7 @@ def _indicadores_confluencia(data, direcao=None):
     add("Tendência",20 if trend_ok else 2,f"EMA9/21 + MA20/50 • {tendencia}","ok" if trend_ok else "bad")
     # Microtendência: filtro de timing para evitar operar contra o movimento curto.
     if direcao:
-        # Qualquer microtendência contrária bloqueia; não apenas a classificada como forte.
-        micro_pts, micro_status = ((2,"bad") if micro_contra else (16,"ok") if micro_a_favor else (6,"warn"))
+        micro_pts, micro_status = ((2,"bad") if micro_contra_forte else (16,"ok") if micro_a_favor else (6,"warn"))
     else:
         micro_pts, micro_status = ((16,"ok") if micro_dir in ("ALTA","BAIXA") and micro_score>=70 else (8,"warn"))
     add("Microtendência",micro_pts,f"{micro_dir} • {micro.get('forca','NEUTRA')} • score {micro_score:.0f}/100",micro_status)
@@ -2074,38 +2037,6 @@ def _indicadores_confluencia(data, direcao=None):
     sr_ok=(direcao=="CALL" and preco>suporte) or (direcao=="PUT" and preco<resistencia)
     bb_ok=(direcao=="CALL" and preco>=ma20 and preco<bb_sup) or (direcao=="PUT" and preco<=ma20 and preco>bb_inf)
     add("Zona técnica",10 if (sr_ok and bb_ok) else 5,f"Sup {suporte:.5g} • Res {resistencia:.5g}","ok" if (sr_ok and bb_ok) else "warn")
-    estrutura_ok=(direcao=="CALL" and estrutura_call) or (direcao=="PUT" and estrutura_put) if direcao else False
-    distancia_bos_atr=(float(c[-1])-swing_high)/max(atr,1e-12) if direcao=="CALL" else (swing_low-float(c[-1]))/max(atr,1e-12) if direcao=="PUT" else 0.0
-    if estrutura_ok:
-        estrutura_pts=int(max(12,min(20,14+round(max(0.0,distancia_bos_atr)*6))))
-        estrutura_txt="BOS confirmado" if ((direcao=="CALL" and bos_call) or (direcao=="PUT" and bos_put)) else "MSS confirmado"
-        estrutura_status="ok"
-    else:
-        perto_swing=max(0.0,1.0-abs(distancia_bos_atr)/1.5) if direcao else 0.0
-        estrutura_pts=int(max(0,min(11,round(2+perto_swing*9))))
-        estrutura_txt=f"Sem rompimento confirmado • distância {distancia_bos_atr:.2f} ATR"
-        estrutura_status="warn"
-    add("Estrutura",estrutura_pts,estrutura_txt,estrutura_status)
-
-    fvg_ok=(direcao=="CALL" and fvg_call) or (direcao=="PUT" and fvg_put) if direcao else False
-    fvg_rel_pct=fvg_call_pct if direcao=="CALL" else fvg_put_pct if direcao=="PUT" else max(fvg_call_pct,fvg_put_pct)
-    if fvg_ok:
-        fvg_pts=int(max(10,min(20,10+round(min(1.0,fvg_rel_pct/max(atr_pct,1e-9))*10))))
-        fvg_txt=f"Desequilíbrio {'comprador' if direcao=='CALL' else 'vendedor'} • gap {fvg_rel_pct:.4f}%"
-        fvg_status="ok"
-    else:
-        fvg_pts=int(max(0,min(9,round(fvg_rel_pct/max(atr_pct,1e-9)*5)))) if fvg_rel_pct>0 else 0
-        fvg_txt="FVG contrário/ausente na janela recente"
-        fvg_status="warn"
-    add("FVG",fvg_pts,fvg_txt,fvg_status)
-
-    # Neste painel, pontos altos significam mercado menos lateral; pontuação baixa
-    # sinaliza compressão/alternância e deve reduzir a qualidade da oportunidade.
-    lateral_pts=int(round(20.0*(1.0-lateralidade_pct/100.0)))
-    lateral_status="bad" if lateralidade_pct>=70 else "warn" if lateralidade_pct>=45 else "ok"
-    add("Lateralização",lateral_pts,
-        f"Índice lateral {lateralidade_pct:.0f}/100 • {'evitar entrada' if mercado_comprimido else 'compressão não crítica'}",
-        lateral_status)
     soma=sum(x["pontos"] for x in itens); maximo=len(itens)*20
     confluencia=round(soma/maximo*100,1) if maximo else 0.0
     return {"rsi":float(rsi),"ema9":float(ema9[-1]),"ema21":float(ema21[-1]),"ma20":ma20,"ma50":ma50,"ma100":ma100,
@@ -2115,11 +2046,6 @@ def _indicadores_confluencia(data, direcao=None):
             "microtendencia_impulso":bool(micro.get("impulso",False)),"microtendencia_detalhe":micro.get("detalhe",""),
             "microtendencia_contra":micro_contra,
             "microtendencia_contra_forte":micro_contra_forte,
-            "estrutura_call":estrutura_call,"estrutura_put":estrutura_put,
-            "bos_call":bos_call,"bos_put":bos_put,"mss_call":mss_call,"mss_put":mss_put,
-            "fvg_call":fvg_call,"fvg_put":fvg_put,"fvg_call_pct":fvg_call_pct,"fvg_put_pct":fvg_put_pct,
-            "lateralidade_pct":lateralidade_pct,"spread_ma_atr":spread_ma_atr,"spread_longo_atr":spread_longo_atr,
-            "mercado_comprimido":mercado_comprimido,
             "macrotendencia":tendencia,
             "macrotendencia_contra":bool((direcao=="CALL" and tendencia=="BAIXA") or (direcao=="PUT" and tendencia=="ALTA")),
             "confluencia":confluencia,"confluencias":itens}
@@ -2127,7 +2053,7 @@ def _indicadores_confluencia(data, direcao=None):
 def _resumo_confluencias_direcionais(diag):
     """Conta confirmações direcionais reais, sem transformar volatilidade neutra em sinal."""
     itens = diag.get("confluencias", []) if isinstance(diag, dict) else []
-    nomes_direcionais = {"Microtendência", "MAs", "RSI", "MACD", "Volume", "Price Action", "Zona técnica", "Estrutura", "FVG"}
+    nomes_direcionais = {"Microtendência", "MAs", "RSI", "MACD", "Volume", "Price Action", "Zona técnica"}
     fortes = [x for x in itens if x.get("nome") in nomes_direcionais and x.get("status") == "ok" and int(x.get("pontos", 0)) >= 10]
     return fortes
 
@@ -2162,16 +2088,16 @@ def _painel_decisao(data):
     put_micro_ok=not bool(put.get("microtendencia_contra"))
     call_macro_ok=not bool(call.get("macrotendencia_contra"))
     put_macro_ok=not bool(put.get("macrotendencia_contra"))
-    # Exige ao menos 3 confirmações direcionais independentes, sem contra-microtendência,
-    # além de tendência alinhada. A presença de BOS/MSS soma evidência estrutural, mas
-    # FVG não é obrigatório, pois nem todo movimento legítimo deixa um gap de 3 candles.
-    call_apto=call_tend_ok and call_macro_ok and call_micro_ok and call_n>=3
-    put_apto=put_tend_ok and put_macro_ok and put_micro_ok and put_n>=3
+    # Mantém a frequência atual: 2 confirmações direcionais já podem abrir oportunidade,
+    # mas os filtros de qualidade abaixo continuam obrigatórios.
+    call_apto=call_tend_ok and call_macro_ok and call_micro_ok and call_n>=2
+    put_apto=put_tend_ok and put_macro_ok and put_micro_ok and put_n>=2
 
-    # Limiar mais seletivo. O score é um índice técnico, não probabilidade estatística.
-    score_minimo=72.0
-    call_apto = call_apto and cs>=score_minimo and not bool(call.get("mercado_comprimido"))
-    put_apto = put_apto and ps>=score_minimo and not bool(put.get("mercado_comprimido"))
+    # Score de confluência moderado; a qualidade final é reforçada pelo validador
+    # detalhado, que exige microtendência alinhada + price action/momentum coerentes.
+    score_minimo=68.0
+    call_apto = call_apto and cs>=score_minimo
+    put_apto = put_apto and ps>=score_minimo
 
     # Nível de força do diagnóstico.
     def nivel(n):
@@ -2212,7 +2138,7 @@ def _painel_decisao(data):
                 explicacao="CALL bloqueado: macrotendência está BAIXA."
                 gate="BLOQUEADO • nunca operar contra a macrotendência."
             else:
-                explicacao=f"CALL em tendência de alta, mas encontrou apenas {call_n} confirmação(ões) direcionais; mínimo: 3."
+                explicacao=f"CALL em tendência de alta, mas encontrou apenas {call_n} confirmação(ões) direcionais; mínimo: 2."
                 gate="AGUARDAR • falta confirmação."
         elif tendencia=="BAIXA":
             if not put_micro_ok:
@@ -2222,7 +2148,7 @@ def _painel_decisao(data):
                 explicacao="PUT bloqueado: macrotendência está ALTA."
                 gate="BLOQUEADO • nunca operar contra a macrotendência."
             else:
-                explicacao=f"PUT em tendência de baixa, mas encontrou apenas {put_n} confirmação(ões) direcionais; mínimo: 3."
+                explicacao=f"PUT em tendência de baixa, mas encontrou apenas {put_n} confirmação(ões) direcionais; mínimo: 2."
                 gate="AGUARDAR • falta confirmação."
         else:
             explicacao="Dados insuficientes para definir uma direção segura."
@@ -2237,7 +2163,7 @@ def _painel_decisao(data):
         motivos.append({"tipo":"Tendência","texto":"Fluxo principal favorece baixa; CALL contra-tendência permanece bloqueado."})
     else:
         motivos.append({"tipo":"Tendência","texto":"Estrutura lateral; nenhuma direção recebe prioridade estrutural."})
-    motivos.append({"tipo":"Confirmações","texto":f"CALL: {call_n} • PUT: {put_n} • gatilho mínimo: 3 confirmações direcionais + filtros de qualidade."})
+    motivos.append({"tipo":"Confirmações","texto":f"CALL: {call_n} • PUT: {put_n} • gatilho mínimo: 2 confirmações direcionais + filtros de qualidade."})
     if veredito in ("CALL","PUT"):
         vencedor=call if veredito=="CALL" else put
         bons=[x.get("nome") for x in _resumo_confluencias_direcionais(vencedor)]
@@ -2255,7 +2181,7 @@ def _painel_decisao(data):
         "explicacao":explicacao,
         "gate":gate,
         "motivos":motivos,
-        "min_confirmacoes":3,
+        "min_confirmacoes":2,
         "score_minimo":score_minimo,
     }
 
